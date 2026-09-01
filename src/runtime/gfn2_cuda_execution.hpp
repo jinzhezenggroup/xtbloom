@@ -58,12 +58,16 @@ struct Gfn2CudaExecutionIdentity {
   std::uint8_t scc_conditional_graph_ready = 0u;
   /* Gfn2SccLoopGraphFallbackReason encoded without exposing CUDA headers. */
   std::uint32_t scc_loop_fallback_reason = 0u;
+  /* Native lattice identity is independent from caller-owned b + A*q
+   * embedding.  The element counts live in the opaque buffer identities. */
+  std::uint8_t native_lattice_enabled = 0u;
 
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
   std::int64_t total_shells = 0;
   std::int64_t total_orbitals = 0;
   std::int64_t total_point_charges = 0;
+  std::int64_t native_lattice_systems = 0;
 
   std::uintptr_t solver_handle = 0u;
   std::uintptr_t solver_parameters = 0u;
@@ -139,6 +143,8 @@ struct Gfn2CudaExecutionIdentity {
   Gfn2CudaOpaqueBufferIdentity committed_point_charge_shell_potential{};
   Gfn2CudaOpaqueBufferIdentity committed_periodic_shifts{};
   Gfn2CudaOpaqueBufferIdentity committed_periodic_response{};
+  Gfn2CudaOpaqueBufferIdentity committed_native_cell_matrices{};
+  Gfn2CudaOpaqueBufferIdentity committed_native_periodic_axes{};
 
   std::int64_t committed_generation_elements = 0;
   std::int64_t numerical_eligible_elements = 0;

@@ -8,7 +8,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -42,6 +41,8 @@
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
+#include "model/gfn2/periodic_integrals.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 #include "model/gfn2/repulsion.hpp"
 #include "model/gfn2/scc_driver.hpp"
 #include "model/gfn2/scc_mixer.hpp"
@@ -392,6 +393,12 @@ struct HostRequest {
   std::vector<double> periodic_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrices;
+  /* ABI-v4 native cells are distinct from the caller-owned b + A*q operator.
+   * Keep both staged representations so a request can carry native PBC and
+   * an external charge-response attachment without conflating their warm
+   * identities. */
+  std::vector<double> cell_matrices;
+  std::vector<std::int32_t> periodic_axes;
   /* Per-system uniform electric field in atomic units (Hartree per elementary
    * charge per bohr), plus a distinct attachment-presence bit. The ABI permits
    * an explicit zero-valued field, which is physically a no-op but remains a
@@ -463,6 +470,18 @@ void stage_request(const xtbloom_batch_t& batch, HostRequest& request) {
   } else {
     request.response_offsets.clear();
     request.response_matrices.clear();
+  }
+
+  if (batch.struct_size >= XTBLOOM_BATCH_V4_SIZE && batch.cell_matrices.data != nullptr &&
+      batch.periodic_axes.data != nullptr) {
+    copy_from_c_buffer(batch.cell_matrices, 9u * static_cast<std::size_t>(batch.batch_size),
+                       request.cell_matrices);
+    copy_from_c_buffer(batch.periodic_axes, static_cast<std::size_t>(batch.batch_size),
+                       request.periodic_axes);
+  } else {
+    request.cell_matrices.assign(9u * static_cast<std::size_t>(batch.batch_size), 0.0);
+    request.periodic_axes.assign(static_cast<std::size_t>(batch.batch_size),
+                                 XTBLOOM_PERIODIC_AXES_NONE);
   }
 
   request.field_by_system.assign(static_cast<std::size_t>(batch.batch_size),
@@ -539,6 +558,10 @@ xtbloom_status_t validate_host_numerics(const HostRequest& request, std::string&
     error = "periodic b/A inputs contain NaN or infinity";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  if (!all_finite(request.cell_matrices)) {
+    error = "native periodic cell matrices contain NaN or infinity";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   if (request.response_enabled) {
     for (std::int64_t system = 0; system < request.batch_size; ++system) {
       const std::size_t index = static_cast<std::size_t>(system);
@@ -568,6 +591,8 @@ struct SystemKey {
   std::int32_t spin_channels = 1;
   std::int64_t point_count = 0;
   bool periodic_enabled = false;
+  bool native_periodic = false;
+  std::array<double, 9> cell{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   /* Uniform external electric field in atomic units. Presence is recorded
    * separately because an explicit zero field remains part of the interaction
    * set and therefore differs from no attachment for strict WARM identity. */
@@ -589,6 +614,7 @@ struct SystemKey {
            lhs.unpaired_electrons == rhs.unpaired_electrons &&
            lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
            lhs.periodic_enabled == rhs.periodic_enabled &&
+           lhs.native_periodic == rhs.native_periodic && lhs.cell == rhs.cell &&
            lhs.field_attached == rhs.field_attached && lhs.field == rhs.field &&
            lhs.compute_flags == rhs.compute_flags &&
            lhs.maximum_iterations == rhs.maximum_iterations &&
@@ -640,6 +666,8 @@ void make_system_keys(const HostRequest& request, const xtbloom_compute_options_
     key.spin_channels = request.spin_channels[index];
     key.point_count = point_end - point_begin;
     key.periodic_enabled = periodic_enabled;
+    key.native_periodic = request.periodic_axes[index] == XTBLOOM_PERIODIC_AXES_XYZ;
+    std::copy_n(request.cell_matrices.data() + 9u * index, 9u, key.cell.data());
     key.field_attached = request.field_attached_by_system[index] != 0u;
     key.field = request.field_by_system[index];
     key.compute_flags = options.flags;
@@ -663,6 +691,7 @@ bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
          lhs.unpaired_electrons == rhs.unpaired_electrons &&
          lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
          lhs.periodic_enabled == rhs.periodic_enabled && lhs.compute_flags == rhs.compute_flags &&
+         lhs.native_periodic == rhs.native_periodic && lhs.cell == rhs.cell &&
          lhs.maximum_iterations == rhs.maximum_iterations &&
          lhs.charge_tolerance == rhs.charge_tolerance &&
          lhs.energy_tolerance == rhs.energy_tolerance &&
@@ -682,6 +711,8 @@ struct SystemOutput {
   /* Per-system molecular dipole moment (three doubles, atomic units),
    * published when XTBLOOM_COMPUTE_DIPOLE_MOMENTS is requested. */
   std::array<double, 3> dipole_moments{0.0, 0.0, 0.0};
+  /* Native-periodic dE/d(strain), row-major over the direct-cell rows. */
+  std::array<double, 9> strain_derivatives{};
 
   void reset() noexcept {
     status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
@@ -693,6 +724,7 @@ struct SystemOutput {
     atomic_charges.clear();
     point_forces.clear();
     dipole_moments = {0.0, 0.0, 0.0};
+    strain_derivatives.fill(std::numeric_limits<double>::quiet_NaN());
   }
 };
 
@@ -725,6 +757,16 @@ struct SystemExecution {
   bool d4_enabled = false;
   ExternalPointChargePlan external;
   PeriodicEmbeddingPlan periodic;
+  /* Native ABI-v4 image plans are separate from the caller-owned b + A*q
+   * embedding plan above. */
+  PeriodicShortRangePlan native_topology;
+  PeriodicIntegralPlan native_integrals;
+  bool native_periodic = false;
+  std::array<double, 9> native_cell{};
+  AlignedBuffer native_topology_workspace_storage;
+  PeriodicShortRangeWorkspace native_topology_workspace;
+  PeriodicShortRangeGeometry native_topology_geometry;
+  AlignedBuffer native_integral_workspace_storage;
   SccDriverPlan driver;
 
   /* Optional intra-system parallel dispatch for a single-system batch. Set by
@@ -796,6 +838,34 @@ struct SystemExecution {
   std::vector<double> quadrupole_potential;
   std::vector<double> periodic_energy;
   std::vector<xtbloom_status_t> periodic_status;
+
+  /* Reusable numerical outputs for the native periodic SCC operators. These
+   * buffers live beside the geometry cache rather than in the SCC driver's
+   * generic workspace because the standalone Ewald/q-d-Q primitives also
+   * publish fixed-density Cartesian/strain derivatives consumed by the force
+   * boundary after SCC converges. */
+  std::vector<double> native_ewald_matrix;
+  std::vector<double> native_ewald_shell_potentials;
+  std::vector<double> native_ewald_energies;
+  std::vector<double> native_ewald_gradients;
+  std::vector<double> native_ewald_strain_derivatives;
+  std::vector<double> native_multipole_charge_dipole;
+  std::vector<double> native_multipole_dipole_dipole;
+  std::vector<double> native_multipole_charge_quadrupole;
+  std::vector<double> native_multipole_charge_potentials;
+  std::vector<double> native_multipole_dipole_potentials;
+  std::vector<double> native_multipole_quadrupole_potentials;
+  std::vector<double> native_multipole_energies;
+  std::vector<double> native_multipole_gradients;
+  std::vector<double> native_multipole_strain_derivatives;
+  std::vector<double> native_multipole_coordination_adjoint;
+  /* The stationary force composer needs a reusable atom-energy sink for the
+   * periodic repulsion/ATM partitions and a cell-derivative scratch buffer.
+   * These are separate from the published primitive outputs: repulsion and
+   * ATM reuse the sink sequentially, while Ewald/multipole derivatives remain
+   * intact until the force composition has consumed them. */
+  std::vector<double> native_periodic_atom_energy_scratch;
+  std::vector<double> native_periodic_strain_scratch;
 
   /* Uniform external electric field in atomic units. Presence is distinct from
    * the three values so an explicit zero block remains visible to WARM policy.
@@ -875,9 +945,12 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   atom_offsets[1] = atoms;
-  /* A one-atom D4 plan has no physical pair or ATM contribution. Disabling
-   * that optional component also preserves canonical zero-length bindings. */
-  d4_enabled = atoms > 1;
+  /* Molecular one-atom systems have no pair or ATM contribution, so their D4
+   * plan can remain absent.  A native periodic one-atom cell is different:
+   * translated self images are physical D4 pairs and contribute to both the
+   * SCC potential and the cell derivative.  Keep the molecular zero-length
+   * binding optimization while retaining the periodic self-image path. */
+  d4_enabled = key.native_periodic || atoms > 1;
   point_offsets[1] = key.point_count;
   molecular_charges = {key.molecular_charge};
   unpaired_electrons = {key.unpaired_electrons};
@@ -928,11 +1001,21 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
     status = make_periodic_embedding_plan(1, atoms, atom_offsets.data(), periodic, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
-  status =
-      make_scc_driver_plan(wavefunction_layout, mulliken, es2, es3, aes2, eigensolver, mixer,
-                           d4_enabled ? &d4 : nullptr, key.periodic_enabled ? &periodic : nullptr,
-                           static_cast<std::uint64_t>(key.maximum_iterations),
-                           key.electronic_temperature, key.energy_tolerance, driver, error);
+  native_periodic = key.native_periodic;
+  native_cell = key.cell;
+  if (native_periodic) {
+    status = make_periodic_short_range_plan(1, atoms, atom_offsets.data(), native_cell.data(),
+                                            native_topology, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status =
+        make_periodic_integral_plan(basis, integrals, native_topology, native_integrals, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
+  status = make_scc_driver_plan(
+      wavefunction_layout, mulliken, es2, es3, aes2, eigensolver, mixer, d4_enabled ? &d4 : nullptr,
+      key.periodic_enabled ? &periodic : nullptr, native_periodic ? &native_topology : nullptr,
+      static_cast<std::uint64_t>(key.maximum_iterations), key.electronic_temperature,
+      key.energy_tolerance, driver, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   const std::size_t atom_count = static_cast<std::size_t>(atoms);
@@ -957,6 +1040,18 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   status =
       allocate(integral_workspace, integrals.workspace_size_bytes, "integral workspace", error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (native_periodic) {
+    status = allocate(native_topology_workspace_storage, native_topology.workspace_size_bytes(),
+                      "periodic topology workspace", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = bind_periodic_short_range_workspace(
+        native_topology, native_topology_workspace_storage.data(),
+        native_topology_workspace_storage.size(), native_topology_workspace, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = allocate(native_integral_workspace_storage, native_integrals.workspace_size_bytes(),
+                      "periodic integral workspace", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
 
   es2_matrix.resize(static_cast<std::size_t>(es2.total_matrix_elements()));
   es2_matrix_scratch.resize(es2_matrix.size());
@@ -1040,6 +1135,35 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   quadrupole_potential.resize(6u * atom_count);
   periodic_energy.resize(1u);
   periodic_status.resize(1u);
+  if (native_periodic) {
+    const std::size_t atom_pair_count = atom_count * atom_count;
+    /* Periodic Ewald is shell-resolved, unlike the AO-sized one-electron
+     * integral plan used by the H0/overlap path.  Hydrogen happens to have
+     * one AO per shell, so using `matrix` here hid the mismatch until a
+     * multi-shell atom such as He reached the native validation gate. */
+    const auto* native_ewald = driver.native_ewald_plan();
+    if (native_ewald == nullptr) {
+      error = "native periodic Ewald plan was not created for a native cell";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    native_ewald_matrix.resize(static_cast<std::size_t>(native_ewald->total_matrix_elements()));
+    native_ewald_shell_potentials.resize(shells);
+    native_ewald_energies.resize(1u);
+    native_ewald_gradients.resize(3u * atom_count);
+    native_ewald_strain_derivatives.resize(9u);
+    native_multipole_charge_dipole.resize(3u * atom_pair_count);
+    native_multipole_dipole_dipole.resize(9u * atom_pair_count);
+    native_multipole_charge_quadrupole.resize(6u * atom_pair_count);
+    native_multipole_charge_potentials.resize(atom_count);
+    native_multipole_dipole_potentials.resize(3u * atom_count);
+    native_multipole_quadrupole_potentials.resize(6u * atom_count);
+    native_multipole_energies.resize(1u);
+    native_multipole_gradients.resize(3u * atom_count);
+    native_multipole_strain_derivatives.resize(9u);
+    native_multipole_coordination_adjoint.resize(atom_count);
+    native_periodic_atom_energy_scratch.resize(atom_count);
+    native_periodic_strain_scratch.resize(9u);
+  }
 
   energy_scratch.resize(1u);
   component_energy_scratch.resize(1u);
@@ -1083,6 +1207,14 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
       aes2_workspace,
       d4_workspace,
   };
+  force_workspace.periodic_atom_energy_scratch =
+      native_periodic ? native_periodic_atom_energy_scratch.data() : nullptr;
+  force_workspace.periodic_atom_energy_elements =
+      native_periodic ? static_cast<std::int64_t>(native_periodic_atom_energy_scratch.size()) : 0;
+  force_workspace.periodic_strain_scratch =
+      native_periodic ? native_periodic_strain_scratch.data() : nullptr;
+  force_workspace.periodic_strain_elements =
+      native_periodic ? static_cast<std::int64_t>(native_periodic_strain_scratch.size()) : 0;
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -1191,6 +1323,23 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       &periodic_energy,
       &energy_scratch,
       &component_energy_scratch,
+      &native_ewald_matrix,
+      &native_ewald_shell_potentials,
+      &native_ewald_energies,
+      &native_ewald_gradients,
+      &native_ewald_strain_derivatives,
+      &native_multipole_charge_dipole,
+      &native_multipole_dipole_dipole,
+      &native_multipole_charge_quadrupole,
+      &native_multipole_charge_potentials,
+      &native_multipole_dipole_potentials,
+      &native_multipole_quadrupole_potentials,
+      &native_multipole_energies,
+      &native_multipole_gradients,
+      &native_multipole_strain_derivatives,
+      &native_multipole_coordination_adjoint,
+      &native_periodic_atom_energy_scratch,
+      &native_periodic_strain_scratch,
       &total_gradient,
       &component_gradient,
       &force_scratch,
@@ -1210,7 +1359,8 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       integral_workspace.size() + d4_workspace_storage.size() + wavefunction_storage.size() +
       warm_checkpoint_wavefunction_storage.size() + overlap_cache_storage.size() +
       eigensolver_workspace_storage.size() + mixer_state_storage.size() +
-      driver_state_storage.size() + driver_workspace_storage.size();
+      driver_state_storage.size() + driver_workspace_storage.size() +
+      native_topology_workspace_storage.size() + native_integral_workspace_storage.size();
   return small_vectors + direct_plan_vectors + wavefunction_plan_vectors + opaque_plan_storage +
          planar_vectors + aligned_buffers;
 }
@@ -1221,19 +1371,54 @@ xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend
   if (geometry_generation == 0u) {
     geometry_generation = 1u;
   }
-  xtbloom_status_t status =
-      evaluate_coordination_cpu(coordination, positions.data(), coordination_numbers.data(), error);
-  if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(),
-                                integral_workspace.data(), integral_workspace.size(), error);
-  if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = evaluate_multipole_cpu(basis, integrals, positions.data(), dipole_integrals.data(),
-                                  quadrupole_integrals.data(), integral_workspace.data(),
-                                  integral_workspace.size(), error);
-  if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = evaluate_h0_cpu(basis, integrals, h0, positions.data(), coordination_numbers.data(),
-                           overlap.data(), core_hamiltonian.data(), error);
-  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
+  if (native_periodic) {
+    status = update_periodic_short_range_geometry_cpu(
+        native_topology, positions.data(), geometry_generation, native_topology_workspace,
+        native_topology_geometry, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    /* Native XYZ systems use the image-complete coordination topology for
+     * both periodic H0 and AES2.  The molecular coordination cache omits
+     * translated neighbours and would therefore make periodic SCC depend on
+     * the arbitrary central-cell representation. */
+    status = evaluate_periodic_coordination_cpu(
+        coordination, native_topology, native_topology_geometry, coordination_numbers.data(),
+        native_topology_workspace, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    if (d4_enabled) {
+      /* D4 has its own coordination cutoff and reference response.  Keep its
+       * CN vector separate from the H0/AES2 vector because the two kernels do
+       * not share a cutoff or element weighting convention. */
+      status = evaluate_periodic_d4_coordination_cpu(d4, native_topology, native_topology_geometry,
+                                                     d4_coordination.data(),
+                                                     native_topology_workspace, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
+    status = evaluate_periodic_integrals_h0_cpu(
+        basis, integrals, h0, native_integrals, native_topology, native_topology_geometry,
+        native_topology_workspace, coordination_numbers.data(), overlap.data(),
+        dipole_integrals.data(), quadrupole_integrals.data(), core_hamiltonian.data(),
+        native_integral_workspace_storage.data(), native_integral_workspace_storage.size(), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  } else {
+    /* Molecular SCC and the stationary force composer both consume the
+     * geometry-dependent coordination numbers.  Native periodic requests
+     * obtain them from the image topology above; the molecular path must
+     * refresh the ordinary finite-system cache on every geometry change. */
+    status = evaluate_coordination_cpu(coordination, positions.data(), coordination_numbers.data(),
+                                       error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(),
+                                  integral_workspace.data(), integral_workspace.size(), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = evaluate_multipole_cpu(basis, integrals, positions.data(), dipole_integrals.data(),
+                                    quadrupole_integrals.data(), integral_workspace.data(),
+                                    integral_workspace.size(), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = evaluate_h0_cpu(basis, integrals, h0, positions.data(), coordination_numbers.data(),
+                             overlap.data(), core_hamiltonian.data(), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
   status =
       update_es2_geometry_cache_cpu(es2, positions.data(), geometry_generation, es2_matrix.data(),
                                     es2_matrix.size(), es2_workspace, es2_cache, error);
@@ -1242,7 +1427,7 @@ xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend
                                           geometry_generation, aes2_pairs.data(), aes2_pairs.size(),
                                           aes2_workspace, aes2_cache, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  if (d4_enabled) {
+  if (d4_enabled && !native_periodic) {
     status = update_d4_geometry_cache_cpu(d4, positions.data(), geometry_generation,
                                           d4_pairs.data(), d4_pairs.size(), d4_coordination.data(),
                                           d4_coordination.size(), d4_workspace, d4_cache, error);
@@ -1290,6 +1475,63 @@ xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend
     geometry.periodic_response_elements = static_cast<std::int64_t>(periodic_response.size());
     geometry.periodic_embedding_generation = geometry_generation;
     geometry.periodic_plan_identity = periodic.identity();
+  }
+  if (native_periodic) {
+    geometry.native_positions = positions.data();
+    geometry.native_position_elements = static_cast<std::int64_t>(positions.size());
+    geometry.native_coordination_numbers = coordination_numbers.data();
+    geometry.native_coordination_elements = static_cast<std::int64_t>(coordination_numbers.size());
+    geometry.native_topology_identity = native_topology.identity();
+    geometry.native_topology_geometry = &native_topology_geometry;
+    geometry.native_topology_workspace = &native_topology_workspace;
+    geometry.native_ewald_matrix = native_ewald_matrix.data();
+    geometry.native_ewald_matrix_elements = static_cast<std::int64_t>(native_ewald_matrix.size());
+    geometry.native_ewald_shell_potentials = native_ewald_shell_potentials.data();
+    geometry.native_ewald_shell_elements =
+        static_cast<std::int64_t>(native_ewald_shell_potentials.size());
+    geometry.native_ewald_energies = native_ewald_energies.data();
+    geometry.native_ewald_energy_elements = static_cast<std::int64_t>(native_ewald_energies.size());
+    geometry.native_ewald_gradients = native_ewald_gradients.data();
+    geometry.native_ewald_gradient_elements =
+        static_cast<std::int64_t>(native_ewald_gradients.size());
+    geometry.native_ewald_strain_derivatives = native_ewald_strain_derivatives.data();
+    geometry.native_ewald_strain_elements =
+        static_cast<std::int64_t>(native_ewald_strain_derivatives.size());
+    geometry.native_multipole_charge_dipole = native_multipole_charge_dipole.data();
+    geometry.native_multipole_charge_dipole_elements =
+        static_cast<std::int64_t>(native_multipole_charge_dipole.size());
+    geometry.native_multipole_dipole_dipole = native_multipole_dipole_dipole.data();
+    geometry.native_multipole_dipole_dipole_elements =
+        static_cast<std::int64_t>(native_multipole_dipole_dipole.size());
+    geometry.native_multipole_charge_quadrupole = native_multipole_charge_quadrupole.data();
+    geometry.native_multipole_charge_quadrupole_elements =
+        static_cast<std::int64_t>(native_multipole_charge_quadrupole.size());
+    geometry.native_multipole_charge_potentials = native_multipole_charge_potentials.data();
+    geometry.native_multipole_charge_potential_elements =
+        static_cast<std::int64_t>(native_multipole_charge_potentials.size());
+    geometry.native_multipole_dipole_potentials = native_multipole_dipole_potentials.data();
+    geometry.native_multipole_dipole_potential_elements =
+        static_cast<std::int64_t>(native_multipole_dipole_potentials.size());
+    geometry.native_multipole_quadrupole_potentials = native_multipole_quadrupole_potentials.data();
+    geometry.native_multipole_quadrupole_potential_elements =
+        static_cast<std::int64_t>(native_multipole_quadrupole_potentials.size());
+    geometry.native_multipole_energies = native_multipole_energies.data();
+    geometry.native_multipole_energy_elements =
+        static_cast<std::int64_t>(native_multipole_energies.size());
+    geometry.native_multipole_gradients = native_multipole_gradients.data();
+    geometry.native_multipole_gradient_elements =
+        static_cast<std::int64_t>(native_multipole_gradients.size());
+    geometry.native_multipole_strain_derivatives = native_multipole_strain_derivatives.data();
+    geometry.native_multipole_strain_elements =
+        static_cast<std::int64_t>(native_multipole_strain_derivatives.size());
+    geometry.native_multipole_coordination_adjoint = native_multipole_coordination_adjoint.data();
+    geometry.native_multipole_coordination_elements =
+        static_cast<std::int64_t>(native_multipole_coordination_adjoint.size());
+    if (d4_enabled) {
+      geometry.native_d4_coordination_numbers = d4_coordination.data();
+      geometry.native_d4_coordination_elements = static_cast<std::int64_t>(d4_coordination.size());
+      geometry.native_d4_geometry_generation = geometry_generation;
+    }
   }
   if (field_attached) {
     /* vat_i = -E . r_i and vdp_alpha = -E_alpha, matching the released
@@ -1356,10 +1598,40 @@ xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend
 }
 
 xtbloom_status_t SystemExecution::refresh_stationary_potentials(std::string& error) {
-  xtbloom_status_t status = evaluate_es2_potential_cpu(
-      es2, es2_cache, wavefunction.qsh, component_shell_potential.data(), es2_workspace, error);
-  if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  scalar_shell_potential = component_shell_potential;
+  const std::size_t atom_count = static_cast<std::size_t>(wavefunction_layout.total_atoms);
+  const std::size_t shell_count = static_cast<std::size_t>(wavefunction_layout.total_shells);
+  const std::size_t matrix_count = static_cast<std::size_t>(integrals.total_matrix_elements);
+  if (native_periodic) {
+    /* The native operators use the converged, density-derived charge channel.
+     * Rebuild the compact atom/shell views here rather than relying on the
+     * scratch left by the last SCC iteration; this keeps stationary force and
+     * energy requests correct after a WARM/FRESH transition. */
+    for (std::size_t shell = 0u; shell < shell_count; ++shell) {
+      driver_workspace.shell_charges[shell] = wavefunction.qsh[shell];
+    }
+    for (std::size_t atom = 0u; atom < atom_count; ++atom) {
+      driver_workspace.atomic_charges[atom] = wavefunction.qat[atom];
+      std::copy_n(wavefunction.dipole + atom * 3u, 3u, driver_workspace.atomic_dipoles + atom * 3u);
+      std::copy_n(wavefunction.quadrupole + atom * 6u, 6u,
+                  driver_workspace.atomic_quadrupoles + atom * 6u);
+    }
+  }
+
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
+  if (native_periodic) {
+    status = evaluate_periodic_ewald_cpu(
+        *driver.native_ewald_plan(), *driver.native_periodic_plan(), positions.data(),
+        driver_workspace.shell_charges, native_ewald_matrix.data(),
+        native_ewald_shell_potentials.data(), native_ewald_energies.data(),
+        native_ewald_gradients.data(), native_ewald_strain_derivatives.data(), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    std::copy_n(native_ewald_shell_potentials.data(), shell_count, scalar_shell_potential.data());
+  } else {
+    status = evaluate_es2_potential_cpu(es2, es2_cache, wavefunction.qsh,
+                                        component_shell_potential.data(), es2_workspace, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    scalar_shell_potential = component_shell_potential;
+  }
   status = evaluate_es3_potential_cpu(make_es3_view(es3), wavefunction.qsh,
                                       component_shell_potential.data(), error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -1380,14 +1652,43 @@ xtbloom_status_t SystemExecution::refresh_stationary_potentials(std::string& err
                 stationary_spin_shell_potential.data());
   }
 
-  status = evaluate_aes2_potential_cpu(aes2, aes2_cache, wavefunction.qat, wavefunction.dipole,
-                                       wavefunction.quadrupole, atomic_potential.data(),
-                                       dipole_potential.data(), quadrupole_potential.data(),
-                                       aes2_workspace, error);
-  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (native_periodic) {
+    status = evaluate_periodic_multipole_cpu(
+        *driver.native_multipole_plan(), positions.data(), coordination_numbers.data(),
+        driver_workspace.atomic_charges, driver_workspace.atomic_dipoles,
+        driver_workspace.atomic_quadrupoles, native_multipole_charge_dipole.data(),
+        native_multipole_dipole_dipole.data(), native_multipole_charge_quadrupole.data(),
+        native_multipole_charge_potentials.data(), native_multipole_dipole_potentials.data(),
+        native_multipole_quadrupole_potentials.data(), native_multipole_energies.data(),
+        native_multipole_gradients.data(), native_multipole_strain_derivatives.data(),
+        native_multipole_coordination_adjoint.data(), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    std::copy_n(native_multipole_charge_potentials.data(), atom_count, atomic_potential.data());
+    std::copy_n(native_multipole_dipole_potentials.data(), atom_count * 3u,
+                dipole_potential.data());
+    std::copy_n(native_multipole_quadrupole_potentials.data(), atom_count * 6u,
+                quadrupole_potential.data());
+  } else {
+    status = evaluate_aes2_potential_cpu(aes2, aes2_cache, wavefunction.qat, wavefunction.dipole,
+                                         wavefunction.quadrupole, atomic_potential.data(),
+                                         dipole_potential.data(), quadrupole_potential.data(),
+                                         aes2_workspace, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
   if (d4_enabled) {
-    status = evaluate_d4_two_body_cpu(d4, d4_cache, wavefunction.qat, energy_scratch.data(),
-                                      d4_atomic_potential.data(), d4_workspace, error);
+    if (native_periodic) {
+      /* Native periodic D4 uses the image topology and its separate CN
+       * response.  The molecular D4 cache is intentionally not populated for
+       * native cells, so routing this through evaluate_d4_two_body_cpu would
+       * either reject the call or silently omit image contributions. */
+      status = evaluate_periodic_d4_two_body_cpu(
+          d4, native_topology, native_topology_geometry, d4_coordination.data(),
+          driver_workspace.atomic_charges, driver_workspace.native_d4_atom_energies,
+          d4_atomic_potential.data(), d4_workspace, native_topology_workspace, error);
+    } else {
+      status = evaluate_d4_two_body_cpu(d4, d4_cache, wavefunction.qat, energy_scratch.data(),
+                                        d4_atomic_potential.data(), d4_workspace, error);
+    }
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
   } else {
     std::fill(d4_atomic_potential.begin(), d4_atomic_potential.end(), 0.0);
@@ -1510,8 +1811,9 @@ xtbloom_status_t SystemExecution::infer(
   }
 
   const bool need_energy_or_force =
-      (compute_flags & (XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
-                        XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
+      (compute_flags &
+       (XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_POINT_CHARGE_FORCES |
+        XTBLOOM_COMPUTE_STRAIN_DERIVATIVES)) != 0u;
   if (!need_energy_or_force) {
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -1544,7 +1846,9 @@ xtbloom_status_t SystemExecution::infer(
     }
   }
 
-  const bool need_qm_forces = (compute_flags & XTBLOOM_COMPUTE_FORCES) != 0u;
+  const bool need_strain_derivatives = (compute_flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u;
+  const bool need_qm_forces =
+      (compute_flags & XTBLOOM_COMPUTE_FORCES) != 0u || need_strain_derivatives;
   const bool need_point_forces =
       (compute_flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u && key.point_count != 0;
   const bool compose_qm_forces = need_qm_forces || need_point_forces;
@@ -1578,13 +1882,55 @@ xtbloom_status_t SystemExecution::infer(
     composer_workspace.component_energy_scratch = nullptr;
     composer_workspace.d4_workspace = {};
   }
+  RestrictedGfn2PeriodicForceInput periodic_force;
+  if (native_periodic) {
+    periodic_force.integral_plan = &native_integrals;
+    periodic_force.topology_plan = &native_topology;
+    periodic_force.topology_geometry = &native_topology_geometry;
+    periodic_force.topology_workspace = &native_topology_workspace;
+    periodic_force.ewald_plan = driver.native_ewald_plan();
+    periodic_force.multipole_plan = driver.native_multipole_plan();
+    periodic_force.ewald_gradients = native_ewald_gradients.data();
+    periodic_force.ewald_strain_derivatives = native_ewald_strain_derivatives.data();
+    periodic_force.multipole_gradients = native_multipole_gradients.data();
+    periodic_force.multipole_strain_derivatives = native_multipole_strain_derivatives.data();
+    periodic_force.multipole_coordination_adjoint = native_multipole_coordination_adjoint.data();
+    periodic_force.d4_coordination_numbers = d4_enabled ? d4_coordination.data() : nullptr;
+    periodic_force.integral_workspace = native_integral_workspace_storage.data();
+    periodic_force.integral_workspace_size = native_integral_workspace_storage.size();
+  }
   status = evaluate_restricted_gfn2_energy_forces_cpu(
       basis, integrals, coordination, repulsion, h0, mulliken, es2, es2_cache, aes2, aes2_cache,
       d4_enabled ? &d4 : nullptr, d4_enabled ? &d4_cache : nullptr,
       key.point_count == 0 ? nullptr : &external, input, &output.energy,
       compose_qm_forces ? output.forces.data() : nullptr,
-      need_point_forces ? output.point_forces.data() : nullptr, {}, composer_workspace, error);
+      need_point_forces ? output.point_forces.data() : nullptr, {}, composer_workspace, error,
+      periodic_force);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (need_strain_derivatives) {
+    if (!native_periodic || native_periodic_strain_scratch.size() != 9u ||
+        !std::all_of(native_periodic_strain_scratch.begin(), native_periodic_strain_scratch.end(),
+                     [](double value) { return std::isfinite(value); })) {
+      error = "native periodic strain derivatives were not produced";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    /* The public cell response is the symmetric infinitesimal-strain tensor.
+     * Individual real/reciprocal terms accumulate the two transposed shear
+     * components in different orders, so retain their raw values internally
+     * but average each pair at the publication boundary. This removes a
+     * summation-order skew without changing any diagonal response or force
+     * composition and matches the six symmetric affine modes used by the
+     * independent periodic oracle. */
+    for (std::size_t row = 0u; row < 3u; ++row) {
+      output.strain_derivatives[3u * row + row] = native_periodic_strain_scratch[3u * row + row];
+      for (std::size_t column = row + 1u; column < 3u; ++column) {
+        const double symmetric = 0.5 * (native_periodic_strain_scratch[3u * row + column] +
+                                        native_periodic_strain_scratch[3u * column + row]);
+        output.strain_derivatives[3u * row + column] = symmetric;
+        output.strain_derivatives[3u * column + row] = symmetric;
+      }
+    }
+  }
   if (compose_qm_forces && field_attached) {
     /* The stationary composer already carries the response of the converged
      * density and atomic multipoles through the injected field potentials.
@@ -1642,6 +1988,7 @@ struct Gfn2CpuExecutionCache::Impl {
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
   std::vector<double> dipole_moments;
+  std::vector<double> strain_derivatives;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> system_statuses;
@@ -1786,6 +2133,11 @@ struct Gfn2CpuExecutionCache::Impl {
     } else {
       dipole_moments.clear();
     }
+    if ((flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+      strain_derivatives.assign(9u * batch_size, nan);
+    } else {
+      strain_derivatives.clear();
+    }
   }
 
   struct InferenceJob {
@@ -1847,6 +2199,78 @@ struct Gfn2CpuExecutionCache::Impl {
     }
   }
 };
+
+xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& cache,
+                                                         Gfn2CpuPeriodicSnapshot& snapshot,
+                                                         std::string& error) {
+  try {
+    std::lock_guard<std::mutex> lock(cache.impl_->mutex);
+    const auto& implementation = *cache.impl_;
+    if (implementation.systems.empty() ||
+        implementation.systems.size() != implementation.system_statuses.size()) {
+      error = "CPU periodic snapshot has no completed system state";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+
+    std::vector<Gfn2CpuPeriodicSystemSnapshot> captured;
+    captured.resize(implementation.systems.size());
+    for (std::size_t index = 0u; index < implementation.systems.size(); ++index) {
+      const SystemExecution& system = *implementation.systems[index];
+      Gfn2CpuPeriodicSystemSnapshot& output = captured[index];
+      output.native_periodic = system.native_periodic;
+      output.status = implementation.system_statuses[index];
+      if (!system.native_periodic) continue;
+
+      const std::size_t atoms = static_cast<std::size_t>(system.wavefunction_layout.total_atoms);
+      const std::size_t shells = static_cast<std::size_t>(system.wavefunction_layout.total_shells);
+      const std::size_t matrices = static_cast<std::size_t>(system.native_ewald_matrix.size());
+      const auto copy = [](auto& destination, const auto* source, std::size_t count) {
+        destination.assign(source, source + count);
+      };
+      copy(output.shell_charges, system.driver_workspace.shell_charges, shells);
+      copy(output.coordination_numbers, system.coordination_numbers.data(), atoms);
+      copy(output.atomic_charges, system.driver_workspace.atomic_charges, atoms);
+      copy(output.atomic_dipoles, system.driver_workspace.atomic_dipoles, atoms * 3u);
+      copy(output.atomic_quadrupoles, system.driver_workspace.atomic_quadrupoles, atoms * 6u);
+
+      copy(output.ewald_matrix, system.native_ewald_matrix.data(), matrices);
+      copy(output.ewald_shell_potentials, system.native_ewald_shell_potentials.data(), shells);
+      copy(output.ewald_energies, system.native_ewald_energies.data(), 1u);
+      copy(output.ewald_gradients, system.native_ewald_gradients.data(), atoms * 3u);
+      copy(output.ewald_strain, system.native_ewald_strain_derivatives.data(), 9u);
+
+      copy(output.multipole_charge_dipole, system.native_multipole_charge_dipole.data(),
+           atoms * atoms * 3u);
+      copy(output.multipole_dipole_dipole, system.native_multipole_dipole_dipole.data(),
+           atoms * atoms * 9u);
+      copy(output.multipole_charge_quadrupole, system.native_multipole_charge_quadrupole.data(),
+           atoms * atoms * 6u);
+      copy(output.multipole_charge_potentials, system.native_multipole_charge_potentials.data(),
+           atoms);
+      copy(output.multipole_dipole_potentials, system.native_multipole_dipole_potentials.data(),
+           atoms * 3u);
+      copy(output.multipole_quadrupole_potentials,
+           system.native_multipole_quadrupole_potentials.data(), atoms * 6u);
+      copy(output.multipole_energies, system.native_multipole_energies.data(), 1u);
+      copy(output.multipole_gradients, system.native_multipole_gradients.data(), atoms * 3u);
+      copy(output.multipole_strain, system.native_multipole_strain_derivatives.data(), 9u);
+      copy(output.multipole_coordination_adjoint,
+           system.native_multipole_coordination_adjoint.data(), atoms);
+    }
+    snapshot.systems = std::move(captured);
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the CPU periodic state snapshot";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    error = "unknown failure while capturing the CPU periodic state snapshot";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+}
 
 Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa)
     : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa)) {}
@@ -1960,6 +2384,10 @@ xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
         std::copy_n(output.dipole_moments.begin(), 3,
                     implementation.dipole_moments.begin() + 3 * index);
       }
+      if ((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+        std::copy_n(output.strain_derivatives.begin(), 9,
+                    implementation.strain_derivatives.begin() + 9 * index);
+      }
     }
 
     if ((options.flags & XTBLOOM_COMPUTE_ENERGY) != 0u) {
@@ -1977,6 +2405,9 @@ xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
       publish_to_c_buffer(implementation.dipole_moments, result.dipole_moments);
     }
+    if ((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+      publish_to_c_buffer(implementation.strain_derivatives, result.strain_derivatives);
+    }
     publish_to_c_buffer(implementation.iterations, result.scc_iterations);
     publish_to_c_buffer(implementation.converged, result.scc_converged);
     publish_to_c_buffer(implementation.system_statuses, result.per_system_status);
@@ -1986,6 +2417,9 @@ xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
                                        : 0u) |
         static_cast<std::uint32_t>((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u
                                        ? XTBLOOM_RESULT_DIPOLE_MOMENTS
+                                       : 0u) |
+        static_cast<std::uint32_t>((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u
+                                       ? XTBLOOM_RESULT_STRAIN_DERIVATIVES
                                        : 0u);
     implementation.systems_ready_for_warm = all_converged;
     error.clear();
@@ -2077,6 +2511,7 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
            vector_bytes(implementation.task_failures) + vector_bytes(implementation.energies) +
            vector_bytes(implementation.forces) + vector_bytes(implementation.atomic_charges) +
            vector_bytes(implementation.point_forces) + vector_bytes(implementation.dipole_moments) +
+           vector_bytes(implementation.strain_derivatives) +
            vector_bytes(implementation.iterations) + vector_bytes(implementation.converged) +
            vector_bytes(implementation.system_statuses);
 
@@ -2087,7 +2522,8 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
            vector_bytes(request.point_offsets) + vector_bytes(request.point_positions) +
            vector_bytes(request.point_charges) + vector_bytes(request.point_hardnesses) +
            vector_bytes(request.periodic_shifts) + vector_bytes(request.response_offsets) +
-           vector_bytes(request.response_matrices) + vector_bytes(request.field_by_system) +
+           vector_bytes(request.response_matrices) + vector_bytes(request.cell_matrices) +
+           vector_bytes(request.periodic_axes) + vector_bytes(request.field_by_system) +
            vector_bytes(request.field_attached_by_system);
   return total;
 }

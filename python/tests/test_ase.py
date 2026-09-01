@@ -220,16 +220,77 @@ def test_ase_rebuilds_when_atomic_numbers_change() -> None:
     assert reused == pytest.approx(reference.get_potential_energy(), abs=1e-10)
 
 
-def test_ase_rejects_periodic_systems() -> None:
-    """Reject periodic ASE structures unsupported by the molecular ABI."""
+def test_ase_periodic_systems_publish_energy_and_forces() -> None:
+    """Pass a full XYZ ASE cell through the public CPU periodic path."""
     atoms = Atoms(
         numbers=[1, 1],
         positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
-        cell=[5.0, 5.0, 5.0],
+        cell=[8.0, 8.0, 8.0],
         pbc=True,
     )
-    atoms.calc = XTBloom(method="GFN2-xTB")
-    with pytest.raises(InputError):
+    calculator = XTBloom(method="GFN2-xTB", backend="cpu")
+    atoms.calc = calculator
+
+    energy = atoms.get_potential_energy()
+    forces = atoms.get_forces()
+
+    assert np.isfinite(energy)
+    assert forces.shape == (2, 3)
+    assert np.isfinite(forces).all()
+    assert calculator._xtb is not None
+    np.testing.assert_allclose(calculator._xtb.cell, np.diag([8.0, 8.0, 8.0]) / _BOHR)
+
+
+def test_ase_periodic_cell_update_reuses_calculator() -> None:
+    """Propagate an ASE cell change without rebuilding fixed atom topology."""
+    atoms = Atoms(
+        numbers=[1, 1],
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
+        cell=[8.0, 8.0, 8.0],
+        pbc=True,
+    )
+    calculator = XTBloom(method="GFN2-xTB", backend="cpu")
+    atoms.calc = calculator
+    first = atoms.get_potential_energy()
+    assert calculator._xtb is not None
+    native_calculator = calculator._xtb
+
+    atoms.cell = np.diag([9.0, 8.0, 8.0])
+    second = atoms.get_potential_energy()
+
+    assert calculator._xtb is native_calculator
+    assert second != pytest.approx(first, abs=1.0e-10)
+    np.testing.assert_allclose(
+        native_calculator.cell,
+        np.diag([9.0, 8.0, 8.0]) / _BOHR,
+    )
+
+
+@pytest.mark.parametrize(
+    ("cell", "pbc", "message"),
+    [
+        (np.diag([8.0, 8.0, 8.0]), [True, False, True], "full XYZ"),
+        (np.zeros((3, 3)), True, "nonsingular"),
+        (np.diag([8.0, 8.0, -8.0]), True, "right-handed"),
+        (
+            np.array([[np.nan, 0.0, 0.0], [0.0, 8.0, 0.0], [0.0, 0.0, 8.0]]),
+            True,
+            "finite",
+        ),
+    ],
+)
+def test_ase_rejects_invalid_periodic_cells(
+    cell: np.ndarray, pbc: object, message: str
+) -> None:
+    """Reject partial, missing, left-handed, and non-finite native cells."""
+    atoms = Atoms(
+        numbers=[1, 1],
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
+        cell=cell,
+        pbc=pbc,
+    )
+    atoms.calc = XTBloom(method="GFN2-xTB", backend="cpu")
+    with pytest.raises(InputError, match=message):
         atoms.get_potential_energy()
 
 

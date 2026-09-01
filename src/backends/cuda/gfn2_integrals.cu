@@ -9,6 +9,7 @@
 #include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_integral_force.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
+#include "backends/cuda/periodic_wrap.cuh"
 
 namespace xtbloom::detail::cuda {
 namespace {
@@ -2312,6 +2313,398 @@ __global__ void integral_force_shell_pair_kernel(
   }
 }
 
+/* Reconstruct the image-specific H0 multiplier used by the periodic forward
+ * evaluator.  The public overlap/H0 matrices are image sums, so this factor
+ * must stay local to each image during the reverse overlap contraction. */
+__device__ bool native_h0_image_factor(const Gfn2IntegralDeviceBatch& batch,
+                                       const Gfn2H0DevicePlan& h0_plan,
+                                       const double* coordination_numbers, std::int64_t system,
+                                       std::int64_t bra_atom, std::int64_t ket_atom,
+                                       std::int64_t bra_shell, std::int64_t ket_shell,
+                                       double distance_squared, double& factor) {
+  const double bra_level =
+      h0_plan.shell_levels[bra_shell] -
+      h0_plan.shell_coordination_scale[bra_shell] * coordination_numbers[bra_atom];
+  const double ket_level =
+      h0_plan.shell_levels[ket_shell] -
+      h0_plan.shell_coordination_scale[ket_shell] * coordination_numbers[ket_atom];
+  const double distance = sqrt(distance_squared);
+  const double radius_sum = h0_plan.atomic_radii[bra_atom] + h0_plan.atomic_radii[ket_atom];
+  const double reduced = sqrt(distance / radius_sum);
+  const double bra_polynomial = 1.0 + h0_plan.shell_polynomial[bra_shell] * reduced;
+  const double ket_polynomial = 1.0 + h0_plan.shell_polynomial[ket_shell] * reduced;
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_count = batch.batch_shell_offsets[system + 1] - shell_begin;
+  const std::int64_t local_bra = bra_shell - shell_begin;
+  const std::int64_t local_ket = ket_shell - shell_begin;
+  const double pair_scale =
+      h0_plan
+          .shell_pair_scale[batch.shell_pair_offsets[system] + local_bra * shell_count + local_ket];
+  factor = 0.5 * (bra_level + ket_level) * pair_scale * bra_polynomial * ket_polynomial;
+  return isfinite(factor) && isfinite(distance) && isfinite(radius_sum) && radius_sum > 0.0 &&
+         isfinite(reduced) && isfinite(bra_polynomial) && isfinite(ket_polynomial) &&
+         isfinite(pair_scale);
+}
+
+/* The central onsite block is not represented by an image translation in the
+ * native preprocessing queue. Its H0 multiplier is the level average only;
+ * keeping this helper separate avoids treating the zero vector as a valid
+ * non-onsite image and makes the per-image adjoint split explicit. */
+__device__ bool native_h0_onsite_factor(const Gfn2H0DevicePlan& h0_plan,
+                                        const double* coordination_numbers, std::int64_t bra_atom,
+                                        std::int64_t ket_atom, std::int64_t bra_shell,
+                                        std::int64_t ket_shell, double& factor) {
+  const double bra_level =
+      h0_plan.shell_levels[bra_shell] -
+      h0_plan.shell_coordination_scale[bra_shell] * coordination_numbers[bra_atom];
+  const double ket_level =
+      h0_plan.shell_levels[ket_shell] -
+      h0_plan.shell_coordination_scale[ket_shell] * coordination_numbers[ket_atom];
+  factor = 0.5 * (bra_level + ket_level);
+  return isfinite(bra_level) && isfinite(ket_level) && isfinite(factor);
+}
+
+/*
+ * Image-aware reverse of the native periodic S/D/Q evaluator.  The forward
+ * path publishes one canonical atom pair for every translation and mirrors a
+ * distinct-atom block into the reverse matrix (with the ket-origin multipole
+ * shift).  This kernel reconstructs each image contribution from the same
+ * primitive recurrence, applies the reverse shift pullback, and accumulates
+ * dE/dR directly into the transactional gradient scratch.  One lane owns a
+ * task deliberately: periodic image counts are topology-bounded and this
+ * scalar implementation keeps the reverse ordering auditable while parity
+ * evidence is collected.
+ */
+__global__ void native_periodic_integral_force_kernel(
+    Gfn2IntegralDeviceBatch batch, Gfn2ForceDeviceActivity activity,
+    Gfn2IntegralForceDeviceInput input, Gfn2IntegralForceDeviceWorkspace workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, std::int64_t image_task_count,
+    std::int64_t image_system_stride, std::int64_t maximum_pair_blocks) {
+  if (threadIdx.x != 0 || !force_sequence_is_active(workspace)) return;
+  const std::int64_t global_task = static_cast<std::int64_t>(blockIdx.x);
+  const bool image_task = global_task < image_task_count;
+  const std::int64_t task = image_task ? global_task : global_task - image_task_count;
+  if (image_system_stride <= 0 || maximum_pair_blocks <= 0) return;
+  const std::int64_t system =
+      image_task ? global_task / image_system_stride : task / maximum_pair_blocks;
+  if (system < 0 || system >= batch.batch_size ||
+      !force_member_is_active(activity, system, system_errors, device_error)) {
+    return;
+  }
+
+  const std::int64_t remainder =
+      image_task ? global_task - system * image_system_stride : task - system * maximum_pair_blocks;
+  const std::int64_t image_slot = image_task ? remainder / maximum_pair_blocks : -1;
+  const std::int64_t local_pair =
+      image_task ? remainder - image_slot * maximum_pair_blocks : remainder;
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t shell_count = shell_end - shell_begin;
+  std::int64_t expected_pairs = 0;
+  if (shell_count <= 0 || !checked_square(shell_count, &expected_pairs) || local_pair < 0 ||
+      local_pair >= expected_pairs) {
+    return;  // rectangular queue padding is an ordinary no-op
+  }
+  const std::int64_t bra_shell = shell_begin + local_pair / shell_count;
+  const std::int64_t ket_shell = shell_begin + local_pair % shell_count;
+  const std::int64_t bra_atom = batch.shell_to_atom[bra_shell];
+  const std::int64_t ket_atom = batch.shell_to_atom[ket_shell];
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  if (bra_atom < atom_begin || bra_atom >= atom_end || ket_atom < atom_begin ||
+      ket_atom >= atom_end || (image_task ? bra_atom > ket_atom : bra_atom != ket_atom)) {
+    return;
+  }
+  /* The forward evaluator publishes a transposed (reverse) matrix block only
+   * for distinct atoms in an image pair.  Onsite blocks and same-atom image
+   * blocks are intentionally forward-only; including their reverse adjoints
+   * here would differentiate a matrix element that was never written. */
+  const bool publish_reverse = image_task && bra_atom != ket_atom;
+
+  double vector[3] = {0.0, 0.0, 0.0};
+  double distance_squared = 0.0;
+  if (image_task) {
+    const auto periodic = input.native_periodic;
+    const std::int64_t translation_begin = periodic.translation_offsets[system];
+    const std::int64_t translation_end = periodic.translation_offsets[system + 1];
+    if (translation_begin < 0 || translation_end <= translation_begin ||
+        translation_end > periodic.translation_elements || image_slot < 0 ||
+        image_slot >= translation_end - translation_begin) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidOffsets);
+      return;
+    }
+    const auto translation = periodic.translations[translation_begin + image_slot];
+    for (int coordinate = 0; coordinate < 3; ++coordinate) {
+      const double difference = periodic_wrap_detail::rounded_subtract(
+          input.positions[ket_atom * 3 + coordinate], input.positions[bra_atom * 3 + coordinate]);
+      vector[coordinate] =
+          periodic_wrap_detail::rounded_subtract(difference, translation.cartesian[coordinate]);
+      if (!isfinite(vector[coordinate])) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2IntegralDeviceError::kCoordinateDifferenceOverflow);
+        return;
+      }
+    }
+    const double x_squared = periodic_wrap_detail::rounded_multiply(vector[0], vector[0]);
+    const double y_squared = periodic_wrap_detail::rounded_multiply(vector[1], vector[1]);
+    const double z_squared = periodic_wrap_detail::rounded_multiply(vector[2], vector[2]);
+    distance_squared = periodic_wrap_detail::rounded_add(
+        periodic_wrap_detail::rounded_add(x_squared, y_squared), z_squared);
+    const double cutoff_squared = periodic.realspace_cutoff * periodic.realspace_cutoff;
+    if (!isfinite(distance_squared) ||
+        distance_squared < 2.220446049250313080847263336181640625e-16 ||
+        distance_squared > cutoff_squared || fabs(vector[0]) > periodic.realspace_cutoff ||
+        fabs(vector[1]) > periodic.realspace_cutoff ||
+        fabs(vector[2]) > periodic.realspace_cutoff) {
+      return;
+    }
+  }
+
+  const std::uint8_t bra_l = batch.angular_momenta[bra_shell];
+  const std::uint8_t ket_l = batch.angular_momenta[ket_shell];
+  const int bra_cartesian_count = cartesian_count(bra_l);
+  const int ket_cartesian_count = cartesian_count(ket_l);
+  const int bra_spherical_count = spherical_count(bra_l);
+  const int ket_spherical_count = spherical_count(ket_l);
+  if (bra_l > 2u || ket_l > 2u ||
+      bra_cartesian_count * ket_cartesian_count > kMaximumCartesianBlock) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    return;
+  }
+
+  const std::int64_t orbital_begin = batch.batch_orbital_offsets[system];
+  const std::int64_t orbital_count = batch.batch_orbital_offsets[system + 1] - orbital_begin;
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t bra_shell_orbital = batch.shell_orbital_offsets[bra_shell] - orbital_begin;
+  const std::int64_t ket_shell_orbital = batch.shell_orbital_offsets[ket_shell] - orbital_begin;
+  const std::int64_t matrix_elements = batch.total_matrix_elements;
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  double image_h0_factor = 0.0;
+  if (image_task &&
+      !native_h0_image_factor(batch, input.h0_plan, input.coordination_numbers, system, bra_atom,
+                              ket_atom, bra_shell, ket_shell, distance_squared, image_h0_factor)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kNonfiniteH0Arithmetic);
+    return;
+  }
+  double local_h0_factor = image_h0_factor;
+  if (!image_task && !native_h0_onsite_factor(input.h0_plan, input.coordination_numbers, bra_atom,
+                                              ket_atom, bra_shell, ket_shell, local_h0_factor)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kNonfiniteH0Arithmetic);
+    return;
+  }
+  for (int bra_ao = 0; bra_ao < bra_spherical_count; ++bra_ao) {
+    for (int ket_ao = 0; ket_ao < ket_spherical_count; ++ket_ao) {
+      const std::int64_t bra_orbital = bra_shell_orbital + bra_ao;
+      const std::int64_t ket_orbital = ket_shell_orbital + ket_ao;
+      const std::int64_t forward = matrix_begin + bra_orbital * orbital_count + ket_orbital;
+      const std::int64_t reverse = matrix_begin + ket_orbital * orbital_count + bra_orbital;
+      /* The periodic H0 reverse deliberately leaves dH0/dS out of the
+       * global overlap adjoint. Add only this task's local multiplier beside
+       * the matching image derivative; otherwise an image-summed adjoint
+       * would be applied to every image and cross-multiply all translations. */
+      double overlap_adjoint =
+          input.overlap_adjoint[forward] + input.density[forward] * local_h0_factor;
+      if (publish_reverse) {
+        overlap_adjoint +=
+            input.overlap_adjoint[reverse] + input.density[reverse] * local_h0_factor;
+      }
+      double dipole_adjoint[3] = {};
+      double reverse_dipole_adjoint[3] = {};
+      double quadrupole_adjoint[6] = {};
+      double reverse_quadrupole_adjoint[6] = {};
+      if (multipoles_enabled) {
+        for (int component = 0; component < 3; ++component) {
+          dipole_adjoint[component] = input.dipole_adjoint[component * matrix_elements + forward];
+          if (publish_reverse) {
+            reverse_dipole_adjoint[component] =
+                input.dipole_adjoint[component * matrix_elements + reverse];
+          }
+        }
+        for (int component = 0; component < 6; ++component) {
+          quadrupole_adjoint[component] =
+              input.quadrupole_adjoint[component * matrix_elements + forward];
+          if (publish_reverse) {
+            reverse_quadrupole_adjoint[component] =
+                input.quadrupole_adjoint[component * matrix_elements + reverse];
+            quadrupole_adjoint[component] += reverse_quadrupole_adjoint[component];
+          }
+        }
+        if (publish_reverse) {
+          add_multipole_shift_coefficient_pullback(vector, reverse_dipole_adjoint,
+                                                   reverse_quadrupole_adjoint, &overlap_adjoint,
+                                                   dipole_adjoint);
+        }
+      }
+      int bra_power[3];
+      int ket_power[3];
+      /* Spherical rows are sparse Cartesian combinations.  Accumulating the
+       * transformed primitive contractions here avoids materializing image
+       * tensors while retaining the exact forward recurrence. */
+      double derivative[3] = {};
+      bool finite = true;
+      for (int bra_cartesian = 0; bra_cartesian < bra_cartesian_count; ++bra_cartesian) {
+        const double bra_coefficient = spherical_coefficient(bra_l, bra_ao, bra_cartesian);
+        if (bra_coefficient == 0.0) continue;
+        cartesian_exponent(bra_l, bra_cartesian, &bra_power[0], &bra_power[1], &bra_power[2]);
+        for (int ket_cartesian = 0; ket_cartesian < ket_cartesian_count; ++ket_cartesian) {
+          const double ket_coefficient = spherical_coefficient(ket_l, ket_ao, ket_cartesian);
+          if (ket_coefficient == 0.0) continue;
+          cartesian_exponent(ket_l, ket_cartesian, &ket_power[0], &ket_power[1], &ket_power[2]);
+          double overlap = 0.0;
+          double overlap_gradient[3] = {};
+          double multipoles[kMultipoleComponents] = {};
+          double multipole_gradient[3][kMultipoleComponents] = {};
+          const std::int64_t bra_primitive_begin = batch.shell_primitive_offsets[bra_shell];
+          const std::int64_t bra_primitive_end = batch.shell_primitive_offsets[bra_shell + 1];
+          const std::int64_t ket_primitive_begin = batch.shell_primitive_offsets[ket_shell];
+          const std::int64_t ket_primitive_end = batch.shell_primitive_offsets[ket_shell + 1];
+          for (std::int64_t ket_primitive = ket_primitive_begin; ket_primitive < ket_primitive_end;
+               ++ket_primitive) {
+            const double ket_alpha = batch.primitive_exponents[ket_primitive];
+            for (std::int64_t bra_primitive = bra_primitive_begin;
+                 bra_primitive < bra_primitive_end; ++bra_primitive) {
+              const double bra_alpha = batch.primitive_exponents[bra_primitive];
+              const double alpha_sum = ket_alpha + bra_alpha;
+              const double inverse_sum = 1.0 / alpha_sum;
+              const double product_exponent =
+                  ket_alpha * bra_alpha * distance_squared * inverse_sum;
+              if (!(alpha_sum > 0.0) || !isfinite(alpha_sum) || !isfinite(inverse_sum) ||
+                  !isfinite(product_exponent)) {
+                finite = false;
+                continue;
+              }
+              if (product_exponent > batch.integral_cutoff) continue;
+              const double sqrt_inverse_sum = sqrt(inverse_sum);
+              const double primitive_prefactor =
+                  exp(-product_exponent) * kSqrtPiCubed * sqrt_inverse_sum * sqrt_inverse_sum *
+                  sqrt_inverse_sum * batch.primitive_coefficients[ket_primitive] *
+                  batch.primitive_coefficients[bra_primitive];
+              if (!isfinite(primitive_prefactor)) {
+                finite = false;
+                continue;
+              }
+              double axis[3][6][3];
+              for (int coordinate = 0; coordinate < 3; ++coordinate) {
+                const int maximum_ket_power =
+                    static_cast<int>(ket_l) + (multipoles_enabled ? 3 : 1);
+                make_axis_overlap(-vector[coordinate] * bra_alpha * inverse_sum,
+                                  vector[coordinate] * ket_alpha * inverse_sum, 0.5 * inverse_sum,
+                                  maximum_ket_power, static_cast<int>(bra_l), axis[coordinate]);
+              }
+              const double one_dimensional[3] = {axis[0][ket_power[0]][bra_power[0]],
+                                                 axis[1][ket_power[1]][bra_power[1]],
+                                                 axis[2][ket_power[2]][bra_power[2]]};
+              overlap += primitive_prefactor * one_dimensional[0] * one_dimensional[1] *
+                         one_dimensional[2];
+              for (int coordinate = 0; coordinate < 3; ++coordinate) {
+                double derivative_1d =
+                    2.0 * ket_alpha *
+                    axis[coordinate][ket_power[coordinate] + 1][bra_power[coordinate]];
+                if (ket_power[coordinate] > 0) {
+                  derivative_1d -=
+                      static_cast<double>(ket_power[coordinate]) *
+                      axis[coordinate][ket_power[coordinate] - 1][bra_power[coordinate]];
+                }
+                overlap_gradient[coordinate] += primitive_prefactor * derivative_1d *
+                                                one_dimensional[(coordinate + 1) % 3] *
+                                                one_dimensional[(coordinate + 2) % 3];
+              }
+              for (int component = 0; multipoles_enabled && component < kMultipoleComponents;
+                   ++component) {
+                int moment_power[3];
+                multipole_power(component, &moment_power[0], &moment_power[1], &moment_power[2]);
+                const double moment_axis[3] = {
+                    axis[0][ket_power[0] + moment_power[0]][bra_power[0]],
+                    axis[1][ket_power[1] + moment_power[1]][bra_power[1]],
+                    axis[2][ket_power[2] + moment_power[2]][bra_power[2]]};
+                multipoles[component] +=
+                    primitive_prefactor * moment_axis[0] * moment_axis[1] * moment_axis[2];
+                for (int coordinate = 0; coordinate < 3; ++coordinate) {
+                  const int exponent = ket_power[coordinate] + moment_power[coordinate];
+                  double derivative_1d =
+                      2.0 * ket_alpha * axis[coordinate][exponent + 1][bra_power[coordinate]];
+                  if (exponent > 0) {
+                    derivative_1d -= static_cast<double>(exponent) *
+                                     axis[coordinate][exponent - 1][bra_power[coordinate]];
+                  }
+                  multipole_gradient[coordinate][component] += primitive_prefactor * derivative_1d *
+                                                               moment_axis[(coordinate + 1) % 3] *
+                                                               moment_axis[(coordinate + 2) % 3];
+                }
+              }
+            }
+          }
+          finite = finite && isfinite(overlap);
+          for (int coordinate = 0; coordinate < 3; ++coordinate) {
+            finite = finite && isfinite(overlap_gradient[coordinate]);
+          }
+          for (int component = 0; multipoles_enabled && component < kMultipoleComponents;
+               ++component) {
+            finite = finite && isfinite(multipoles[component]);
+            for (int coordinate = 0; coordinate < 3; ++coordinate) {
+              finite = finite && isfinite(multipole_gradient[coordinate][component]);
+            }
+          }
+          double vector_adjoint[3] = {};
+          if (multipoles_enabled && publish_reverse) {
+            double ignored_overlap_adjoint = 0.0;
+            double ignored_dipole_adjoint[3] = {};
+            multipole_shift_pullback_device(vector, overlap, multipoles, reverse_dipole_adjoint,
+                                            reverse_quadrupole_adjoint, &ignored_overlap_adjoint,
+                                            ignored_dipole_adjoint, vector_adjoint);
+          }
+          const double coefficient = bra_coefficient * ket_coefficient;
+          for (int coordinate = 0; coordinate < 3; ++coordinate) {
+            double value =
+                vector_adjoint[coordinate] + overlap_adjoint * overlap_gradient[coordinate];
+            if (multipoles_enabled) {
+              for (int component = 0; component < 3; ++component) {
+                value += dipole_adjoint[component] * multipole_gradient[coordinate][component];
+              }
+              const double trace =
+                  0.5 * (multipole_gradient[coordinate][3] + multipole_gradient[coordinate][5] +
+                         multipole_gradient[coordinate][8]);
+              const double quadrupole_gradient[6] = {
+                  1.5 * multipole_gradient[coordinate][3] - trace,
+                  1.5 * multipole_gradient[coordinate][4],
+                  1.5 * multipole_gradient[coordinate][5] - trace,
+                  1.5 * multipole_gradient[coordinate][6],
+                  1.5 * multipole_gradient[coordinate][7],
+                  1.5 * multipole_gradient[coordinate][8] - trace};
+              for (int component = 0; component < 6; ++component) {
+                value += quadrupole_adjoint[component] * quadrupole_gradient[component];
+              }
+            }
+            derivative[coordinate] += coefficient * value;
+            finite = finite && isfinite(value) && isfinite(derivative[coordinate]);
+          }
+        }
+      }
+      if (!finite) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2IntegralDeviceError::kNonfiniteGradientArithmetic);
+        return;
+      }
+      if (bra_atom != ket_atom) {
+        for (int coordinate = 0; coordinate < 3; ++coordinate) {
+          if (!force_add_atomic(workspace.gradient_scratch + ket_atom * 3 + coordinate,
+                                derivative[coordinate]) ||
+              !force_add_atomic(workspace.gradient_scratch + bra_atom * 3 + coordinate,
+                                -derivative[coordinate])) {
+            record_system_error(system_errors, system, device_error,
+                                Gfn2IntegralDeviceError::kNonfiniteGradientArithmetic);
+            return;
+          }
+        }
+      }
+    }
+  }
+}
+
 __global__ void publish_integral_force_kernel(Gfn2IntegralDeviceBatch batch,
                                               Gfn2ForceDeviceActivity activity,
                                               Gfn2IntegralForceDeviceOutput output,
@@ -2349,6 +2742,12 @@ cudaError_t validate_integral_force_descriptors(
                                        maximum_pair_blocks, grid_blocks);
   const std::int64_t coordinates = batch.total_atoms * 3;
   const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  const auto& periodic = input.native_periodic;
+  const bool native_enabled = periodic.plan_token != 0u;
+  const bool native_fields_empty =
+      periodic.translation_offset_elements == 0 && periodic.translation_elements == 0 &&
+      periodic.max_translations_per_system == 0 && periodic.realspace_cutoff == 0.0 &&
+      periodic.translation_offsets == nullptr && periodic.translations == nullptr;
   const std::int64_t dipoles =
       multipoles_enabled ? batch.total_matrix_elements * kGfn2IntegralDipoleComponents : 0;
   const std::int64_t quadrupoles =
@@ -2362,6 +2761,32 @@ cudaError_t validate_integral_force_descriptors(
       (!multipoles_enabled &&
        (input.dipole_adjoint != nullptr || input.dipole_adjoint_elements != 0 ||
         input.quadrupole_adjoint != nullptr || input.quadrupole_adjoint_elements != 0)) ||
+      (native_enabled &&
+       (periodic.plan_token != batch.plan_token ||
+        periodic.translation_offset_elements != batch.batch_size + 1 ||
+        periodic.translation_elements <= 0 || periodic.max_translations_per_system <= 0 ||
+        periodic.max_translations_per_system > periodic.translation_elements ||
+        !(periodic.realspace_cutoff > 0.0) || !std::isfinite(periodic.realspace_cutoff) ||
+        !std::isfinite(periodic.realspace_cutoff * periodic.realspace_cutoff) ||
+        !is_aligned(periodic.translation_offsets, alignof(std::int64_t)) ||
+        !is_aligned(periodic.translations, alignof(Gfn2CudaPeriodicTranslation)))) ||
+      (!native_enabled && !native_fields_empty) ||
+      (native_enabled &&
+       (input.density_elements < batch.total_matrix_elements ||
+        input.coordination_elements < batch.total_atoms ||
+        input.h0_plan.plan_token != batch.plan_token ||
+        input.h0_plan.atomic_radius_count < batch.total_atoms ||
+        input.h0_plan.shell_level_count < batch.total_shells ||
+        input.h0_plan.shell_coordination_scale_count < batch.total_shells ||
+        input.h0_plan.shell_polynomial_count < batch.total_shells ||
+        input.h0_plan.shell_pair_scale_count < batch.total_shell_pair_elements ||
+        !required_pointer(input.density, batch.total_matrix_elements) ||
+        !required_pointer(input.coordination_numbers, batch.total_atoms) ||
+        !required_pointer(input.h0_plan.atomic_radii, batch.total_atoms) ||
+        !required_pointer(input.h0_plan.shell_levels, batch.total_shells) ||
+        !required_pointer(input.h0_plan.shell_coordination_scale, batch.total_shells) ||
+        !required_pointer(input.h0_plan.shell_polynomial, batch.total_shells) ||
+        !required_pointer(input.h0_plan.shell_pair_scale, batch.total_shell_pair_elements))) ||
       output.gradient_elements < coordinates || workspace.gradient_elements < coordinates ||
       !is_aligned(activity.requested_mask, alignof(std::uint8_t)) ||
       !is_aligned(activity.system_statuses, alignof(xtbloom_status_t)) ||
@@ -2375,7 +2800,7 @@ cudaError_t validate_integral_force_descriptors(
   }
   const bool compact = batch.use_compact_tasks != 0u;
   if (compact) *grid_blocks = static_cast<unsigned int>(batch.force_generic_task_count);
-  std::array<MemoryRange, 20> reads;
+  std::array<MemoryRange, 29> reads;
   std::array<MemoryRange, 5> writes;
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
                   &reads[0]) ||
@@ -2411,10 +2836,30 @@ cudaError_t validate_integral_force_descriptors(
       !make_range(input.dipole_adjoint, dipoles, sizeof(*input.dipole_adjoint), &reads[16]) ||
       !make_range(input.quadrupole_adjoint, quadrupoles, sizeof(*input.quadrupole_adjoint),
                   &reads[17]) ||
+      !make_range(input.density, native_enabled ? batch.total_matrix_elements : 0,
+                  sizeof(*input.density), &reads[22]) ||
+      !make_range(input.coordination_numbers, native_enabled ? batch.total_atoms : 0,
+                  sizeof(*input.coordination_numbers), &reads[23]) ||
+      !make_range(input.h0_plan.atomic_radii, native_enabled ? batch.total_atoms : 0,
+                  sizeof(*input.h0_plan.atomic_radii), &reads[24]) ||
+      !make_range(input.h0_plan.shell_levels, native_enabled ? batch.total_shells : 0,
+                  sizeof(*input.h0_plan.shell_levels), &reads[25]) ||
+      !make_range(input.h0_plan.shell_coordination_scale, native_enabled ? batch.total_shells : 0,
+                  sizeof(*input.h0_plan.shell_coordination_scale), &reads[26]) ||
+      !make_range(input.h0_plan.shell_polynomial, native_enabled ? batch.total_shells : 0,
+                  sizeof(*input.h0_plan.shell_polynomial), &reads[27]) ||
+      !make_range(input.h0_plan.shell_pair_scale,
+                  native_enabled ? batch.total_shell_pair_elements : 0,
+                  sizeof(*input.h0_plan.shell_pair_scale), &reads[28]) ||
       !make_range(batch.force_generic_tasks, compact ? batch.force_generic_task_count : 0,
                   sizeof(*batch.force_generic_tasks), &reads[18]) ||
       !make_range(batch.force_ss_tasks, compact ? batch.force_ss_task_count : 0,
                   sizeof(*batch.force_ss_tasks), &reads[19]) ||
+      !make_range(periodic.translation_offsets,
+                  native_enabled ? periodic.translation_offset_elements : 0,
+                  sizeof(*periodic.translation_offsets), &reads[20]) ||
+      !make_range(periodic.translations, native_enabled ? periodic.translation_elements : 0,
+                  sizeof(*periodic.translations), &reads[21]) ||
       !make_range(output.gradients, coordinates, sizeof(*output.gradients), &writes[0]) ||
       !make_range(workspace.gradient_scratch, coordinates, sizeof(*workspace.gradient_scratch),
                   &writes[1]) ||
@@ -2472,6 +2917,40 @@ cudaError_t add_gfn2_integral_gradient_cuda(
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
+  }
+  if (input.native_periodic.plan_token != 0u) {
+    const std::int64_t shell_limit = batch.maximum_system_shells;
+    if (shell_limit <= 0 || shell_limit > kMaximumInt64 / shell_limit) {
+      return cudaErrorInvalidValue;
+    }
+    const std::int64_t maximum_pair_blocks = shell_limit * shell_limit;
+    const std::int64_t max_translations = input.native_periodic.max_translations_per_system;
+    if (max_translations <= 0 || max_translations > kMaximumInt64 / maximum_pair_blocks) {
+      return cudaErrorInvalidValue;
+    }
+    const std::int64_t image_system_stride = max_translations * maximum_pair_blocks;
+    if (batch.batch_size > kMaximumInt64 / image_system_stride) {
+      return cudaErrorInvalidValue;
+    }
+    const std::int64_t image_tasks = batch.batch_size * image_system_stride;
+    if (batch.batch_size > kMaximumInt64 / maximum_pair_blocks) {
+      return cudaErrorInvalidValue;
+    }
+    const std::int64_t onsite_tasks = batch.batch_size * maximum_pair_blocks;
+    if (image_tasks > kMaximumInt64 - onsite_tasks ||
+        image_tasks + onsite_tasks >
+            static_cast<std::int64_t>(std::numeric_limits<unsigned int>::max())) {
+      return cudaErrorInvalidConfiguration;
+    }
+    native_periodic_integral_force_kernel<<<static_cast<unsigned int>(image_tasks + onsite_tasks),
+                                            kThreadsPerBlock, 0, stream>>>(
+        batch, activity, input, workspace, system_errors, device_error, image_tasks,
+        image_system_stride, maximum_pair_blocks);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+    publish_integral_force_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(
+        batch, activity, output, workspace, system_errors);
+    return check_launch();
   }
   if (batch.use_compact_tasks != 0u && batch.force_ss_task_count > 0) {
     const auto ss_grid = static_cast<unsigned int>(

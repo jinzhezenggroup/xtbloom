@@ -417,6 +417,16 @@ bool component_enabled(const Gfn2SccIterationDevicePlan& plan,
   return (plan.enabled_components & static_cast<std::uint32_t>(component)) != 0u;
 }
 
+/* Native XYZ periodic descriptors are an independent plan family.  Their
+ * topology view is installed only for native-cell requests; molecular plans
+ * keep the canonical all-zero descriptors so short-structure validation can
+ * reject accidental cross-family reuse. */
+bool native_periodic_enabled(const Gfn2SccIterationDevicePlan& plan) noexcept {
+  return plan.native_short_range_batch.topology.plan_token != 0u ||
+         plan.native_ewald_batch.topology.plan_token != 0u ||
+         plan.native_multipole_batch.topology.plan_token != 0u;
+}
+
 bool same_electric_field_batch(const Gfn2ElectricFieldDeviceBatch& first,
                                const Gfn2ElectricFieldDeviceBatch& second) noexcept {
   return first.batch_size == second.batch_size && first.total_atoms == second.total_atoms &&
@@ -3162,6 +3172,51 @@ cudaError_t open_stage_sequence(const Gfn2SccStageDeviceReport& report,
   return cudaPeekAtLastError();
 }
 
+/*
+ * The native D4 two-body primitive uses one atom-energy slot per atom so the
+ * same scratch can be reused by its force/VJP pass.  The SCC energy composer,
+ * however, consumes one scalar per ragged peer.  Reduce only an admitted,
+ * active, diagnostically successful peer here; in particular, an inactive
+ * peer's poison-filled atom slice must never be inspected.  This is one block
+ * and one thread per peer to keep the reduction order deterministic and to
+ * preserve the primitive's peer-local transactional contract.
+ */
+__global__ void reduce_native_d4_two_body_energy_kernel(
+    Gfn2RaggedTopologyView topology, Gfn2SccIterationDeviceActivity activity,
+    Gfn2NativePeriodicD4DeviceWorkspace native_workspace, double* per_system_energies,
+    std::uint32_t* system_errors, const std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (threadIdx.x != 0 || system >= topology.batch_size || activity.sequence_active == nullptr ||
+      *activity.sequence_active != 1u || activity.active_mask == nullptr ||
+      activity.active_mask[system] != 1u ||
+      atomicAdd(const_cast<std::uint32_t*>(device_error), 0u) != 0u ||
+      atomicAdd(system_errors + system, 0u) !=
+          static_cast<std::uint32_t>(Gfn2NativePeriodicD4DeviceError::kSuccess)) {
+    return;
+  }
+
+  const std::int64_t atom_begin = topology.atom_offsets[system];
+  const std::int64_t atom_end = topology.atom_offsets[system + 1];
+  double total = 0.0;
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    const double contribution = native_workspace.atom_energy[atom];
+    if (!isfinite(contribution)) {
+      atomicCAS(system_errors + system,
+                static_cast<std::uint32_t>(Gfn2NativePeriodicD4DeviceError::kSuccess),
+                static_cast<std::uint32_t>(Gfn2NativePeriodicD4DeviceError::kNonfiniteArithmetic));
+      return;
+    }
+    total += contribution;
+  }
+  if (!isfinite(total)) {
+    atomicCAS(system_errors + system,
+              static_cast<std::uint32_t>(Gfn2NativePeriodicD4DeviceError::kSuccess),
+              static_cast<std::uint32_t>(Gfn2NativePeriodicD4DeviceError::kNonfiniteArithmetic));
+    return;
+  }
+  per_system_energies[system] = total;
+}
+
 template <typename T>
 __device__ void copy_device_range(const T* source, T* destination, std::int64_t begin,
                                   std::int64_t end) {
@@ -3462,13 +3517,37 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                     reset_gfn2_es2_scc_errors_cuda(plan.topology.batch_size,
                                                    mutable_system_codes(*stage_report),
                                                    mutable_device_error(*stage_report), stream)) ||
-        !check_cuda(
-            stage_report->stage,
-            evaluate_gfn2_es2_scc_potential_cuda(
-                plan.es2_batch, plan.es2_cache, plan.geometry_generation, workspace.activity,
-                workspace.physical_topology.shell_charges, workspace.components.es2_shell_potential,
-                workspace.es2_workspace, mutable_system_codes(*stage_report),
-                mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(stage_report->stage,
+                    native_periodic_enabled(plan)
+                        ? ([&]() {
+                            /* Failed/inactive peers must not read stale shell-charge
+                             * workspaces.  Bind the native primitive to the same
+                             * canonical activity mask consumed by every SCC leaf. */
+                            auto native_ewald = plan.native_ewald_batch;
+                            native_ewald.active_mask = workspace.activity.active_mask;
+                            native_ewald.active_mask_elements = plan.topology.batch_size;
+                            const cudaError_t reset_status =
+                                reset_gfn2_native_periodic_ewald_errors_cuda(
+                                    plan.topology.batch_size, mutable_system_codes(*stage_report),
+                                    mutable_device_error(*stage_report), stream);
+                            if (reset_status != cudaSuccess) {
+                              return reset_status;
+                            }
+                            const cudaError_t status = evaluate_gfn2_native_periodic_ewald_cuda(
+                                native_ewald, workspace.native_ewald_workspace, nullptr,
+                                workspace.components.es2_shell_potential, nullptr, nullptr, nullptr,
+                                mutable_system_codes(*stage_report),
+                                mutable_device_error(*stage_report), stream);
+                            if (status != cudaSuccess) {
+                            }
+                            return status;
+                          })()
+                        : evaluate_gfn2_es2_scc_potential_cuda(
+                              plan.es2_batch, plan.es2_cache, plan.geometry_generation,
+                              workspace.activity, workspace.physical_topology.shell_charges,
+                              workspace.components.es2_shell_potential, workspace.es2_workspace,
+                              mutable_system_codes(*stage_report),
+                              mutable_device_error(*stage_report), stream)) ||
         !finish_stage(*stage_report)) {
       return failure;
     }
@@ -3496,17 +3575,41 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                       reset_gfn2_aes2_device_errors_cuda(
                           plan.topology.batch_size, mutable_system_codes(*stage_report),
                           mutable_device_error(*stage_report), stream)) ||
-          !check_cuda(stage_report->stage,
-                      evaluate_gfn2_aes2_scc_potential_cuda(
-                          plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
-                          workspace.activity, workspace.physical_topology.atomic_charges,
-                          workspace.physical_topology.atomic_dipoles,
-                          workspace.physical_topology.atomic_quadrupoles,
-                          workspace.components.aes2_atomic_potential,
+          !check_cuda(
+              stage_report->stage,
+              native_periodic_enabled(plan)
+                  ? ([&]() {
+                      auto native_multipole = plan.native_multipole_batch;
+                      native_multipole.active_mask = workspace.activity.active_mask;
+                      native_multipole.active_mask_elements = plan.topology.batch_size;
+                      const cudaError_t reset_status =
+                          reset_gfn2_native_periodic_multipole_errors_cuda(
+                              plan.topology.batch_size, mutable_system_codes(*stage_report),
+                              mutable_device_error(*stage_report), stream);
+                      if (reset_status != cudaSuccess) {
+                        return reset_status;
+                      }
+                      const cudaError_t status = evaluate_gfn2_native_periodic_multipole_cuda(
+                          native_multipole, workspace.native_multipole_workspace, nullptr, nullptr,
+                          nullptr, workspace.components.aes2_atomic_potential,
                           workspace.components.aes2_dipole_potential,
-                          workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
-                          mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
-                          stream)) ||
+                          workspace.components.aes2_quadrupole_potential, nullptr, nullptr, nullptr,
+                          nullptr, mutable_system_codes(*stage_report),
+                          mutable_device_error(*stage_report), stream);
+                      if (status != cudaSuccess) {
+                      }
+                      return status;
+                    })()
+                  : evaluate_gfn2_aes2_scc_potential_cuda(
+                        plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
+                        workspace.activity, workspace.physical_topology.atomic_charges,
+                        workspace.physical_topology.atomic_dipoles,
+                        workspace.physical_topology.atomic_quadrupoles,
+                        workspace.components.aes2_atomic_potential,
+                        workspace.components.aes2_dipole_potential,
+                        workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
+                        mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
+                        stream)) ||
           !finish_stage(*stage_report)) {
         return failure;
       }
@@ -3516,12 +3619,37 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
       stage_report = report(Gfn2SccStageId::kD4Potential);
       if (!begin_stage(stage_report) ||
           !check_cuda(stage_report->stage,
-                      reset_gfn2_d4_device_errors_cuda(
-                          plan.topology.batch_size, workspace.d4_workspace.system_errors,
-                          mutable_device_error(*stage_report), stream)) ||
+                      native_periodic_enabled(plan)
+                          ? reset_gfn2_native_periodic_d4_errors_cuda(
+                                plan.topology.batch_size, workspace.d4_workspace.system_errors,
+                                mutable_device_error(*stage_report), stream)
+                          : reset_gfn2_d4_device_errors_cuda(
+                                plan.topology.batch_size, workspace.d4_workspace.system_errors,
+                                mutable_device_error(*stage_report), stream)) ||
           !check_cuda(
               stage_report->stage,
-              geometry == nullptr
+              native_periodic_enabled(plan) ? ([&]() {
+                auto native_d4 = plan.native_d4_batch;
+                native_d4.positions = plan.native_d4_batch.positions;
+                native_d4.coordination_numbers = workspace.native_d4_workspace.coordination;
+                native_d4.coordination_number_elements = plan.topology.total_atoms;
+                native_d4.atomic_charges = workspace.physical_topology.atomic_charges;
+                native_d4.atomic_charge_elements = plan.topology.total_atoms;
+                native_d4.active_mask = workspace.activity.active_mask;
+                native_d4.active_mask_elements = plan.topology.batch_size;
+                cudaError_t native_status = evaluate_gfn2_native_periodic_d4_coordination_cuda(
+                    native_d4, workspace.native_d4_workspace,
+                    workspace.native_d4_workspace.coordination,
+                    workspace.d4_workspace.system_errors, mutable_device_error(*stage_report),
+                    stream);
+                if (native_status != cudaSuccess) return native_status;
+                return evaluate_gfn2_native_periodic_d4_two_body_cuda(
+                    native_d4, workspace.native_d4_workspace,
+                    workspace.native_d4_workspace.atom_energy,
+                    workspace.components.d4_atomic_potential, workspace.d4_workspace.system_errors,
+                    mutable_device_error(*stage_report), stream);
+              })()
+              : geometry == nullptr
                   ? evaluate_gfn2_d4_scc_potential_pairlist_cuda(
                         plan.d4_batch, plan.d4_parameters, plan.geometry_generation,
                         plan.d4_pairlist_cache, workspace.physical_topology.atomic_charges,
@@ -3783,12 +3911,33 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                   reset_gfn2_es2_scc_errors_cuda(plan.topology.batch_size,
                                                  mutable_system_codes(*stage_report),
                                                  mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(stage_report->stage,
-                  evaluate_gfn2_es2_scc_energy_cuda(
-                      plan.es2_batch, plan.es2_cache, plan.geometry_generation, workspace.activity,
-                      workspace.physical_topology.shell_charges, workspace.components.es2_energy,
-                      workspace.es2_workspace, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
+      !check_cuda(
+          stage_report->stage,
+          native_periodic_enabled(plan)
+              ? ([&]() {
+                  auto native_ewald = plan.native_ewald_batch;
+                  native_ewald.active_mask = workspace.activity.active_mask;
+                  native_ewald.active_mask_elements = plan.topology.batch_size;
+                  const cudaError_t reset_status = reset_gfn2_native_periodic_ewald_errors_cuda(
+                      plan.topology.batch_size, mutable_system_codes(*stage_report),
+                      mutable_device_error(*stage_report), stream);
+                  if (reset_status != cudaSuccess) {
+                    return reset_status;
+                  }
+                  const cudaError_t status = evaluate_gfn2_native_periodic_ewald_cuda(
+                      native_ewald, workspace.native_ewald_workspace, nullptr, nullptr,
+                      workspace.components.es2_energy, nullptr, nullptr,
+                      mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
+                      stream);
+                  if (status != cudaSuccess) {
+                  }
+                  return status;
+                })()
+              : evaluate_gfn2_es2_scc_energy_cuda(
+                    plan.es2_batch, plan.es2_cache, plan.geometry_generation, workspace.activity,
+                    workspace.physical_topology.shell_charges, workspace.components.es2_energy,
+                    workspace.es2_workspace, mutable_system_codes(*stage_report),
+                    mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
     return failure;
   }
@@ -3815,15 +3964,37 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                     reset_gfn2_aes2_device_errors_cuda(
                         plan.topology.batch_size, mutable_system_codes(*stage_report),
                         mutable_device_error(*stage_report), stream)) ||
-        !check_cuda(
-            stage_report->stage,
-            evaluate_gfn2_aes2_scc_energy_cuda(
-                plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
-                workspace.physical_topology.atomic_charges,
-                workspace.physical_topology.atomic_dipoles,
-                workspace.physical_topology.atomic_quadrupoles, workspace.components.aes2_energy,
-                workspace.aes2_workspace, mutable_system_codes(*stage_report),
-                mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(stage_report->stage,
+                    native_periodic_enabled(plan)
+                        ? ([&]() {
+                            auto native_multipole = plan.native_multipole_batch;
+                            native_multipole.active_mask = workspace.activity.active_mask;
+                            native_multipole.active_mask_elements = plan.topology.batch_size;
+                            const cudaError_t reset_status =
+                                reset_gfn2_native_periodic_multipole_errors_cuda(
+                                    plan.topology.batch_size, mutable_system_codes(*stage_report),
+                                    mutable_device_error(*stage_report), stream);
+                            if (reset_status != cudaSuccess) {
+                              return reset_status;
+                            }
+                            const cudaError_t status = evaluate_gfn2_native_periodic_multipole_cuda(
+                                native_multipole, workspace.native_multipole_workspace, nullptr,
+                                nullptr, nullptr, nullptr, nullptr, nullptr,
+                                workspace.components.aes2_energy, nullptr, nullptr, nullptr,
+                                mutable_system_codes(*stage_report),
+                                mutable_device_error(*stage_report), stream);
+                            if (status != cudaSuccess) {
+                            }
+                            return status;
+                          })()
+                        : evaluate_gfn2_aes2_scc_energy_cuda(
+                              plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
+                              workspace.activity, workspace.physical_topology.atomic_charges,
+                              workspace.physical_topology.atomic_dipoles,
+                              workspace.physical_topology.atomic_quadrupoles,
+                              workspace.components.aes2_energy, workspace.aes2_workspace,
+                              mutable_system_codes(*stage_report),
+                              mutable_device_error(*stage_report), stream)) ||
         !finish_stage(*stage_report)) {
       return failure;
     }
@@ -3833,12 +4004,43 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     stage_report = report(Gfn2SccStageId::kD4RawEnergy);
     if (!begin_stage(stage_report) ||
         !check_cuda(stage_report->stage,
-                    reset_gfn2_d4_device_errors_cuda(
-                        plan.topology.batch_size, workspace.d4_workspace.system_errors,
-                        mutable_device_error(*stage_report), stream)) ||
+                    native_periodic_enabled(plan)
+                        ? reset_gfn2_native_periodic_d4_errors_cuda(
+                              plan.topology.batch_size, workspace.d4_workspace.system_errors,
+                              mutable_device_error(*stage_report), stream)
+                        : reset_gfn2_d4_device_errors_cuda(
+                              plan.topology.batch_size, workspace.d4_workspace.system_errors,
+                              mutable_device_error(*stage_report), stream)) ||
         !check_cuda(
             stage_report->stage,
-            geometry == nullptr
+            native_periodic_enabled(plan) ? ([&]() {
+              auto native_d4 = plan.native_d4_batch;
+              native_d4.coordination_numbers = workspace.native_d4_workspace.coordination;
+              native_d4.coordination_number_elements = plan.topology.total_atoms;
+              native_d4.atomic_charges = workspace.physical_topology.atomic_charges;
+              native_d4.atomic_charge_elements = plan.topology.total_atoms;
+              native_d4.active_mask = workspace.activity.active_mask;
+              native_d4.active_mask_elements = plan.topology.batch_size;
+              cudaError_t native_status = evaluate_gfn2_native_periodic_d4_coordination_cuda(
+                  native_d4, workspace.native_d4_workspace,
+                  workspace.native_d4_workspace.coordination, workspace.d4_workspace.system_errors,
+                  mutable_device_error(*stage_report), stream);
+              if (native_status != cudaSuccess) return native_status;
+              native_status = evaluate_gfn2_native_periodic_d4_two_body_cuda(
+                  native_d4, workspace.native_d4_workspace,
+                  workspace.native_d4_workspace.atom_energy,
+                  workspace.native_d4_workspace.atom_potential,
+                  workspace.d4_workspace.system_errors, mutable_device_error(*stage_report),
+                  stream);
+              if (native_status != cudaSuccess) return native_status;
+              reduce_native_d4_two_body_energy_kernel<<<
+                  static_cast<unsigned int>(plan.topology.batch_size), 1, 0, stream>>>(
+                  plan.topology, workspace.activity, workspace.native_d4_workspace,
+                  workspace.components.d4_two_body_energy, workspace.d4_workspace.system_errors,
+                  mutable_device_error(*stage_report));
+              return cudaGetLastError();
+            })()
+            : geometry == nullptr
                 ? evaluate_gfn2_d4_scc_energy_pairlist_cuda(
                       plan.d4_batch, plan.d4_parameters, plan.geometry_generation,
                       plan.d4_pairlist_cache, workspace.physical_topology.atomic_charges,

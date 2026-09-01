@@ -27,6 +27,9 @@ struct SccDriverPlanData {
   EigensolverPlan eigensolver;
   SccMixerPlan mixer;
   PeriodicEmbeddingPlan periodic_embedding;
+  PeriodicShortRangePlan native_periodic;
+  PeriodicEwaldPlan native_ewald;
+  PeriodicMultipolePlan native_multipole;
 
   std::uint64_t maximum_iterations = 0u;
   double electronic_temperature = 0.0;
@@ -82,6 +85,7 @@ struct SccDriverPlanData {
   std::size_t free_energy_offset = 0u;
   std::size_t d4_potential_offset = 0u;
   std::size_t d4_energy_offset = 0u;
+  std::size_t native_d4_atom_energy_offset = 0u;
   std::size_t d4_scratch_offset = 0u;
   std::size_t periodic_potential_offset = 0u;
   std::size_t periodic_energy_offset = 0u;
@@ -247,7 +251,10 @@ bool overlaps_plan_storage(const SccDriverPlanData& data, const AddressRange& ra
          data.eigensolver.overlaps_storage(pointer, bytes) ||
          data.mixer.overlaps_storage(pointer, bytes) ||
          (data.periodic_embedding.sealed() &&
-          data.periodic_embedding.overlaps_storage(pointer, bytes));
+          data.periodic_embedding.overlaps_storage(pointer, bytes)) ||
+         (data.native_periodic.sealed() && data.native_periodic.overlaps_storage(pointer, bytes)) ||
+         (data.native_ewald.sealed() && data.native_ewald.overlaps_storage(pointer, bytes)) ||
+         (data.native_multipole.sealed() && data.native_multipole.overlaps_storage(pointer, bytes));
 }
 
 template <std::size_t N>
@@ -551,6 +558,7 @@ bool exact_workspace_binding(const SccDriverPlanData& data, const SccDriverWorks
              offset_pointer<double>(workspace.workspace_base, data.free_energy_offset) &&
          ((!data.d4.sealed() && workspace.d4_atomic_potentials == nullptr &&
            workspace.d4_two_body_energies == nullptr &&
+           workspace.native_d4_atom_energies == nullptr &&
            workspace.d4_workspace.workspace_base == nullptr &&
            workspace.d4_workspace.workspace_size_bytes == 0u &&
            workspace.d4_workspace.plan_identity == nullptr) ||
@@ -559,6 +567,11 @@ bool exact_workspace_binding(const SccDriverPlanData& data, const SccDriverWorks
                offset_pointer<double>(workspace.workspace_base, data.d4_potential_offset) &&
            workspace.d4_two_body_energies ==
                offset_pointer<double>(workspace.workspace_base, data.d4_energy_offset) &&
+           ((!data.native_periodic.sealed() && workspace.native_d4_atom_energies == nullptr) ||
+            (data.native_periodic.sealed() &&
+             workspace.native_d4_atom_energies ==
+                 offset_pointer<double>(workspace.workspace_base,
+                                        data.native_d4_atom_energy_offset))) &&
            workspace.d4_workspace.workspace_base ==
                offset_pointer<void>(workspace.workspace_base, data.d4_scratch_offset) &&
            workspace.d4_workspace.workspace_size_bytes >= data.d4.workspace_size_bytes() &&
@@ -1039,6 +1052,18 @@ bool SccDriverPlan::d4_enabled() const noexcept { return data_ != nullptr && dat
 bool SccDriverPlan::periodic_embedding_enabled() const noexcept {
   return data_ != nullptr && data_->periodic_embedding.sealed();
 }
+bool SccDriverPlan::native_periodic_enabled() const noexcept {
+  return data_ != nullptr && data_->native_ewald.sealed() && data_->native_multipole.sealed();
+}
+const PeriodicShortRangePlan* SccDriverPlan::native_periodic_plan() const noexcept {
+  return data_ != nullptr && data_->native_periodic.sealed() ? &data_->native_periodic : nullptr;
+}
+const PeriodicEwaldPlan* SccDriverPlan::native_ewald_plan() const noexcept {
+  return data_ != nullptr && data_->native_ewald.sealed() ? &data_->native_ewald : nullptr;
+}
+const PeriodicMultipolePlan* SccDriverPlan::native_multipole_plan() const noexcept {
+  return data_ != nullptr && data_->native_multipole.sealed() ? &data_->native_multipole : nullptr;
+}
 std::size_t SccDriverPlan::state_size_bytes() const noexcept {
   return data_ == nullptr ? 0u : data_->state_size_bytes;
 }
@@ -1097,7 +1122,7 @@ xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                       double electronic_temperature, SccDriverPlan& plan,
                                       std::string& error) {
   return make_scc_driver_plan(wavefunction, mulliken, es2, es3, aes2, eigensolver, mixer, nullptr,
-                              nullptr, maximum_iterations, electronic_temperature,
+                              nullptr, nullptr, maximum_iterations, electronic_temperature,
                               kDefaultSccEnergyTolerance, plan, error);
 }
 
@@ -1110,8 +1135,8 @@ xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                       double electronic_temperature, SccDriverPlan& plan,
                                       std::string& error) {
   return make_scc_driver_plan(wavefunction, mulliken, es2, es3, aes2, eigensolver, mixer, nullptr,
-                              periodic_embedding, maximum_iterations, electronic_temperature,
-                              kDefaultSccEnergyTolerance, plan, error);
+                              periodic_embedding, nullptr, maximum_iterations,
+                              electronic_temperature, kDefaultSccEnergyTolerance, plan, error);
 }
 
 xtbloom_status_t make_scc_driver_plan(
@@ -1121,8 +1146,8 @@ xtbloom_status_t make_scc_driver_plan(
     std::uint64_t maximum_iterations, double electronic_temperature, SccDriverPlan& plan,
     std::string& error) {
   return make_scc_driver_plan(wavefunction, mulliken, es2, es3, aes2, eigensolver, mixer, d4,
-                              periodic_embedding, maximum_iterations, electronic_temperature,
-                              kDefaultSccEnergyTolerance, plan, error);
+                              periodic_embedding, nullptr, maximum_iterations,
+                              electronic_temperature, kDefaultSccEnergyTolerance, plan, error);
 }
 
 xtbloom_status_t make_scc_driver_plan(
@@ -1131,6 +1156,18 @@ xtbloom_status_t make_scc_driver_plan(
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
     std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
     SccDriverPlan& plan, std::string& error) {
+  return make_scc_driver_plan(wavefunction, mulliken, es2, es3, aes2, eigensolver, mixer, d4,
+                              periodic_embedding, nullptr, maximum_iterations,
+                              electronic_temperature, energy_tolerance, plan, error);
+}
+
+xtbloom_status_t make_scc_driver_plan(
+    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+    const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+    const PeriodicShortRangePlan* native_periodic, std::uint64_t maximum_iterations,
+    double electronic_temperature, double energy_tolerance, SccDriverPlan& plan,
+    std::string& error) {
   WavefunctionWarmStartIdentity validated_wavefunction;
   xtbloom_status_t status =
       make_wavefunction_warm_start_identity(wavefunction, 0u, validated_wavefunction, error);
@@ -1141,7 +1178,8 @@ xtbloom_status_t make_scc_driver_plan(
       !mixer.sealed() || maximum_iterations == 0u || !std::isfinite(electronic_temperature) ||
       electronic_temperature < 0.0 || !std::isfinite(energy_tolerance) ||
       !(energy_tolerance > 0.0) || (d4 != nullptr && !d4->sealed()) ||
-      (periodic_embedding != nullptr && !periodic_embedding->sealed())) {
+      (periodic_embedding != nullptr && !periodic_embedding->sealed()) ||
+      (native_periodic != nullptr && !native_periodic->sealed())) {
     error = "SCC driver components or numerical policy are invalid";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -1252,6 +1290,13 @@ xtbloom_status_t make_scc_driver_plan(
     error = "SCC driver periodic embedding describes a different ragged atom topology";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  if (native_periodic != nullptr &&
+      (native_periodic->batch_size() != wavefunction.batch_size ||
+       native_periodic->total_atoms() != wavefunction.total_atoms ||
+       native_periodic->atom_offsets() != wavefunction.atom_offsets)) {
+    error = "SCC driver native periodic topology describes a different ragged atom topology";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   if (d4 != nullptr && (d4->batch_size() != wavefunction.batch_size ||
                         d4->total_atoms() != wavefunction.total_atoms ||
                         d4->atom_offsets() != wavefunction.atom_offsets ||
@@ -1339,6 +1384,8 @@ xtbloom_status_t make_scc_driver_plan(
   const std::size_t d4_state_bytes = d4 == nullptr ? 0u : batch_double_bytes;
   const std::size_t d4_potential_bytes = d4 == nullptr ? 0u : atom_bytes;
   const std::size_t d4_energy_bytes = d4 == nullptr ? 0u : batch_double_bytes;
+  const std::size_t native_d4_atom_energy_bytes =
+      d4 == nullptr || native_periodic == nullptr ? 0u : atom_bytes;
   const std::size_t periodic_potential_bytes = periodic_embedding == nullptr ? 0u : atom_bytes;
   const std::size_t periodic_energy_bytes = periodic_embedding == nullptr ? 0u : batch_double_bytes;
   const std::size_t periodic_status_bytes = periodic_embedding == nullptr ? 0u : batch_status_bytes;
@@ -1358,6 +1405,15 @@ xtbloom_status_t make_scc_driver_plan(
     created.mixer = mixer;
     if (periodic_embedding != nullptr) {
       created.periodic_embedding = *periodic_embedding;
+    }
+    if (native_periodic != nullptr) {
+      created.native_periodic = *native_periodic;
+      status = make_periodic_ewald_plan(created.es2, created.native_periodic, created.native_ewald,
+                                        error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      status = make_periodic_multipole_plan(created.aes2, created.native_periodic,
+                                            created.native_multipole, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
     }
     created.maximum_iterations = maximum_iterations;
     created.electronic_temperature = electronic_temperature;
@@ -1448,6 +1504,8 @@ xtbloom_status_t make_scc_driver_plan(
         !append_segment(batch_double_bytes, alignof(double), cursor, created.free_energy_offset) ||
         !append_segment(d4_potential_bytes, alignof(double), cursor, created.d4_potential_offset) ||
         !append_segment(d4_energy_bytes, alignof(double), cursor, created.d4_energy_offset) ||
+        !append_segment(native_d4_atom_energy_bytes, alignof(double), cursor,
+                        created.native_d4_atom_energy_offset) ||
         !append_segment(d4_scratch_bytes, d4 == nullptr ? alignof(double) : kD4WorkspaceAlignment,
                         cursor, created.d4_scratch_offset) ||
         !append_segment(periodic_potential_bytes, alignof(double), cursor,
@@ -1664,6 +1722,10 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
   if (data.d4.sealed()) {
     created.d4_atomic_potentials = offset_pointer<double>(workspace, data.d4_potential_offset);
     created.d4_two_body_energies = offset_pointer<double>(workspace, data.d4_energy_offset);
+    if (data.native_periodic.sealed()) {
+      created.native_d4_atom_energies =
+          offset_pointer<double>(workspace, data.native_d4_atom_energy_offset);
+    }
     void* d4_base = offset_pointer<void>(workspace, data.d4_scratch_offset);
     status = bind_d4_workspace(data.d4, d4_base, data.d4.workspace_size_bytes(),
                                created.d4_workspace, error);
@@ -1910,13 +1972,22 @@ xtbloom_status_t validate_iteration_bindings(
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (data.d4.sealed()) {
-    if (geometry.d4_cache.plan_identity != data.d4.identity() ||
-        geometry.d4_cache.geometry_generation != geometry.geometry_generation ||
-        geometry.d4_cache.pair_data_elements !=
-            data.d4.total_pairs() * static_cast<std::int64_t>(kD4PairDataElements) ||
-        geometry.d4_cache.coordination_elements != data.d4.total_atoms() ||
-        !aligned(geometry.d4_cache.pair_data, alignof(double)) ||
-        !aligned(geometry.d4_cache.coordination_numbers, alignof(double))) {
+    if (data.native_periodic.sealed()) {
+      if (geometry.native_d4_coordination_elements != data.d4.total_atoms() ||
+          geometry.native_d4_geometry_generation != geometry.geometry_generation ||
+          !aligned(geometry.native_d4_coordination_numbers, alignof(double)) ||
+          geometry.native_topology_geometry == nullptr ||
+          geometry.native_topology_workspace == nullptr) {
+        error = "SCC driver native periodic D4 coordination is stale or malformed";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    } else if (geometry.d4_cache.plan_identity != data.d4.identity() ||
+               geometry.d4_cache.geometry_generation != geometry.geometry_generation ||
+               geometry.d4_cache.pair_data_elements !=
+                   data.d4.total_pairs() * static_cast<std::int64_t>(kD4PairDataElements) ||
+               geometry.d4_cache.coordination_elements != data.d4.total_atoms() ||
+               !aligned(geometry.d4_cache.pair_data, alignof(double)) ||
+               !aligned(geometry.d4_cache.coordination_numbers, alignof(double))) {
       error = "SCC driver D4 cache is stale, malformed, or belongs to another plan";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
@@ -1926,6 +1997,18 @@ xtbloom_status_t validate_iteration_bindings(
              geometry.d4_cache.geometry_generation != 0u ||
              geometry.d4_cache.plan_identity != nullptr) {
     error = "SCC driver geometry supplies D4 data to a plan without D4";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!data.native_periodic.sealed() && (geometry.native_d4_coordination_numbers != nullptr ||
+                                         geometry.native_d4_coordination_elements != 0 ||
+                                         geometry.native_d4_geometry_generation != 0u)) {
+    error = "SCC driver geometry supplies native periodic D4 data to a non-native plan";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!data.d4.sealed() && (geometry.native_d4_coordination_numbers != nullptr ||
+                            geometry.native_d4_coordination_elements != 0 ||
+                            geometry.native_d4_geometry_generation != 0u)) {
+    error = "SCC driver geometry supplies native periodic D4 data to a plan without D4";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (geometry.explicit_point_charge_shell_elements != 0 &&
@@ -1952,6 +2035,66 @@ xtbloom_status_t validate_iteration_bindings(
              geometry.periodic_embedding_generation != 0u ||
              geometry.periodic_plan_identity != nullptr) {
     error = "SCC driver geometry supplies periodic data to a plan without periodic embedding";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  const bool native_enabled = data.native_ewald.sealed() || data.native_multipole.sealed();
+  if (native_enabled) {
+    if (!data.native_periodic.sealed() || !data.native_ewald.sealed() ||
+        !data.native_multipole.sealed() ||
+        geometry.native_topology_identity != data.native_periodic.identity() ||
+        geometry.native_position_elements != 3 * data.wavefunction.total_atoms ||
+        geometry.native_coordination_elements != data.wavefunction.total_atoms ||
+        !aligned(geometry.native_positions, alignof(double)) ||
+        !aligned(geometry.native_coordination_numbers, alignof(double)) ||
+        geometry.native_ewald_matrix_elements != data.native_ewald.total_matrix_elements() ||
+        geometry.native_ewald_shell_elements != data.native_ewald.total_shells() ||
+        geometry.native_ewald_energy_elements != data.native_ewald.batch_size() ||
+        geometry.native_ewald_gradient_elements != 3 * data.native_ewald.total_atoms() ||
+        geometry.native_ewald_strain_elements != 9 * data.native_ewald.batch_size() ||
+        geometry.native_multipole_charge_dipole_elements !=
+            3 * data.native_multipole.matrix_elements() ||
+        geometry.native_multipole_dipole_dipole_elements !=
+            9 * data.native_multipole.matrix_elements() ||
+        geometry.native_multipole_charge_quadrupole_elements !=
+            6 * data.native_multipole.matrix_elements() ||
+        geometry.native_multipole_charge_potential_elements !=
+            data.native_multipole.total_atoms() ||
+        geometry.native_multipole_dipole_potential_elements !=
+            3 * data.native_multipole.total_atoms() ||
+        geometry.native_multipole_quadrupole_potential_elements !=
+            6 * data.native_multipole.total_atoms() ||
+        geometry.native_multipole_energy_elements != data.native_multipole.batch_size() ||
+        geometry.native_multipole_gradient_elements != 3 * data.native_multipole.total_atoms() ||
+        geometry.native_multipole_strain_elements != 9 * data.native_multipole.batch_size() ||
+        geometry.native_multipole_coordination_elements != data.native_multipole.total_atoms() ||
+        !aligned(geometry.native_ewald_matrix, alignof(double)) ||
+        !aligned(geometry.native_ewald_shell_potentials, alignof(double)) ||
+        !aligned(geometry.native_ewald_energies, alignof(double)) ||
+        !aligned(geometry.native_ewald_gradients, alignof(double)) ||
+        !aligned(geometry.native_ewald_strain_derivatives, alignof(double)) ||
+        !aligned(geometry.native_multipole_charge_dipole, alignof(double)) ||
+        !aligned(geometry.native_multipole_dipole_dipole, alignof(double)) ||
+        !aligned(geometry.native_multipole_charge_quadrupole, alignof(double)) ||
+        !aligned(geometry.native_multipole_charge_potentials, alignof(double)) ||
+        !aligned(geometry.native_multipole_dipole_potentials, alignof(double)) ||
+        !aligned(geometry.native_multipole_quadrupole_potentials, alignof(double)) ||
+        !aligned(geometry.native_multipole_energies, alignof(double)) ||
+        !aligned(geometry.native_multipole_gradients, alignof(double)) ||
+        !aligned(geometry.native_multipole_strain_derivatives, alignof(double)) ||
+        !aligned(geometry.native_multipole_coordination_adjoint, alignof(double))) {
+      error = "SCC driver native periodic geometry or output buffers are stale or malformed";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  } else if (geometry.native_positions != nullptr || geometry.native_position_elements != 0 ||
+             geometry.native_coordination_numbers != nullptr ||
+             geometry.native_coordination_elements != 0 ||
+             geometry.native_topology_identity != nullptr ||
+             geometry.native_ewald_matrix != nullptr ||
+             geometry.native_ewald_matrix_elements != 0 ||
+             geometry.native_multipole_charge_dipole != nullptr ||
+             geometry.native_multipole_charge_dipole_elements != 0) {
+    error = "SCC driver geometry supplies native periodic data to a molecular plan";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
@@ -2031,6 +2174,24 @@ xtbloom_status_t validate_iteration_bindings(
   std::size_t periodic_response_bytes = 0u;
   std::size_t field_atomic_potential_bytes = 0u;
   std::size_t field_dipole_potential_bytes = 0u;
+  std::size_t native_position_bytes = 0u;
+  std::size_t native_coordination_bytes = 0u;
+  std::size_t native_d4_coordination_bytes = 0u;
+  std::size_t native_ewald_matrix_bytes = 0u;
+  std::size_t native_ewald_shell_bytes = 0u;
+  std::size_t native_ewald_energy_bytes = 0u;
+  std::size_t native_ewald_gradient_bytes = 0u;
+  std::size_t native_ewald_strain_bytes = 0u;
+  std::size_t native_multipole_sd_bytes = 0u;
+  std::size_t native_multipole_dd_bytes = 0u;
+  std::size_t native_multipole_sq_bytes = 0u;
+  std::size_t native_multipole_charge_potential_bytes = 0u;
+  std::size_t native_multipole_dipole_potential_bytes = 0u;
+  std::size_t native_multipole_quadrupole_potential_bytes = 0u;
+  std::size_t native_multipole_energy_bytes = 0u;
+  std::size_t native_multipole_gradient_bytes = 0u;
+  std::size_t native_multipole_strain_bytes = 0u;
+  std::size_t native_multipole_coordination_bytes = 0u;
   if (!bytes_for(data.mulliken.matrix_elements(), sizeof(double), matrix_bytes) ||
       !checked_multiply_size(matrix_bytes, 3u, dipole_integral_bytes) ||
       !checked_multiply_size(matrix_bytes, 6u, quadrupole_integral_bytes) ||
@@ -2046,11 +2207,45 @@ xtbloom_status_t validate_iteration_bindings(
       !bytes_for(geometry.field_atomic_potential_elements, sizeof(double),
                  field_atomic_potential_bytes) ||
       !bytes_for(geometry.field_dipole_potential_elements, sizeof(double),
-                 field_dipole_potential_bytes)) {
+                 field_dipole_potential_bytes) ||
+      !bytes_for(geometry.native_position_elements, sizeof(double), native_position_bytes) ||
+      !bytes_for(geometry.native_coordination_elements, sizeof(double),
+                 native_coordination_bytes) ||
+      !bytes_for(geometry.native_d4_coordination_elements, sizeof(double),
+                 native_d4_coordination_bytes) ||
+      !bytes_for(geometry.native_ewald_matrix_elements, sizeof(double),
+                 native_ewald_matrix_bytes) ||
+      !bytes_for(geometry.native_ewald_shell_elements, sizeof(double), native_ewald_shell_bytes) ||
+      !bytes_for(geometry.native_ewald_energy_elements, sizeof(double),
+                 native_ewald_energy_bytes) ||
+      !bytes_for(geometry.native_ewald_gradient_elements, sizeof(double),
+                 native_ewald_gradient_bytes) ||
+      !bytes_for(geometry.native_ewald_strain_elements, sizeof(double),
+                 native_ewald_strain_bytes) ||
+      !bytes_for(geometry.native_multipole_charge_dipole_elements, sizeof(double),
+                 native_multipole_sd_bytes) ||
+      !bytes_for(geometry.native_multipole_dipole_dipole_elements, sizeof(double),
+                 native_multipole_dd_bytes) ||
+      !bytes_for(geometry.native_multipole_charge_quadrupole_elements, sizeof(double),
+                 native_multipole_sq_bytes) ||
+      !bytes_for(geometry.native_multipole_charge_potential_elements, sizeof(double),
+                 native_multipole_charge_potential_bytes) ||
+      !bytes_for(geometry.native_multipole_dipole_potential_elements, sizeof(double),
+                 native_multipole_dipole_potential_bytes) ||
+      !bytes_for(geometry.native_multipole_quadrupole_potential_elements, sizeof(double),
+                 native_multipole_quadrupole_potential_bytes) ||
+      !bytes_for(geometry.native_multipole_energy_elements, sizeof(double),
+                 native_multipole_energy_bytes) ||
+      !bytes_for(geometry.native_multipole_gradient_elements, sizeof(double),
+                 native_multipole_gradient_bytes) ||
+      !bytes_for(geometry.native_multipole_strain_elements, sizeof(double),
+                 native_multipole_strain_bytes) ||
+      !bytes_for(geometry.native_multipole_coordination_elements, sizeof(double),
+                 native_multipole_coordination_bytes)) {
     error = "SCC driver geometry storage extents are not representable";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  std::array<AddressRange, 13> geometry_ranges{};
+  std::array<AddressRange, 31> geometry_ranges{};
   if (!make_range(geometry.h0, matrix_bytes, geometry_ranges[0]) ||
       !make_range(geometry.integrals.overlap, matrix_bytes, geometry_ranges[1]) ||
       !make_range(geometry.integrals.dipole, dipole_integral_bytes, geometry_ranges[2]) ||
@@ -2068,7 +2263,40 @@ xtbloom_status_t validate_iteration_bindings(
       !make_range(geometry.field_atomic_potential, field_atomic_potential_bytes,
                   geometry_ranges[11]) ||
       !make_range(geometry.field_dipole_potential, field_dipole_potential_bytes,
-                  geometry_ranges[12])) {
+                  geometry_ranges[12]) ||
+      !make_range(geometry.native_positions, native_position_bytes, geometry_ranges[13]) ||
+      !make_range(geometry.native_coordination_numbers, native_coordination_bytes,
+                  geometry_ranges[14]) ||
+      !make_range(geometry.native_d4_coordination_numbers, native_d4_coordination_bytes,
+                  geometry_ranges[15]) ||
+      !make_range(geometry.native_ewald_matrix, native_ewald_matrix_bytes, geometry_ranges[16]) ||
+      !make_range(geometry.native_ewald_shell_potentials, native_ewald_shell_bytes,
+                  geometry_ranges[17]) ||
+      !make_range(geometry.native_ewald_energies, native_ewald_energy_bytes, geometry_ranges[18]) ||
+      !make_range(geometry.native_ewald_gradients, native_ewald_gradient_bytes,
+                  geometry_ranges[19]) ||
+      !make_range(geometry.native_ewald_strain_derivatives, native_ewald_strain_bytes,
+                  geometry_ranges[20]) ||
+      !make_range(geometry.native_multipole_charge_dipole, native_multipole_sd_bytes,
+                  geometry_ranges[21]) ||
+      !make_range(geometry.native_multipole_dipole_dipole, native_multipole_dd_bytes,
+                  geometry_ranges[22]) ||
+      !make_range(geometry.native_multipole_charge_quadrupole, native_multipole_sq_bytes,
+                  geometry_ranges[23]) ||
+      !make_range(geometry.native_multipole_charge_potentials,
+                  native_multipole_charge_potential_bytes, geometry_ranges[24]) ||
+      !make_range(geometry.native_multipole_dipole_potentials,
+                  native_multipole_dipole_potential_bytes, geometry_ranges[25]) ||
+      !make_range(geometry.native_multipole_quadrupole_potentials,
+                  native_multipole_quadrupole_potential_bytes, geometry_ranges[26]) ||
+      !make_range(geometry.native_multipole_energies, native_multipole_energy_bytes,
+                  geometry_ranges[27]) ||
+      !make_range(geometry.native_multipole_gradients, native_multipole_gradient_bytes,
+                  geometry_ranges[28]) ||
+      !make_range(geometry.native_multipole_strain_derivatives, native_multipole_strain_bytes,
+                  geometry_ranges[29]) ||
+      !make_range(geometry.native_multipole_coordination_adjoint,
+                  native_multipole_coordination_bytes, geometry_ranges[30])) {
     error = "SCC driver geometry buffers have invalid address ranges";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -2155,9 +2383,21 @@ xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   }
 
   double es2_energy = 0.0;
-  xtbloom_status_t status =
-      add_es2_energy_system_cpu(data.es2, geometry.es2_cache, static_cast<std::int64_t>(system),
-                                workspace.shell_charges, es2_energy, error);
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
+  if (data.native_ewald.sealed()) {
+    status = evaluate_periodic_ewald_cpu(
+        data.native_ewald, data.native_periodic, geometry.native_positions, workspace.shell_charges,
+        geometry.native_ewald_matrix, geometry.native_ewald_shell_potentials,
+        geometry.native_ewald_energies, geometry.native_ewald_gradients,
+        geometry.native_ewald_strain_derivatives, error);
+    if (status == XTBLOOM_STATUS_SUCCESS) {
+      es2_energy = geometry.native_ewald_energies[system];
+    }
+  } else {
+    status =
+        add_es2_energy_system_cpu(data.es2, geometry.es2_cache, static_cast<std::int64_t>(system),
+                                  workspace.shell_charges, es2_energy, error);
+  }
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
@@ -2168,10 +2408,25 @@ xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
     return status;
   }
   double aes2_energy = 0.0;
-  status = add_aes2_energy_system_cpu(data.aes2, geometry.aes2_cache,
-                                      static_cast<std::int64_t>(system), workspace.atomic_charges,
-                                      workspace.atomic_dipoles, workspace.atomic_quadrupoles,
-                                      aes2_energy, workspace.aes2_workspace, error);
+  if (data.native_multipole.sealed()) {
+    status = evaluate_periodic_multipole_cpu(
+        data.native_multipole, geometry.native_positions, geometry.native_coordination_numbers,
+        workspace.atomic_charges, workspace.atomic_dipoles, workspace.atomic_quadrupoles,
+        geometry.native_multipole_charge_dipole, geometry.native_multipole_dipole_dipole,
+        geometry.native_multipole_charge_quadrupole, geometry.native_multipole_charge_potentials,
+        geometry.native_multipole_dipole_potentials,
+        geometry.native_multipole_quadrupole_potentials, geometry.native_multipole_energies,
+        geometry.native_multipole_gradients, geometry.native_multipole_strain_derivatives,
+        geometry.native_multipole_coordination_adjoint, error);
+    if (status == XTBLOOM_STATUS_SUCCESS) {
+      aes2_energy = geometry.native_multipole_energies[system];
+    }
+  } else {
+    status = add_aes2_energy_system_cpu(data.aes2, geometry.aes2_cache,
+                                        static_cast<std::int64_t>(system), workspace.atomic_charges,
+                                        workspace.atomic_dipoles, workspace.atomic_quadrupoles,
+                                        aes2_energy, workspace.aes2_workspace, error);
+  }
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
@@ -2186,11 +2441,31 @@ xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
 
   double d4_energy = 0.0;
   if (data.d4.sealed()) {
-    status = evaluate_d4_two_body_system_cpu(
-        data.d4, geometry.d4_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
-        d4_energy, nullptr, workspace.d4_workspace, error);
-    if (status != XTBLOOM_STATUS_SUCCESS) {
-      return status;
+    if (data.native_periodic.sealed()) {
+      /* The periodic evaluator returns atom-partitioned energies because
+       * image/self-image accounting is part of its public primitive contract.
+       * Keep the energy partition in its dedicated scratch: the periodic
+       * embedding potential is optional and is therefore not a valid sink. */
+      status = evaluate_periodic_d4_two_body_cpu(
+          data.d4, data.native_periodic, *geometry.native_topology_geometry,
+          geometry.native_d4_coordination_numbers, workspace.atomic_charges,
+          workspace.native_d4_atom_energies, workspace.d4_atomic_potentials, workspace.d4_workspace,
+          *geometry.native_topology_workspace, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      d4_energy = 0.0;
+      for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+        if (!add_finite(workspace.native_d4_atom_energies[atom], d4_energy)) {
+          error = "SCC driver periodic D4 two-body energy overflowed";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+      }
+    } else {
+      status = evaluate_d4_two_body_system_cpu(
+          data.d4, geometry.d4_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
+          d4_energy, nullptr, workspace.d4_workspace, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        return status;
+      }
     }
   }
 
@@ -2404,15 +2679,29 @@ xtbloom_status_t prepare_system_potentials_and_hamiltonian(
   }
   workspace.spin_energies[system] = spin_energy;
 
-  status = evaluate_es2_potential_system_cpu(
-      data.es2, geometry.es2_cache, static_cast<std::int64_t>(system), workspace.shell_charges,
-      workspace.component_shell_potential, error);
-  if (status != XTBLOOM_STATUS_SUCCESS) {
-    return status;
-  }
-  for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
-    workspace.shell_potentials[static_cast<std::size_t>(qsh_base + local_shell)] =
-        workspace.component_shell_potential[static_cast<std::size_t>(shell_begin + local_shell)];
+  if (data.native_ewald.sealed()) {
+    status = evaluate_periodic_ewald_cpu(
+        data.native_ewald, data.native_periodic, geometry.native_positions, workspace.shell_charges,
+        geometry.native_ewald_matrix, geometry.native_ewald_shell_potentials,
+        geometry.native_ewald_energies, geometry.native_ewald_gradients,
+        geometry.native_ewald_strain_derivatives, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      workspace.shell_potentials[static_cast<std::size_t>(qsh_base + local_shell)] =
+          geometry
+              .native_ewald_shell_potentials[static_cast<std::size_t>(shell_begin + local_shell)];
+    }
+  } else {
+    status = evaluate_es2_potential_system_cpu(
+        data.es2, geometry.es2_cache, static_cast<std::int64_t>(system), workspace.shell_charges,
+        workspace.component_shell_potential, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+    for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
+      workspace.shell_potentials[static_cast<std::size_t>(qsh_base + local_shell)] =
+          workspace.component_shell_potential[static_cast<std::size_t>(shell_begin + local_shell)];
+    }
   }
 
   const ES3View es3_view = make_es3_view(data.es3);
@@ -2448,21 +2737,52 @@ xtbloom_status_t prepare_system_potentials_and_hamiltonian(
     }
   }
 
-  status = evaluate_aes2_potential_system_cpu(
-      data.aes2, geometry.aes2_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
-      workspace.atomic_dipoles, workspace.atomic_quadrupoles, workspace.component_atomic_potential,
-      workspace.component_dipole_potential, workspace.component_quadrupole_potential,
-      workspace.aes2_workspace, error);
-  if (status != XTBLOOM_STATUS_SUCCESS) {
-    return status;
-  }
-  if (data.d4.sealed()) {
-    status = evaluate_d4_two_body_system_cpu(
-        data.d4, geometry.d4_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
-        workspace.d4_two_body_energies[system], workspace.d4_atomic_potentials,
-        workspace.d4_workspace, error);
+  if (data.native_multipole.sealed()) {
+    status = evaluate_periodic_multipole_cpu(
+        data.native_multipole, geometry.native_positions, geometry.native_coordination_numbers,
+        workspace.atomic_charges, workspace.atomic_dipoles, workspace.atomic_quadrupoles,
+        geometry.native_multipole_charge_dipole, geometry.native_multipole_dipole_dipole,
+        geometry.native_multipole_charge_quadrupole, geometry.native_multipole_charge_potentials,
+        geometry.native_multipole_dipole_potentials,
+        geometry.native_multipole_quadrupole_potentials, geometry.native_multipole_energies,
+        geometry.native_multipole_gradients, geometry.native_multipole_strain_derivatives,
+        geometry.native_multipole_coordination_adjoint, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
+      const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
+      workspace.component_atomic_potential[atom] =
+          geometry.native_multipole_charge_potentials[atom];
+      std::copy_n(geometry.native_multipole_dipole_potentials + atom * 3u, 3u,
+                  workspace.component_dipole_potential + atom * 3u);
+      std::copy_n(geometry.native_multipole_quadrupole_potentials + atom * 6u, 6u,
+                  workspace.component_quadrupole_potential + atom * 6u);
+    }
+  } else {
+    status = evaluate_aes2_potential_system_cpu(
+        data.aes2, geometry.aes2_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
+        workspace.atomic_dipoles, workspace.atomic_quadrupoles,
+        workspace.component_atomic_potential, workspace.component_dipole_potential,
+        workspace.component_quadrupole_potential, workspace.aes2_workspace, error);
     if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
+    }
+  }
+  if (data.d4.sealed()) {
+    if (data.native_periodic.sealed()) {
+      status = evaluate_periodic_d4_two_body_cpu(
+          data.d4, data.native_periodic, *geometry.native_topology_geometry,
+          geometry.native_d4_coordination_numbers, workspace.atomic_charges,
+          workspace.native_d4_atom_energies, workspace.d4_atomic_potentials, workspace.d4_workspace,
+          *geometry.native_topology_workspace, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    } else {
+      status = evaluate_d4_two_body_system_cpu(
+          data.d4, geometry.d4_cache, static_cast<std::int64_t>(system), workspace.atomic_charges,
+          workspace.d4_two_body_energies[system], workspace.d4_atomic_potentials,
+          workspace.d4_workspace, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        return status;
+      }
     }
   }
 

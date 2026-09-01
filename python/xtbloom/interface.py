@@ -288,12 +288,100 @@ def _normalize_efield(efield: np.ndarray | list[float] | None) -> np.ndarray | N
     return None
 
 
+def _normalize_pbc(pbc: object) -> bool:
+    """Normalize the released periodicity contract to full 3D or molecular.
+
+    The native ABI reserves one- and two-dimensional masks, but this Python
+    surface deliberately does not turn a partial mask into an XYZ request.
+    Integer ``0``/``1`` vectors are accepted as a convenience for data-model
+    adapters; arbitrary numeric truthiness is rejected so malformed metadata
+    cannot silently change the topology.
+    """
+    if isinstance(pbc, bool | np.bool_):
+        values = np.full(3, bool(pbc), dtype=bool)
+    else:
+        values = np.asarray(pbc)
+        if values.ndim != 1 or values.shape != (3,):
+            raise XTBloomValueError("pbc must be a boolean or a length-three sequence")
+        if values.dtype.kind == "b" or (
+            values.dtype.kind in "iu" and np.all((values == 0) | (values == 1))
+        ):
+            values = np.asarray(values, dtype=bool)
+        else:
+            raise XTBloomValueError("pbc must contain only boolean or exact 0/1 values")
+    if np.any(values) and not np.all(values):
+        raise XTBloomNotSupportedError(
+            "only full XYZ periodicity is supported; one- and two-dimensional "
+            "periodic axes are reserved but not implemented"
+        )
+    return bool(np.all(values))
+
+
+def _valid_lattice_cell_3d(cell: np.ndarray) -> bool:
+    """Mirror the native scale-aware binary64 3D cell predicate.
+
+    Scaling each row before evaluating the orientation avoids accepting a cell
+    solely because a large physical scale overflowed an unscaled determinant.
+    The threshold matches the native ``64 * DBL_EPSILON`` condition, while the
+    native layer remains the final authority for descriptor validation.
+    """
+    normalized = np.empty((3, 3), dtype=np.float64)
+    for row_index in range(3):
+        row = cell[row_index]
+        maximum = float(np.max(np.abs(row)))
+        if not math.isfinite(maximum) or not maximum > 0.0:
+            return False
+        scaled = row / maximum
+        norm = float(np.sqrt(np.dot(scaled, scaled)))
+        if not math.isfinite(norm) or not norm > 0.0:
+            return False
+        normalized[row_index] = scaled / norm
+    determinant = float(np.dot(normalized[0], np.cross(normalized[1], normalized[2])))
+    return math.isfinite(determinant) and determinant > 2.0**-46
+
+
+def _normalize_periodic(
+    cell: np.ndarray | Sequence[float] | None, pbc: object
+) -> tuple[np.ndarray | None, int]:
+    """Validate and freeze one optional native 3D direct cell.
+
+    ``cell`` uses row-major direct lattice vectors in bohr.  Molecular inputs
+    intentionally normalize to ``(None, PERIODIC_AXES_NONE)`` even when an
+    upstream data model carries an unused cell, because the native ABI requires
+    an all-zero cell for a ``NONE`` item.  A periodic request, by contrast,
+    requires an explicit finite, right-handed, nonsingular cell and never
+    guesses a unit cell for missing metadata.
+    """
+    periodic = _normalize_pbc(pbc)
+    if not periodic:
+        return None, library.PERIODIC_AXES_NONE
+    if cell is None:
+        raise XTBloomValueError("a periodic structure requires a 3x3 cell matrix")
+    try:
+        matrix = np.asarray(cell, dtype=np.float64)
+    except (TypeError, ValueError, OverflowError):
+        raise XTBloomValueError("cell must be a 3x3 finite matrix in bohr") from None
+    if matrix.shape != (3, 3):
+        raise XTBloomValueError("cell must have shape (3, 3)")
+    if not np.isfinite(matrix).all():
+        raise XTBloomValueError("cell must be finite")
+    matrix = np.ascontiguousarray(matrix, dtype=np.float64)
+    if not _valid_lattice_cell_3d(matrix):
+        raise XTBloomValueError("cell must be finite, right-handed, and nonsingular")
+    return matrix, library.PERIODIC_AXES_XYZ
+
+
+_UNSET = object()
+
+
 class Structure:
-    """A molecular structure with an immutable atom count and atomic species.
+    """A molecular or full-3D-periodic structure with fixed atom topology.
 
     Coordinates (bohr), total charge, number of unpaired electrons, and spin
     channels can be updated through :meth:`update` without rebuilding the
-    object.
+    object.  A periodic cell is a row-major direct lattice in bohr.  Only
+    ``pbc=False`` (molecular) and full ``pbc=True``/``[True, True, True]`` are
+    released; partial periodicity is rejected explicitly.
     """
 
     def __init__(
@@ -307,6 +395,8 @@ class Structure:
         point_charges: PointCharge | None = None,
         charge_response: ChargeResponse | None = None,
         efield: np.ndarray | list[float] | None = None,
+        cell: np.ndarray | Sequence[float] | None = None,
+        pbc: object = False,
     ) -> None:
         object_numbers = np.asarray(numbers, dtype=object)
         raw_numbers = np.asarray(numbers)
@@ -363,6 +453,7 @@ class Structure:
             raise XTBloomValueError(
                 "spin_channels must be 1 (restricted) or 2 (unrestricted)"
             )
+        normalized_cell, periodic_axes = _normalize_periodic(cell, pbc)
 
         self._numbers = np.ascontiguousarray(numbers, dtype=np.int32)
         self._positions = np.ascontiguousarray(positions, dtype=np.float64)
@@ -372,6 +463,8 @@ class Structure:
         self._point_charges = point_charges
         self._charge_response = charge_response
         self._efield = _normalize_efield(efield)
+        self._cell = normalized_cell
+        self._periodic_axes = periodic_axes
 
     def __len__(self) -> int:
         """Return the fixed atom count."""
@@ -426,6 +519,21 @@ class Structure:
         """
         return self._efield
 
+    @property
+    def cell(self) -> np.ndarray | None:
+        """Direct 3x3 lattice matrix in bohr, or ``None`` for molecules."""
+        return self._cell
+
+    @property
+    def pbc(self) -> bool:
+        """Whether this structure uses the released full XYZ periodicity."""
+        return self._periodic_axes == library.PERIODIC_AXES_XYZ
+
+    @property
+    def periodic_axes(self) -> int:
+        """Native periodicity mask (``NONE`` or released ``XYZ``)."""
+        return self._periodic_axes
+
     def update(
         self,
         positions: np.ndarray | None = None,
@@ -433,6 +541,8 @@ class Structure:
         uhf: int | None = None,
         multiplicity: int | None = None,
         spin_channels: int | None = None,
+        cell: np.ndarray | Sequence[float] | object | None = _UNSET,
+        pbc: object = _UNSET,
     ) -> None:
         """Update coordinates and electronic/spin state in place.
 
@@ -448,6 +558,12 @@ class Structure:
             Total spin multiplicity (alternative to ``uhf``).
         spin_channels : optional, int
             Orbital channels (1 restricted / 2 unrestricted).
+        cell : optional, (3, 3) bohr
+            Direct lattice matrix.  When omitted, the existing cell is kept;
+            when ``pbc=False`` the normalized molecular state has no cell.
+        pbc : optional, bool or length-three boolean sequence
+            Periodicity to use with ``cell``.  Only full XYZ periodicity is
+            supported.
         """
         # Validate every candidate before mutating the object.  This keeps a
         # failed multi-field update transactional instead of leaving, for
@@ -456,6 +572,8 @@ class Structure:
         next_charge = self._charge
         next_uhf = self._uhf
         next_spin_channels = self._spin_channels
+        next_cell = self._cell
+        next_periodic_axes = self._periodic_axes
 
         if positions is not None:
             candidate_positions = np.asarray(positions, dtype=float)
@@ -480,11 +598,20 @@ class Structure:
                 raise XTBloomValueError(
                     "spin_channels must be 1 (restricted) or 2 (unrestricted)"
                 )
+        if cell is not _UNSET or pbc is not _UNSET:
+            candidate_cell = self._cell if cell is _UNSET else cell
+            candidate_pbc = self.pbc if pbc is _UNSET else pbc
+            next_cell, next_periodic_axes = _normalize_periodic(
+                typing.cast("np.ndarray | Sequence[float] | None", candidate_cell),
+                candidate_pbc,
+            )
 
         self._positions = next_positions
         self._charge = next_charge
         self._uhf = next_uhf
         self._spin_channels = next_spin_channels
+        self._cell = next_cell
+        self._periodic_axes = next_periodic_axes
 
 
 # --- contexts ----------------------------------------------------------------------
@@ -667,6 +794,7 @@ class _ComputedBatch:
     charges: np.ndarray
     point_charge_forces: np.ndarray | None
     dipole_moments: np.ndarray | None
+    strain_derivatives: np.ndarray | None
     scc_iterations: np.ndarray
     scc_converged: np.ndarray
     per_system_status: np.ndarray
@@ -708,6 +836,32 @@ def _pack_charge_responses(
             matrices.extend(float(value) for value in response.matrix.ravel())
         offsets.append(len(matrices))
     return offsets, shifts, matrices
+
+
+def _pack_periodic_descriptors(
+    structures: Sequence[Structure],
+) -> tuple[list[float], list[int]] | None:
+    """Pack one batch-wide native cell/periodicity descriptor pair.
+
+    The ABI requires a descriptor for every system when any batch member is
+    periodic.  Molecular peers therefore receive an all-zero cell and the
+    ``NONE`` mask, while periodic peers retain their validated row-major cell
+    in bohr.  A wholly molecular batch omits the ABI-v4 suffix to preserve the
+    historical request shape and plan identity.
+    """
+    if not any(structure.pbc for structure in structures):
+        return None
+    cells: list[float] = []
+    axes: list[int] = []
+    for structure in structures:
+        if structure.pbc:
+            assert structure.cell is not None
+            cells.extend(float(value) for value in structure.cell.ravel())
+            axes.append(structure.periodic_axes)
+        else:
+            cells.extend(0.0 for _ in range(9))
+            axes.append(library.PERIODIC_AXES_NONE)
+    return cells, axes
 
 
 # --- auto batch sizing --------------------------------------------------------
@@ -794,6 +948,19 @@ def _merge_computed(
         dipole_moments=(
             np.concatenate([batch.dipole_moments for batch in computed_batches], axis=0)
             if any(batch.dipole_moments is not None for batch in computed_batches)
+            else None
+        ),
+        strain_derivatives=(
+            np.concatenate(
+                [
+                    batch.strain_derivatives
+                    if batch.strain_derivatives is not None
+                    else np.full((len(batch.energies), 9), np.nan, dtype=np.float64)
+                    for batch in computed_batches
+                ],
+                axis=0,
+            )
+            if any(batch.strain_derivatives is not None for batch in computed_batches)
             else None
         ),
         scc_iterations=np.concatenate(
@@ -1154,6 +1321,7 @@ def _compute_batch(
     point_values: list[float] = []
     point_gammas: list[float] = []
     packed_responses = _pack_charge_responses(structures)
+    packed_periodic = _pack_periodic_descriptors(structures)
     keepalive: list = []
     field_payload: list[int] = []
     field_descriptors: list[object] = []
@@ -1242,6 +1410,10 @@ def _compute_batch(
         bind("atomic_potential_shifts", response_shifts, np.float64)
         bind("charge_response_offsets", response_offsets, np.int64)
         bind("charge_response_matrix", response_matrix, np.float64)
+    if packed_periodic is not None:
+        cell_matrices, periodic_axes = packed_periodic
+        bind("cell_matrices", cell_matrices, np.float64)
+        bind("periodic_axes", periodic_axes, np.int32)
     if field_descriptors:
         batch.total_interactions = len(field_descriptors)
         descriptor_owner = (library.Interaction * len(field_descriptors))(
@@ -1322,6 +1494,11 @@ def _compute_batch(
         if bool(flags & library.COMPUTE_DIPOLE_MOMENTS)
         else None
     )
+    strain_derivatives = (
+        np.empty((nsystems, 9), dtype=np.float64)
+        if bool(flags & library.COMPUTE_STRAIN_DERIVATIVES)
+        else None
+    )
     scc_iterations = np.empty(nsystems, dtype=np.int32)
     scc_converged = np.empty(nsystems, dtype=np.uint8)
     per_system_status = np.empty(nsystems, dtype=np.int32)
@@ -1359,6 +1536,11 @@ def _compute_batch(
         dipole_moments,
         bool(flags & library.COMPUTE_DIPOLE_MOMENTS),
     )
+    bind_output(
+        "strain_derivatives",
+        strain_derivatives,
+        bool(flags & library.COMPUTE_STRAIN_DERIVATIVES),
+    )
     bind_output("scc_iterations", scc_iterations, True)
     bind_output("scc_converged", scc_converged, True)
     bind_output("per_system_status", per_system_status, True)
@@ -1393,6 +1575,7 @@ def _compute_batch(
         charges=charges,
         point_charge_forces=point_charge_forces,
         dipole_moments=dipole_moments,
+        strain_derivatives=strain_derivatives,
         scc_iterations=scc_iterations,
         scc_converged=scc_converged,
         per_system_status=per_system_status,
@@ -1443,6 +1626,7 @@ class Result:
         "charges": lambda self: self.charges,
         "point_charge_forces": lambda self: self.point_charge_forces,
         "dipole_moments": lambda self: self.dipole_moments,
+        "strain_derivatives": lambda self: self.strain_derivatives,
         "scc_iterations": lambda self: self.scc_iterations,
         "scc_converged": lambda self: self.scc_converged,
         "scc_status": lambda self: self.scc_status,
@@ -1471,6 +1655,11 @@ class Result:
             if computed.dipole_moments is not None
             else None
         )
+        self.strain_derivatives = (
+            np.array(computed.strain_derivatives[index], copy=True)
+            if computed.strain_derivatives is not None
+            else None
+        )
         self.scc_iterations = int(computed.scc_iterations[index])
         self.scc_converged = bool(computed.scc_converged[index])
         self.scc_status = int(computed.per_system_status[index])
@@ -1485,7 +1674,7 @@ class Result:
 
         Available keys: ``energy``, ``energies``, ``forces``, ``gradient``
         (the negative of forces), ``charges``, ``point_charge_forces``,
-        ``dipole_moments``, ``scc_iterations``,
+        ``dipole_moments``, ``strain_derivatives``, ``scc_iterations``,
         ``scc_converged``, ``scc_status``, and ``natoms``.
         """
         if attribute not in self._getter:
@@ -1522,6 +1711,11 @@ class BatchResult:
             if computed.dipole_moments is not None
             else None
         )
+        self.strain_derivatives = (
+            np.array(computed.strain_derivatives, copy=True)
+            if computed.strain_derivatives is not None
+            else None
+        )
         self.scc_iterations = np.array(computed.scc_iterations, copy=True)
         self.scc_converged = np.array(computed.scc_converged, copy=True)
         self.per_system_status = np.array(computed.per_system_status, copy=True)
@@ -1554,6 +1748,7 @@ class BatchResult:
                 charges=self.charges,
                 point_charge_forces=self.point_charge_forces,
                 dipole_moments=self.dipole_moments,
+                strain_derivatives=self.strain_derivatives,
                 scc_iterations=self.scc_iterations,
                 scc_converged=self.scc_converged,
                 per_system_status=self.per_system_status,
@@ -1588,13 +1783,14 @@ class BatchResult:
             )
 
     def get(self, attribute: str) -> object:
-        """Return a batch array by name, including optional dipole moments."""
+        """Return a batch array by name, including optional periodic outputs."""
         names = {
             "energies": self.energies,
             "forces": self.forces,
             "charges": self.charges,
             "point_charge_forces": self.point_charge_forces,
             "dipole_moments": self.dipole_moments,
+            "strain_derivatives": self.strain_derivatives,
             "scc_iterations": self.scc_iterations,
             "scc_converged": self.scc_converged,
             "per_system_status": self.per_system_status,
@@ -1829,6 +2025,8 @@ class Calculator(Structure):
         point_charges: PointCharge | None = None,
         charge_response: ChargeResponse | None = None,
         efield: np.ndarray | list[float] | None = None,
+        cell: np.ndarray | Sequence[float] | None = None,
+        pbc: object = False,
         *,
         backend: str | int = "auto",
         device_id: int | None = None,
@@ -1854,6 +2052,8 @@ class Calculator(Structure):
             point_charges=point_charges,
             charge_response=charge_response,
             efield=efield,
+            cell=cell,
+            pbc=pbc,
         )
         self._model = _resolve_method(method)
         _reject_unsupported_model_features(self._model, [self])
@@ -1893,8 +2093,10 @@ class Calculator(Structure):
         uhf: int | None = None,
         multiplicity: int | None = None,
         spin_channels: int | None = None,
+        cell: np.ndarray | Sequence[float] | object | None = _UNSET,
+        pbc: object = _UNSET,
     ) -> None:
-        """Update the structure geometry and/or electronic state in place."""
+        """Update geometry, electronic state, or the optional native cell."""
         Structure.update(
             self,
             positions=positions,
@@ -1902,6 +2104,8 @@ class Calculator(Structure):
             uhf=uhf,
             multiplicity=multiplicity,
             spin_channels=spin_channels,
+            cell=cell,
+            pbc=pbc,
         )
 
     def set(self, attribute: str, value: object) -> None:
@@ -1914,8 +2118,16 @@ class Calculator(Structure):
         """
         self._settings.set(attribute, value)
 
-    def singlepoint(self) -> Result:
-        """Perform a single-point calculation and return a :class:`Result`."""
+    def singlepoint(self, *, compute_strain: bool = False) -> Result:
+        """Perform a single-point calculation and return a :class:`Result`.
+
+        Set ``compute_strain=True`` for a native-periodic GFN2 request to
+        publish the nine row-major ``dE/d(strain)`` values in
+        :attr:`Result.strain_derivatives`.  CPU executes this path directly;
+        CUDA currently reaches the same validated periodic evaluator through
+        its host bridge.  The native contract rejects that optional output for
+        molecular, GFN1, and mixed-periodicity requests.
+        """
         flags = (
             library.COMPUTE_ENERGY
             | library.COMPUTE_FORCES
@@ -1925,6 +2137,8 @@ class Calculator(Structure):
             flags |= library.COMPUTE_POINT_CHARGE_FORCES
         if self.efield is not None:
             flags |= library.COMPUTE_DIPOLE_MOMENTS
+        if compute_strain:
+            flags |= library.COMPUTE_STRAIN_DERIVATIVES
         computed = _compute_batch(
             self._context,
             [self],
@@ -2093,6 +2307,7 @@ class BatchCalculator:
         *,
         raise_on_failure: bool = False,
         auto_batch_size: bool | int | None = None,
+        compute_strain: bool = False,
     ) -> BatchResult:
         """Run the batch while preserving successful peers.
 
@@ -2119,6 +2334,13 @@ class BatchCalculator:
         native context owns one whole-batch checkpoint, so sharing it across
         chunks could seed a system from a different chunk rather than from the
         corresponding system in the preceding logical batch.
+
+        ``compute_strain=True`` requests the native-periodic GFN2
+        ``dE/d(strain)`` suffix for every system.  CPU executes this path
+        directly and CUDA uses its validated host bridge.  The native contract
+        requires every member to be full XYZ periodic for this output;
+        molecular, GFN1, and mixed-periodicity requests are rejected before
+        output publication.
         """
         if self._warm_start and auto_batch_size not in (None, False):
             raise XTBloomValueError(
@@ -2136,6 +2358,8 @@ class BatchCalculator:
             # logical mixed field/plain batch must not produce some chunks
             # with dipoles and others without them.
             base_flags |= library.COMPUTE_DIPOLE_MOMENTS
+        if compute_strain:
+            base_flags |= library.COMPUTE_STRAIN_DERIVATIVES
 
         def run_once(structures: Sequence[Structure]) -> _ComputedBatch:
             # Output descriptors are batch-local. In particular, requesting a
@@ -2289,6 +2513,15 @@ _CHARGE_RESPONSE_FIELDS = (
     "charge_response_offsets",
     "charge_response_matrix",
 )
+_PERIODIC_FIELDS = ("cell_matrices", "periodic_axes")
+_PERIODIC_INPUT_DTYPES = {
+    "cell_matrices": np.dtype(np.float64),
+    "periodic_axes": np.dtype(np.int32),
+}
+_EXPECTED_OUTPUT_DTYPES = {
+    **_dlpack.EXPECTED_OUTPUT_DTYPES,
+    "strain_derivatives": np.dtype(np.float64),
+}
 
 
 class ArrayBatch:
@@ -2347,6 +2580,12 @@ class ArrayBatch:
         Periodic charge-response ``b + A q`` group; must be supplied together.
         Shifts are ``(natoms,)`` float64, offsets ``(nsystems + 1,)`` int64,
         and the matrix packs all per-system ``A`` blocks row-major.
+    cell_matrices, periodic_axes : optional
+        Native-cell group; must be supplied together.  ``cell_matrices`` is a
+        contiguous ``(nsystems, 3, 3)`` or ``(nsystems, 9)`` float64 array of
+        row-major direct cells in bohr.  ``periodic_axes`` is an int32 array of
+        length ``nsystems`` containing ``PERIODIC_AXES_NONE`` or
+        ``PERIODIC_AXES_XYZ``.  Partial masks remain unsupported.
     method : str
         GFN model name: ``"GFN1-xTB"``/``"GFN1"`` or
         ``"GFN2-xTB"``/``"GFN2"``. Defaults to ``"GFN2-xTB"``.
@@ -2376,6 +2615,8 @@ class ArrayBatch:
         atomic_potential_shifts: object | None = None,
         charge_response_offsets: object | None = None,
         charge_response_matrix: object | None = None,
+        cell_matrices: object | None = None,
+        periodic_axes: object | None = None,
         *,
         method: str = "GFN2-xTB",
         copy: bool = False,
@@ -2402,6 +2643,7 @@ class ArrayBatch:
             )
         _require_all_or_none("point charge", _POINT_CHARGE_FIELDS, locals())
         _require_all_or_none("charge response", _CHARGE_RESPONSE_FIELDS, locals())
+        _require_all_or_none("periodic", _PERIODIC_FIELDS, locals())
         self._model = _resolve_method(method)
         self._method = method
         self._arrays: dict[str, object | None] = {
@@ -2418,6 +2660,8 @@ class ArrayBatch:
             "atomic_potential_shifts": atomic_potential_shifts,
             "charge_response_offsets": charge_response_offsets,
             "charge_response_matrix": charge_response_matrix,
+            "cell_matrices": cell_matrices,
+            "periodic_axes": periodic_axes,
         }
         self._copy = bool(copy)
         self._context = Context(
@@ -2457,6 +2701,7 @@ class ArrayBatch:
         compute_forces: bool = True,
         compute_charges: bool = True,
         compute_point_charge_forces: bool | None = None,
+        compute_strain: bool = False,
         out: object | None = None,
         result_memory: str = "host",
     ) -> ArrayBatchResult:
@@ -2486,6 +2731,11 @@ class ArrayBatch:
         are allowed.  Device-resident ``per_system_status``/``scc_converged``
         make :meth:`ArrayBatchResult.failed_indices` unavailable with a
         precise error (keep those diagnostics on the host when you need them).
+
+        ``compute_strain=True`` requests the nine row-major native periodic
+        strain derivatives.  CPU GFN2 computes this path directly; CUDA GFN2
+        uses the validated host bridge.  Every supplied periodic mask must be
+        ``XYZ``.
         """
         self._context._create()
         return _compute_array_batch(
@@ -2502,6 +2752,7 @@ class ArrayBatch:
             compute_forces=compute_forces,
             compute_charges=compute_charges,
             compute_point_charge_forces=compute_point_charge_forces,
+            compute_strain=compute_strain,
             out=out,
             result_memory=result_memory,
         )
@@ -2595,6 +2846,7 @@ def _compute_array_batch(
     compute_forces: bool,
     compute_charges: bool,
     compute_point_charge_forces: bool | None,
+    compute_strain: bool,
     out: object | None,
     result_memory: str = "host",
 ) -> ArrayBatchResult:
@@ -2652,13 +2904,19 @@ def _compute_array_batch(
         def consume_input(name: str, shape: tuple[int, ...]) -> _dlpack.DLPackView:
             array = arrays.get(name)
             if array is None:
-                values = np.empty(0, dtype=_dlpack.EXPECTED_INPUT_DTYPES[name])
+                expected_dtype = _dlpack.EXPECTED_INPUT_DTYPES.get(name)
+                if expected_dtype is None:
+                    expected_dtype = _PERIODIC_INPUT_DTYPES[name]
+                values = np.empty(0, dtype=expected_dtype)
                 keepalive.append(values)
                 array = values
                 shape = (0,)
+            expected_dtype = _dlpack.EXPECTED_INPUT_DTYPES.get(name)
+            if expected_dtype is None:
+                expected_dtype = _PERIODIC_INPUT_DTYPES[name]
             view = _dlpack.consume_from_dlpack(
                 array,
-                expected_dtype=_dlpack.EXPECTED_INPUT_DTYPES[name],
+                expected_dtype=expected_dtype,
                 expected_shape=shape,
                 stream=context.stream,
                 expected_cuda_device=context.device_id,
@@ -2688,6 +2946,10 @@ def _compute_array_batch(
             consume_input("atomic_potential_shifts", (natoms,))
             consume_input("charge_response_offsets", (nsystems + 1,))
             consume_input("charge_response_matrix", (response_elements,))
+        if arrays.get("cell_matrices") is not None:
+            cell_shape = _array_shape(arrays["cell_matrices"])
+            consume_input("cell_matrices", cell_shape)
+            consume_input("periodic_axes", (nsystems,))
 
         _validate_device_consistency(views, context)
         options = _build_compute_options(
@@ -2706,6 +2968,7 @@ def _compute_array_batch(
             compute_forces=compute_forces,
             compute_charges=compute_charges,
             compute_point_charge_forces=compute_point_charge_forces,
+            compute_strain=compute_strain,
         )
         _validate_requested_outputs(out_spec, options.flags, npoints)
         result = library.BatchResult()
@@ -2819,6 +3082,15 @@ def _derive_batch_counts(arrays: dict[str, object | None]) -> tuple[int, int, in
             raise XTBloomValueError(
                 f"atomic_potential_shifts must have shape ({natoms},)"
             )
+    if arrays["cell_matrices"] is not None:
+        cell_shape = _array_shape(arrays["cell_matrices"])
+        if cell_shape not in ((nsystems, 9), (nsystems, 3, 3)):
+            raise XTBloomValueError(
+                "cell_matrices must have shape "
+                f"({nsystems}, 9) or ({nsystems}, 3, 3), got {cell_shape}"
+            )
+        if _array_shape(arrays["periodic_axes"]) != (nsystems,):
+            raise XTBloomValueError(f"periodic_axes must have shape ({nsystems},)")
     return nsystems, natoms, npoints, response_elements
 
 
@@ -2867,6 +3139,7 @@ def _build_compute_options(
     compute_forces: bool,
     compute_charges: bool,
     compute_point_charge_forces: bool | None,
+    compute_strain: bool,
 ) -> library.ComputeOptions:
     """Validate settings and build the ``xtbloom_compute_options_t`` mirror."""
     options = library.ComputeOptions()
@@ -2887,6 +3160,8 @@ def _build_compute_options(
         flags |= library.COMPUTE_ATOMIC_CHARGES
     if npoints and compute_point_charge_forces is not False:
         flags |= library.COMPUTE_POINT_CHARGE_FORCES
+    if compute_strain:
+        flags |= library.COMPUTE_STRAIN_DERIVATIVES
     options.flags = flags
     options.max_scc_iterations = _as_integer("max_scc_iterations", max_scc_iterations)
     options.charge_tolerance = float(charge_tolerance)
@@ -2925,7 +3200,7 @@ def _normalize_out_spec(out: object | None) -> dict[str, object]:
     normalized: dict[str, object] = {}
     for name, array in out.items():
         canonical = aliases.get(name, name)
-        if canonical not in _dlpack.EXPECTED_OUTPUT_DTYPES:
+        if canonical not in _EXPECTED_OUTPUT_DTYPES:
             raise XTBloomValueError(f"unknown output name {name!r}")
         if array is None:
             continue
@@ -2955,6 +3230,7 @@ def _validate_requested_outputs(
         "point_charge_forces": bool(
             npoints and flags & library.COMPUTE_POINT_CHARGE_FORCES
         ),
+        "strain_derivatives": bool(flags & library.COMPUTE_STRAIN_DERIVATIVES),
         # Native diagnostics are mandatory for every nonempty batch.
         "scc_iterations": True,
         "scc_converged": True,
@@ -2999,6 +3275,7 @@ def _bind_outputs(
         ("forces", "forces", (natoms, 3), np.float64),
         ("charges", "atomic_charges", (natoms,), np.float64),
         ("point_charge_forces", "point_charge_forces", (npoints, 3), np.float64),
+        ("strain_derivatives", "strain_derivatives", (nsystems, 9), np.float64),
         ("scc_iterations", "scc_iterations", (nsystems,), np.int32),
         ("scc_converged", "scc_converged", (nsystems,), np.uint8),
         ("per_system_status", "per_system_status", (nsystems,), np.int32),
@@ -3073,6 +3350,7 @@ def _requested_output_mask(flags: int, npoints: int) -> dict[str, bool]:
         "point_charge_forces": bool(
             npoints and flags & library.COMPUTE_POINT_CHARGE_FORCES
         ),
+        "strain_derivatives": bool(flags & library.COMPUTE_STRAIN_DERIVATIVES),
         "scc_iterations": True,
         "scc_converged": True,
         "per_system_status": True,
@@ -3255,6 +3533,11 @@ class ArrayBatchResult:
         return self._data.get("point_charge_forces")
 
     @property
+    def strain_derivatives(self) -> object:
+        """Per-system row-major ``dE/d(strain)`` values in Hartree."""
+        return self._data.get("strain_derivatives")
+
+    @property
     def scc_iterations(self) -> object:
         """Per-system SCC iteration counts, shape ``(nsystems,)``."""
         return self._require("scc_iterations")
@@ -3294,6 +3577,7 @@ class ArrayBatchResult:
             "energies",
             "forces",
             "charges",
+            "strain_derivatives",
             "scc_iterations",
             "scc_converged",
             "per_system_status",
@@ -3348,6 +3632,8 @@ def compute_arrays(
     atomic_potential_shifts: object | None = None,
     charge_response_offsets: object | None = None,
     charge_response_matrix: object | None = None,
+    cell_matrices: object | None = None,
+    periodic_axes: object | None = None,
     *,
     method: str = "GFN2-xTB",
     copy: bool = False,
@@ -3363,6 +3649,7 @@ def compute_arrays(
     scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
     scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
     determinism: str | int = "default",
+    compute_strain: bool = False,
     out: object | None = None,
     result_memory: str = "host",
 ) -> ArrayBatchResult:
@@ -3387,6 +3674,8 @@ def compute_arrays(
         atomic_potential_shifts=atomic_potential_shifts,
         charge_response_offsets=charge_response_offsets,
         charge_response_matrix=charge_response_matrix,
+        cell_matrices=cell_matrices,
+        periodic_axes=periodic_axes,
         method=method,
         copy=copy,
         backend=backend,
@@ -3404,6 +3693,7 @@ def compute_arrays(
             scc_mixer_history=scc_mixer_history,
             scc_mixer_damping=scc_mixer_damping,
             determinism=determinism,
+            compute_strain=compute_strain,
             out=out,
             result_memory=result_memory,
         )

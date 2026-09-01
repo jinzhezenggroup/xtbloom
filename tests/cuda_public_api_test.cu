@@ -185,6 +185,8 @@ struct PublicBatch {
   std::vector<double> charge_response_matrix;
   std::vector<xtbloom_interaction_t> interactions;
   std::vector<std::uint8_t> interaction_payload;
+  std::vector<double> cell_matrices;
+  std::vector<std::int32_t> periodic_axes;
   xtbloom_batch_t descriptor{};
 
   void bind() noexcept {
@@ -217,6 +219,10 @@ struct PublicBatch {
       descriptor.total_interactions = static_cast<std::int64_t>(interactions.size());
       descriptor.interaction_descriptors = host_input(interactions);
       descriptor.interaction_payload = host_input(interaction_payload);
+    }
+    if (!cell_matrices.empty() || !periodic_axes.empty()) {
+      descriptor.cell_matrices = host_input(cell_matrices);
+      descriptor.periodic_axes = host_input(periodic_axes);
     }
   }
 
@@ -637,6 +643,7 @@ struct MaterializedResult {
   std::vector<double> atomic_charges;
   std::vector<double> point_charge_forces;
   std::vector<double> dipole_moments;
+  std::vector<double> strain_derivatives;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
@@ -662,6 +669,8 @@ class ResultOwner {
     const Placement statuses_placement = layout == ResultLayout::kMixed ? Placement::kDevice : all;
     const Placement dipoles_placement =
         layout == ResultLayout::kHost ? Placement::kHost : Placement::kDevice;
+    const Placement strain_placement =
+        layout == ResultLayout::kHost ? Placement::kHost : Placement::kDevice;
 
     cudaError_t status = energies_.initialize(systems, energies_placement);
     if (status != cudaSuccess) return status;
@@ -672,6 +681,8 @@ class ResultOwner {
     status = point_forces_.initialize(3u * points, all);
     if (status != cudaSuccess) return status;
     status = dipoles_.initialize(3u * systems, dipoles_placement);
+    if (status != cudaSuccess) return status;
+    status = strain_derivatives_.initialize(9u * systems, strain_placement);
     if (status != cudaSuccess) return status;
     status = iterations_.initialize(systems, iterations_placement);
     if (status != cudaSuccess) return status;
@@ -693,6 +704,9 @@ class ResultOwner {
                                          : xtbloom_buffer_t{};
     descriptor.dipole_moments =
         (flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u ? dipoles_.descriptor() : xtbloom_buffer_t{};
+    descriptor.strain_derivatives = (flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u
+                                        ? strain_derivatives_.descriptor()
+                                        : xtbloom_buffer_t{};
     descriptor.scc_iterations = iterations_.descriptor();
     descriptor.scc_converged = converged_.descriptor();
     descriptor.per_system_status = statuses_.descriptor();
@@ -709,6 +723,8 @@ class ResultOwner {
     status = point_forces_.read_payload(result.point_charge_forces);
     if (status != cudaSuccess) return status;
     status = dipoles_.read_payload(result.dipole_moments);
+    if (status != cudaSuccess) return status;
+    status = strain_derivatives_.read_payload(result.strain_derivatives);
     if (status != cudaSuccess) return status;
     status = iterations_.read_payload(result.iterations);
     if (status != cudaSuccess) return status;
@@ -735,6 +751,9 @@ class ResultOwner {
     if (status != cudaSuccess) return status;
     intact = intact && field;
     status = dipoles_.guards_intact(field);
+    if (status != cudaSuccess) return status;
+    intact = intact && field;
+    status = strain_derivatives_.guards_intact(field);
     if (status != cudaSuccess) return status;
     intact = intact && field;
     status = iterations_.guards_intact(field);
@@ -765,6 +784,9 @@ class ResultOwner {
     if (status != cudaSuccess) return status;
     same = same && field;
     status = dipoles_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
+    status = strain_derivatives_.unchanged(field);
     if (status != cudaSuccess) return status;
     same = same && field;
     status = iterations_.unchanged(field);
@@ -811,6 +833,7 @@ class ResultOwner {
   GuardedOutput<double> charges_;
   GuardedOutput<double> point_forces_;
   GuardedOutput<double> dipoles_;
+  GuardedOutput<double> strain_derivatives_;
   GuardedOutput<std::int32_t> iterations_;
   GuardedOutput<std::uint8_t> converged_;
   GuardedOutput<std::int32_t> statuses_;
@@ -877,8 +900,14 @@ int compare_result(const ResultOwner& owner, const MaterializedResult& actual,
                      kForceAbsoluteTolerance, kForceRelativeTolerance);
   if (line != 0) return line;
   if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
-    return compare_values("dipole moment", actual.dipole_moments, expected.dipole_moments,
+    line = compare_values("dipole moment", actual.dipole_moments, expected.dipole_moments,
                           kChargeAbsoluteTolerance, kChargeRelativeTolerance);
+    if (line != 0) return line;
+  }
+  if ((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+    return compare_values("strain derivative", actual.strain_derivatives,
+                          expected.strain_derivatives, kForceAbsoluteTolerance,
+                          kForceRelativeTolerance);
   }
   return 0;
 }
@@ -1761,6 +1790,330 @@ int expect_strict_warm_rejection(xtbloom_context_t* context, PublicBatch& batch,
   return 0;
 }
 
+/* Native XYZ periodic GFN2 currently runs through the validated CPU periodic
+ * evaluator bridge.  This end-to-end test proves that the bridge is reachable
+ * only after CUDA cell validation, accepts host/device/mixed descriptors and
+ * result buffers, preserves the CPU numerical contract, and keeps strict WARM
+ * and fixed-plan semantics.  Asynchronous native periodic requests use the
+ * same CPU reference bridge on a worker and retain the nonblocking completion
+ * contract until CUDA-native Ewald/multipole kernels replace that bridge. */
+int test_native_periodic_cuda_bridge(std::int32_t device, xtbloom_context_t* cpu_context) {
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  PublicBatch batch;
+  CHECK(make_fixture_batch(2u, false, batch) == 0);
+  const std::vector<double> cells{
+      8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0, 8.5, 0.0, 0.0, 0.25, 8.25, 0.0, -0.15, 0.2, 8.75,
+  };
+  const std::vector<std::int32_t> axes{XTBLOOM_PERIODIC_AXES_XYZ, XTBLOOM_PERIODIC_AXES_XYZ};
+  batch.cell_matrices = cells;
+  batch.periodic_axes = axes;
+  batch.bind();
+  batch.descriptor.cell_matrices = host_input(cells);
+  batch.descriptor.periodic_axes = host_input(axes);
+  xtbloom_compute_options_t options = make_compute_options();
+
+  /* A malformed strain outlet must be rejected by the descriptor gate before
+   * the CPU bridge runs.  In particular, publication is multi-buffer and a
+   * late check in publish_result would otherwise leave earlier energy/force
+   * slices modified when the strain copy fails. */
+  xtbloom_compute_options_t malformed_strain_options = options;
+  malformed_strain_options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+  ResultOwner malformed_strain_result;
+  CUDA_CHECK(
+      malformed_strain_result.bind(batch, ResultLayout::kHost, malformed_strain_options.flags));
+  malformed_strain_result.descriptor.strain_derivatives = xtbloom_buffer_t{};
+  g_scenario = "native-periodic-bridge/malformed-strain-output";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &malformed_strain_options,
+                        &malformed_strain_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  bool malformed_unchanged = false;
+  CUDA_CHECK(malformed_strain_result.unchanged(malformed_unchanged));
+  CHECK(malformed_unchanged);
+  CHECK(malformed_strain_result.descriptor.flags == kResultFlagsCanary);
+
+  MaterializedResult reference;
+  g_scenario = "native-periodic-bridge/CPU-reference-fresh";
+  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  DeviceInputArray<double> device_cells;
+  DeviceInputArray<std::int32_t> device_axes;
+  CUDA_CHECK(device_cells.upload(cells));
+  CUDA_CHECK(device_axes.upload(axes));
+
+  const std::array<std::pair<InputLayout, ResultLayout>, 3> layouts{{
+      {InputLayout::kHost, ResultLayout::kHost},
+      {InputLayout::kDevice, ResultLayout::kDevice},
+      {InputLayout::kMixed, ResultLayout::kMixed},
+  }};
+  const std::array<const char*, 3> names{{"host", "device", "mixed"}};
+  for (std::size_t index = 0u; index < layouts.size(); ++index) {
+    const auto [input_layout, result_layout] = layouts[index];
+    std::string scenario = std::string("native-periodic-bridge/") + names[index] + "-fresh";
+    g_scenario = scenario.c_str();
+    bind_inputs(batch, &device_inputs, input_layout);
+    if (input_layout == InputLayout::kHost) {
+      batch.descriptor.cell_matrices = host_input(cells);
+      batch.descriptor.periodic_axes = host_input(axes);
+    } else if (input_layout == InputLayout::kDevice) {
+      batch.descriptor.cell_matrices = device_cells.descriptor();
+      batch.descriptor.periodic_axes = device_axes.descriptor();
+    } else {
+      batch.descriptor.cell_matrices = device_cells.descriptor();
+      batch.descriptor.periodic_axes = host_input(axes);
+    }
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, result_layout, options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult actual;
+    CUDA_CHECK(result.materialize(actual));
+    CHECK(compare_result(result, actual, reference, options) == 0);
+  }
+
+  /* The ABI-v3 strain outlet is a native-cell property, not a molecular
+   * fallback.  Exercise all three input/result placements against an
+   * independent CPU call so a bridge that forgets the size-gated suffix (or
+   * publishes only the primary result fields) cannot pass the periodic smoke
+   * test. */
+  xtbloom_compute_options_t strain_options = options;
+  strain_options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  batch.descriptor.cell_matrices = host_input(cells);
+  batch.descriptor.periodic_axes = host_input(axes);
+  MaterializedResult strain_reference;
+  g_scenario = "native-periodic-bridge/CPU-reference-strain";
+  CHECK(run_cpu_reference(cpu_context, batch, strain_options, strain_reference) == 0);
+  CHECK(strain_reference.strain_derivatives.size() == 18u);
+  for (std::size_t index = 0u; index < layouts.size(); ++index) {
+    const auto [input_layout, result_layout] = layouts[index];
+    std::string scenario = std::string("native-periodic-bridge/") + names[index] + "-strain";
+    g_scenario = scenario.c_str();
+    bind_inputs(batch, &device_inputs, input_layout);
+    if (input_layout == InputLayout::kHost) {
+      batch.descriptor.cell_matrices = host_input(cells);
+      batch.descriptor.periodic_axes = host_input(axes);
+    } else if (input_layout == InputLayout::kDevice) {
+      batch.descriptor.cell_matrices = device_cells.descriptor();
+      batch.descriptor.periodic_axes = device_axes.descriptor();
+    } else {
+      batch.descriptor.cell_matrices = device_cells.descriptor();
+      batch.descriptor.periodic_axes = host_input(axes);
+    }
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, result_layout, strain_options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &strain_options, &result.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK((result.descriptor.flags & XTBLOOM_RESULT_STRAIN_DERIVATIVES) != 0u);
+    MaterializedResult actual;
+    CUDA_CHECK(result.materialize(actual));
+    CHECK(compare_result(result, actual, strain_reference, strain_options) == 0);
+  }
+
+  /* The CPU reference context is shared by the surrounding public tests, and
+   * the strain comparison above intentionally uses a different requested-
+   * property identity.  Seed the exact non-strain identity immediately before
+   * the WARM comparison so strict WARM tests the geometry epoch transition,
+   * rather than accidentally exercising the documented identity rejection. */
+  MaterializedResult warm_seed;
+  g_scenario = "native-periodic-bridge/CPU-reference-warm-seed";
+  CHECK(run_cpu_reference(cpu_context, batch, options, warm_seed) == 0);
+
+  /* A plan-created fixed topology uses the same synchronous bridge and must
+   * retain the ordinary plan identity/publication contract. */
+  g_scenario = "native-periodic-bridge/plan-sync";
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  batch.descriptor.cell_matrices = host_input(cells);
+  batch.descriptor.periodic_axes = host_input(axes);
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const std::unique_ptr<xtbloom_plan_t, void (*)(xtbloom_plan_t*)> plan(raw_plan,
+                                                                        xtbloom_plan_destroy);
+  ResultOwner plan_result;
+  CUDA_CHECK(plan_result.bind(batch, ResultLayout::kHost, options.flags));
+  CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &plan_result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult plan_actual;
+  CUDA_CHECK(plan_result.materialize(plan_actual));
+  CHECK(compare_result(plan_result, plan_actual, reference, options) == 0);
+
+  /* Plan-owned native periodic execution must expose the size-gated strain
+   * suffix as well; this follows the same CPU bridge but exercises the plan
+   * admission path rather than the context convenience cache. */
+  g_scenario = "native-periodic-bridge/plan-strain-sync";
+  xtbloom_plan_t* raw_strain_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &strain_options, &raw_strain_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const std::unique_ptr<xtbloom_plan_t, void (*)(xtbloom_plan_t*)> strain_plan(
+      raw_strain_plan, xtbloom_plan_destroy);
+  ResultOwner strain_plan_result;
+  CUDA_CHECK(strain_plan_result.bind(batch, ResultLayout::kMixed, strain_options.flags));
+  CHECK(xtbloom_plan_compute(strain_plan.get(), &batch.descriptor, &strain_options,
+                             &strain_plan_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  CHECK((strain_plan_result.descriptor.flags & XTBLOOM_RESULT_STRAIN_DERIVATIVES) != 0u);
+  MaterializedResult strain_plan_actual;
+  CUDA_CHECK(strain_plan_result.materialize(strain_plan_actual));
+  CHECK(compare_result(strain_plan_result, strain_plan_actual, strain_reference, strain_options) ==
+        0);
+
+  /* A fixed native-periodic plan also uses the worker bridge, but must retain
+   * the plan's immutable cell/topology identity while the request is pending. */
+  g_scenario = "native-periodic-bridge/plan-async";
+  ResultOwner plan_async_result;
+  CUDA_CHECK(plan_async_result.bind(batch, ResultLayout::kHost, options.flags));
+  xtbloom_request_t* raw_plan_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_plan_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle plan_request(raw_plan_request);
+  CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &options,
+                                     &plan_async_result.descriptor,
+                                     plan_request.get()) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_request_info_t plan_async_info{};
+  CHECK(xtbloom_request_info_init(&plan_async_info, sizeof(plan_async_info)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(plan_request.get(), &plan_async_info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(plan_async_info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(plan_async_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult plan_async_actual;
+  CUDA_CHECK(plan_async_result.materialize(plan_async_actual));
+  CHECK(compare_result(plan_async_result, plan_async_actual, reference, options) == 0);
+
+  /* Plan-owned CUDA caches are intentionally independent from the context
+   * convenience cache.  Re-seed the context cache with the same property
+   * identity before exercising its strict WARM geometry transition; otherwise
+   * the preceding strain call would correctly invalidate that identity. */
+  g_scenario = "native-periodic-bridge/context-fresh-reseed";
+  ResultOwner context_seed_result;
+  CUDA_CHECK(context_seed_result.bind(batch, ResultLayout::kHost, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options,
+                        &context_seed_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult context_seed_actual;
+  CUDA_CHECK(context_seed_result.materialize(context_seed_actual));
+  CHECK(compare_result(context_seed_result, context_seed_actual, reference, options) == 0);
+
+  /* Geometry changes are valid WARM inputs and are compared against an
+   * independent CPU WARM call. */
+  batch.positions[0] += 0.003;
+  batch.positions[3] -= 0.003;
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  batch.descriptor.cell_matrices = host_input(cells);
+  batch.descriptor.periodic_axes = host_input(axes);
+  xtbloom_compute_options_t warm_options = options;
+  warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  MaterializedResult warm_reference;
+  g_scenario = "native-periodic-bridge/CPU-reference-warm";
+  CHECK(run_cpu_reference(cpu_context, batch, warm_options, warm_reference) == 0);
+  g_scenario = "native-periodic-bridge/host-warm";
+  ResultOwner warm_result;
+  CUDA_CHECK(warm_result.bind(batch, ResultLayout::kHost, warm_options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &warm_options, &warm_result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult warm_actual;
+  CUDA_CHECK(warm_result.materialize(warm_actual));
+  CHECK(compare_result(warm_result, warm_actual, warm_reference, warm_options) == 0);
+
+  /* Cell identity is fixed topology. A changed cell must reject strict WARM
+   * atomically rather than silently rebuilding or falling back to FRESH. */
+  std::vector<double> changed_cells = cells;
+  changed_cells[0] += 0.2;
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  batch.descriptor.cell_matrices = host_input(changed_cells);
+  batch.descriptor.periodic_axes = host_input(axes);
+  g_scenario = "native-periodic-bridge/warm-cell-mismatch";
+  ResultOwner changed_cell_result;
+  CUDA_CHECK(changed_cell_result.bind(batch, ResultLayout::kMixed, warm_options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &warm_options,
+                        &changed_cell_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  bool unchanged = false;
+  CUDA_CHECK(changed_cell_result.unchanged(unchanged));
+  CHECK(unchanged);
+
+  /* Context enqueue runs the validated periodic bridge on a worker. Enqueue
+   * must not run the CPU evaluator on the caller thread; completion publishes
+   * the same result as the independent CPU reference above. */
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  batch.descriptor.cell_matrices = host_input(cells);
+  batch.descriptor.periodic_axes = host_input(axes);
+  MaterializedResult async_reference;
+  g_scenario = "native-periodic-bridge/CPU-reference-async";
+  CHECK(run_cpu_reference(cpu_context, batch, options, async_reference) == 0);
+  g_scenario = "native-periodic-bridge/async-refusal";
+  ResultOwner async_result;
+  CUDA_CHECK(async_result.bind(batch, ResultLayout::kHost, options.flags));
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+  /* Valid XYZ descriptors are admitted without synchronous CPU evaluation.
+   * The request completion carries the bridge status and publishes all
+   * requested host outputs before becoming COMPLETE. */
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options,
+                                &async_result.descriptor, request.get()) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_request_info_t async_info{};
+  CHECK(xtbloom_request_info_init(&async_info, sizeof(async_info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &async_info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(async_info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(async_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(async_info.result_flags == 0u);
+  MaterializedResult async_actual;
+  CUDA_CHECK(async_result.materialize(async_actual));
+  CHECK(compare_result(async_result, async_actual, async_reference, options) == 0);
+
+  /* Device and mixed result destinations exercise the bridge's final
+   * host-to-device publication as well as the host-only route. */
+  const std::array<std::pair<ResultLayout, const char*>, 2> async_result_layouts{{
+      {ResultLayout::kDevice, "device"},
+      {ResultLayout::kMixed, "mixed"},
+  }};
+  for (const auto [layout, name] : async_result_layouts) {
+    std::string scenario = std::string("native-periodic-bridge/async-") + name;
+    g_scenario = scenario.c_str();
+    ResultOwner layout_result;
+    CUDA_CHECK(layout_result.bind(batch, layout, options.flags));
+    xtbloom_request_t* raw_layout_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_layout_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle layout_request(raw_layout_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options,
+                                  &layout_result.descriptor,
+                                  layout_request.get()) == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t layout_info{};
+    CHECK(xtbloom_request_info_init(&layout_info, sizeof(layout_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(layout_request.get(), &layout_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(layout_info.state == XTBLOOM_REQUEST_COMPLETE);
+    CHECK(layout_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult layout_actual;
+    CUDA_CHECK(layout_result.materialize(layout_actual));
+    CHECK(compare_result(layout_result, layout_actual, async_reference, options) == 0);
+  }
+
+  /* Asynchronous publication must carry the same suffix flag as the
+   * synchronous bridge.  The request metadata is the only completion channel
+   * available before a caller materializes device results, so losing this bit
+   * would make a successful strain computation indistinguishable from a
+   * legacy result. */
+  g_scenario = "native-periodic-bridge/async-strain-flags";
+  ResultOwner async_strain_result;
+  CUDA_CHECK(async_strain_result.bind(batch, ResultLayout::kHost, strain_options.flags));
+  xtbloom_request_t* raw_strain_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_strain_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle strain_request(raw_strain_request);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &strain_options,
+                                &async_strain_result.descriptor,
+                                strain_request.get()) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_request_info_t strain_info{};
+  CHECK(xtbloom_request_info_init(&strain_info, sizeof(strain_info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(strain_request.get(), &strain_info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(strain_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK((strain_info.result_flags & XTBLOOM_RESULT_STRAIN_DERIVATIVES) != 0u);
+  CHECK((async_strain_result.descriptor.flags & XTBLOOM_RESULT_STRAIN_DERIVATIVES) != 0u);
+  return 0;
+}
+
 int test_native_lattice_refusal_matrix(std::int32_t device) {
   StreamOwner stream;
   CUDA_CHECK(stream.create());
@@ -1781,6 +2134,10 @@ int test_native_lattice_refusal_matrix(std::int32_t device) {
   CUDA_CHECK(device_axes.upload(axes));
 
   xtbloom_compute_options_t options = make_compute_options();
+  /* Keep this matrix focused on the released refusal contract. Native GFN2
+   * periodic execution is exercised by test_native_periodic_cuda_bridge;
+   * GFN1 remains intentionally unavailable for native cells. */
+  options.model = XTBLOOM_MODEL_GFN1_XTB;
   const std::array<const char*, 3> names{{"host", "device", "mixed"}};
   for (std::size_t index = 0; index < names.size(); ++index) {
     std::string scenario = std::string("native-lattice-refusal/") + names[index];
@@ -1827,7 +2184,6 @@ int test_native_lattice_refusal_matrix(std::int32_t device) {
   CUDA_CHECK(gfn1_result.unchanged(gfn1_unchanged));
   CHECK(gfn1_unchanged);
   CHECK(gfn1_result.descriptor.flags == kResultFlagsCanary);
-  options.model = XTBLOOM_MODEL_GFN2_XTB;
 
   /* Cover the opposite mixed input placement independently: cell rows on the
    * host and periodic-axis masks on the device. */
@@ -1948,6 +2304,11 @@ int test_native_lattice_refusal_matrix(std::int32_t device) {
   CUDA_CHECK(mirrored_result.unchanged(unchanged));
   CHECK(unchanged);
 
+  /* The interaction plan below uses the GFN2 route so the rejection remains
+   * attributable to the unsupported attachment rather than the GFN1 native
+   * lattice gate. */
+  options.model = XTBLOOM_MODEL_GFN2_XTB;
+
   /* Preserve the public byte-storage contract for interaction descriptors.
    * The common validator loads their fields with memcpy, so under-aligned HOST
    * bytes remain valid and must reach the CUDA availability refusal rather
@@ -1971,7 +2332,7 @@ int test_native_lattice_refusal_matrix(std::int32_t device) {
   batch.descriptor.periodic_axes = host_input(axes);
   xtbloom_plan_t* raw_interaction_plan = nullptr;
   CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_interaction_plan) ==
-        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+        XTBLOOM_STATUS_NOT_SUPPORTED);
   CHECK(raw_interaction_plan == nullptr);
   return 0;
 }
@@ -4945,18 +5306,19 @@ int main(int argc, char** argv) {
   const bool mixer_sanitizer = argc == 2 && std::strcmp(argv[1], "--mixer-sanitizer") == 0;
   const bool lattice_only = argc == 2 && std::strcmp(argv[1], "--lattice-only") == 0;
   const bool lattice_sanitizer = argc == 2 && std::strcmp(argv[1], "--lattice-sanitizer") == 0;
+  const bool periodic_only = argc == 2 && std::strcmp(argv[1], "--periodic-only") == 0;
   const bool electric_field_only = argc == 2 && std::strcmp(argv[1], "--electric-field-only") == 0;
   const bool gfn1_only = argc == 2 && std::strcmp(argv[1], "--gfn1-only") == 0;
   const bool gfn1_sanitizer = argc == 2 && std::strcmp(argv[1], "--gfn1-sanitizer") == 0;
   const bool gfn1_profile = argc == 2 && std::strcmp(argv[1], "--gfn1-profile") == 0;
   if (argc != 1 && !request_only && !request_sanitizer && !request_profile &&
       !context_request_sanitizer && !context_request_profile && !mixer_sanitizer && !lattice_only &&
-      !lattice_sanitizer && !electric_field_only && !gfn1_only && !gfn1_sanitizer &&
-      !gfn1_profile) {
+      !lattice_sanitizer && !periodic_only && !electric_field_only && !gfn1_only &&
+      !gfn1_sanitizer && !gfn1_profile) {
     std::fprintf(stderr,
                  "usage: %s [--request-only|--request-sanitizer|--request-profile|"
                  "--context-request-sanitizer|--context-request-profile|"
-                 "--mixer-sanitizer|--lattice-only|--lattice-sanitizer|"
+                 "--mixer-sanitizer|--lattice-only|--lattice-sanitizer|--periodic-only|"
                  "--electric-field-only|--gfn1-only|--gfn1-sanitizer|--gfn1-profile]\n",
                  argv[0]);
     return 2;
@@ -4998,6 +5360,7 @@ int main(int argc, char** argv) {
   if (gfn1_only) return test_gfn1_public_execution(device, cpu_context.get());
   if (gfn1_sanitizer) return test_gfn1_public_execution(device, cpu_context.get(), true);
   if (gfn1_profile) return test_gfn1_profile(device, cpu_context.get());
+  if (periodic_only) return test_native_periodic_cuda_bridge(device, cpu_context.get());
   MaterializedResult reference;
   g_scenario = "CPU-reference";
   if (const int line = run_cpu_reference(cpu_context.get(), batch, options, reference); line != 0) {
@@ -5059,6 +5422,9 @@ int main(int argc, char** argv) {
   }
   if (const int line = test_public_mixer_controls_and_reproducibility(device, cpu_context.get());
       line != 0) {
+    return line;
+  }
+  if (const int line = test_native_periodic_cuda_bridge(device, cpu_context.get()); line != 0) {
     return line;
   }
   if (const int line = test_native_lattice_refusal_matrix(device); line != 0) return line;

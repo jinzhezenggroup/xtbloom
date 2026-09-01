@@ -16,6 +16,9 @@
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/parallel_executor.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
+#include "model/gfn2/periodic_ewald.hpp"
+#include "model/gfn2/periodic_multipole.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
@@ -59,6 +62,10 @@ class SccDriverPlan {
   [[nodiscard]] double energy_tolerance() const noexcept;
   [[nodiscard]] bool d4_enabled() const noexcept;
   [[nodiscard]] bool periodic_embedding_enabled() const noexcept;
+  [[nodiscard]] bool native_periodic_enabled() const noexcept;
+  [[nodiscard]] const PeriodicShortRangePlan* native_periodic_plan() const noexcept;
+  [[nodiscard]] const PeriodicEwaldPlan* native_ewald_plan() const noexcept;
+  [[nodiscard]] const PeriodicMultipolePlan* native_multipole_plan() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
   [[nodiscard]] std::size_t resident_bytes() const noexcept;
@@ -85,6 +92,13 @@ class SccDriverPlan {
       const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
       std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
       SccDriverPlan& plan, std::string& error);
+  friend xtbloom_status_t make_scc_driver_plan(
+      const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+      const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+      const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+      const PeriodicShortRangePlan* native_periodic, std::uint64_t maximum_iterations,
+      double electronic_temperature, double energy_tolerance, SccDriverPlan& plan,
+      std::string& error);
 };
 
 /*
@@ -124,6 +138,56 @@ struct SccDriverGeometryView {
   std::int64_t periodic_response_elements = 0;
   std::uint64_t periodic_embedding_generation = 0u;
   const PeriodicEmbeddingPlanData* periodic_plan_identity = nullptr;
+
+  /* Native XYZ periodic geometry and evaluator-owned output buffers. The
+   * positions/coordination inputs are read from the current geometry; the
+   * output arrays are reusable caller-owned scratch and are overwritten by the
+   * native Ewald/q-d/Q evaluators before the Hamiltonian or energy contraction.
+   * Keeping this state outside the public ABI preserves the existing driver
+   * workspace layout while making the native operators independently testable. */
+  const double* native_positions = nullptr;
+  std::int64_t native_position_elements = 0;
+  const double* native_coordination_numbers = nullptr;
+  std::int64_t native_coordination_elements = 0;
+  const PeriodicShortRangePlanData* native_topology_identity = nullptr;
+  const PeriodicShortRangeGeometry* native_topology_geometry = nullptr;
+  const PeriodicShortRangeWorkspace* native_topology_workspace = nullptr;
+  /* Native periodic D4 coordination is separate from D4GeometryCache: the
+   * molecular cache stores one finite-system pair table, whereas periodic D4
+   * enumerates the shared real-space image topology. */
+  const double* native_d4_coordination_numbers = nullptr;
+  std::int64_t native_d4_coordination_elements = 0;
+  std::uint64_t native_d4_geometry_generation = 0u;
+  double* native_ewald_matrix = nullptr;
+  std::int64_t native_ewald_matrix_elements = 0;
+  double* native_ewald_shell_potentials = nullptr;
+  std::int64_t native_ewald_shell_elements = 0;
+  double* native_ewald_energies = nullptr;
+  std::int64_t native_ewald_energy_elements = 0;
+  double* native_ewald_gradients = nullptr;
+  std::int64_t native_ewald_gradient_elements = 0;
+  double* native_ewald_strain_derivatives = nullptr;
+  std::int64_t native_ewald_strain_elements = 0;
+  double* native_multipole_charge_dipole = nullptr;
+  std::int64_t native_multipole_charge_dipole_elements = 0;
+  double* native_multipole_dipole_dipole = nullptr;
+  std::int64_t native_multipole_dipole_dipole_elements = 0;
+  double* native_multipole_charge_quadrupole = nullptr;
+  std::int64_t native_multipole_charge_quadrupole_elements = 0;
+  double* native_multipole_charge_potentials = nullptr;
+  std::int64_t native_multipole_charge_potential_elements = 0;
+  double* native_multipole_dipole_potentials = nullptr;
+  std::int64_t native_multipole_dipole_potential_elements = 0;
+  double* native_multipole_quadrupole_potentials = nullptr;
+  std::int64_t native_multipole_quadrupole_potential_elements = 0;
+  double* native_multipole_energies = nullptr;
+  std::int64_t native_multipole_energy_elements = 0;
+  double* native_multipole_gradients = nullptr;
+  std::int64_t native_multipole_gradient_elements = 0;
+  double* native_multipole_strain_derivatives = nullptr;
+  std::int64_t native_multipole_strain_elements = 0;
+  double* native_multipole_coordination_adjoint = nullptr;
+  std::int64_t native_multipole_coordination_elements = 0;
 
   /* Uniform external electric field (pilot interaction, tag 0x0101).
    *
@@ -224,6 +288,9 @@ struct SccDriverWorkspace {
   xtbloom_status_t* periodic_system_statuses = nullptr;
   double* d4_atomic_potentials = nullptr;
   double* d4_two_body_energies = nullptr;
+  /* Periodic D4 returns atom-partitioned energies; this dedicated scratch is
+   * present only when both native periodic topology and D4 are enabled. */
+  double* native_d4_atom_energies = nullptr;
   std::uint8_t* active_systems = nullptr;
 
   ES2Workspace es2_workspace;
@@ -279,6 +346,18 @@ xtbloom_status_t make_scc_driver_plan(
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
     std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
     SccDriverPlan& plan, std::string& error);
+
+/* Enable native three-dimensional periodic GFN2 electrostatics. The topology
+ * must be sealed and describe exactly the wavefunction atom partition. Native
+ * Ewald/q-d/Q operators are then built from the same ES2/AES2 parameter plans;
+ * the older PeriodicEmbeddingPlan remains a separate optional b + A*q term. */
+xtbloom_status_t make_scc_driver_plan(
+    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+    const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+    const PeriodicShortRangePlan* native_periodic, std::uint64_t maximum_iterations,
+    double electronic_temperature, double energy_tolerance, SccDriverPlan& plan,
+    std::string& error);
 
 /*
  * Enable the validated CPU periodic charge response. A non-null pointer must

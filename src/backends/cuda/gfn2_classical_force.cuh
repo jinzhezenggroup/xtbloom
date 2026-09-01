@@ -15,6 +15,10 @@
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
+#include "backends/cuda/gfn2_native_periodic_d4.cuh"
+#include "backends/cuda/gfn2_native_periodic_ewald.cuh"
+#include "backends/cuda/gfn2_native_periodic_multipole.cuh"
+#include "backends/cuda/gfn2_native_periodic_short_range.cuh"
 
 namespace xtbloom::detail::cuda {
 
@@ -48,6 +52,9 @@ enum class Gfn2ClassicalForceDeviceError : std::uint32_t {
   kD4ATMFailure = 9u,
   kNonfiniteForceArithmetic = 10u,
   kGfn1CorrectionFailure = 11u,
+  kNativeEwaldFailure = 12u,
+  kNativeMultipoleFailure = 13u,
+  kNativeD4Failure = 14u,
 };
 
 /*
@@ -89,6 +96,13 @@ struct Gfn2ClassicalForceDevicePlan {
   Gfn1ClassicalCorrectionDevicePlan gfn1_correction{};
   std::int64_t repulsion_sqrt_alpha_elements = 0;
   std::int64_t repulsion_effective_charge_elements = 0;
+  /* Native XYZ periodic batches are appended so existing molecular aggregate
+   * initializers retain their field order.  A zero-token batch disables the
+   * corresponding native term and keeps the molecular path unchanged. */
+  Gfn2NativePeriodicShortRangeDeviceBatch native_short_range_batch{};
+  Gfn2NativePeriodicEwaldDeviceBatch native_ewald_batch{};
+  Gfn2NativePeriodicMultipoleDeviceBatch native_multipole_batch{};
+  Gfn2NativePeriodicD4DeviceBatch native_d4_batch{};
 };
 
 /* Converged raw SCC multipoles and their generation-bound geometry. */
@@ -155,6 +169,13 @@ struct Gfn2ClassicalForceDeviceWorkspace {
   /* Append model-specific storage after the established aggregate prefix so
    * existing GFN2 white-box initializers keep their field order. */
   Gfn1ClassicalCorrectionDeviceWorkspace gfn1_correction{};
+  /* Native periodic evaluators reuse the SCC iteration arena.  Their complete
+   * scratch tuples remain unpublished until the classical-force transaction
+   * has accepted the corresponding peer. */
+  Gfn2NativePeriodicShortRangeDeviceWorkspace native_short_range_workspace{};
+  Gfn2NativePeriodicEwaldDeviceWorkspace native_ewald_workspace{};
+  Gfn2NativePeriodicMultipoleDeviceWorkspace native_multipole_workspace{};
+  Gfn2NativePeriodicD4DeviceWorkspace native_d4_workspace{};
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2ClassicalForceDevicePlan>);

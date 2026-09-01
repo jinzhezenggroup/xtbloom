@@ -179,9 +179,11 @@ Equivalently, row-vector coordinates obey `r' = r (I + epsilon)^T`.
 `Xi` has units of Hartree and has the same sign as the energy derivative. It
 is often called a virial, but xTBloom does not negate it or divide it by cell
 volume. A Cauchy stress, if desired, is a caller-side convention derived from
-`Xi/V`. All nine ordered components are published; six symmetric affine modes
-(`xx`, `yy`, `zz`, `xy`, `xz`, `yz`) are the minimum finite-difference gate,
-and the antisymmetric part must be consistent with rotational invariance.
+`Xi/V`. The public matrix is symmetric: each off-diagonal entry is the mean
+of the two transposed affine accumulation components and is duplicated in the
+transposed slot. Six symmetric affine modes (`xx`, `yy`, `zz`, `xy`, `xz`,
+`yz`) are therefore represented without a summation-order skew; the raw
+unsymmetrized components remain an internal accumulation detail.
 
 ## State, updates, and unsupported combinations
 

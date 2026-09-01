@@ -795,6 +795,7 @@ def command_template() -> list[str]:
         "{json}",
         "[--charge {charge}]",
         "[--spin {unpaired_electrons}]",
+        "[--spin-polarized if spin_channels=2]",
         "{input}",
     ]
 
@@ -822,6 +823,8 @@ def tblite_command(
     unpaired = int(case["unpaired_electrons"])
     if unpaired:
         command.extend(["--spin", str(unpaired)])
+    if int(case.get("spin_channels", 1)) == 2:
+        command.append("--spin-polarized")
     command.append(str(input_path))
     return command
 

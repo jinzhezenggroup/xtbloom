@@ -371,7 +371,8 @@ xtbloom_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
   }
   constexpr std::uint32_t kKnownComputeFlags =
       XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-      XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+      XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS |
+      XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
   if (query.reserved != 0u || query.reserved_v2 != 0u || compute_flags == 0u ||
       (compute_flags & ~kKnownComputeFlags) != 0u) {
     error = "workspace query contains unknown flags or nonzero reserved fields";

@@ -166,6 +166,46 @@ def test_default_spin_channels_is_restricted() -> None:
     assert result.energies == pytest.approx([reference.energy], rel=1.0e-12)
 
 
+def test_periodic_cell_and_strain_outlet() -> None:
+    """Bind ABI-v4 cell arrays through DLPack and publish ABI-v3 strain."""
+    packed = {
+        "atom_offsets": np.asarray([0, 2], dtype=np.int64),
+        "atomic_numbers": np.asarray([1, 1], dtype=np.int32),
+        "positions": H2_POSITIONS.astype(np.float64),
+        "molecular_charges": np.asarray([0.0], dtype=np.float64),
+        "unpaired_electrons": np.asarray([0], dtype=np.int32),
+        "spin_channels": np.asarray([1], dtype=np.int32),
+        "cell_matrices": np.asarray(
+            [[8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0]], dtype=np.float64
+        ),
+        "periodic_axes": np.asarray([7], dtype=np.int32),
+    }
+    result = ArrayBatch(**packed, backend="cpu").compute(compute_strain=True)
+    assert result.energies.shape == (1,)
+    assert np.isfinite(result.energies).all()
+    assert result.strain_derivatives is not None
+    assert result.strain_derivatives.shape == (1, 9)
+    assert np.isfinite(result.strain_derivatives).all()
+
+
+def test_array_batch_rejects_gfn1_native_periodic_execution() -> None:
+    """Preserve the explicit GFN1 periodic refusal on the packed API."""
+    packed = {
+        "atom_offsets": np.asarray([0, 2], dtype=np.int64),
+        "atomic_numbers": np.asarray([1, 1], dtype=np.int32),
+        "positions": H2_POSITIONS.astype(np.float64),
+        "molecular_charges": np.asarray([0.0], dtype=np.float64),
+        "unpaired_electrons": np.asarray([0], dtype=np.int32),
+        "spin_channels": np.asarray([1], dtype=np.int32),
+        "cell_matrices": np.asarray(
+            [[8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0]], dtype=np.float64
+        ),
+        "periodic_axes": np.asarray([7], dtype=np.int32),
+    }
+    with pytest.raises(XTBloomRuntimeError, match="not implemented"):
+        ArrayBatch(**packed, method="GFN1-xTB", backend="cpu").compute()
+
+
 def test_point_charges_match_calculator() -> None:
     """Point-charge inputs and outputs flow through the DLPack path."""
     water = Calculator(

@@ -16,6 +16,9 @@
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
+#include "backends/cuda/gfn2_native_periodic_d4.cuh"
+#include "backends/cuda/gfn2_native_periodic_ewald.cuh"
+#include "backends/cuda/gfn2_native_periodic_multipole.cuh"
 #include "backends/cuda/gfn2_periodic_embedding.cuh"
 #include "backends/cuda/gfn2_scc_bridge.cuh"
 #include "backends/cuda/gfn2_scc_potential.cuh"
@@ -75,6 +78,11 @@ struct Gfn2PostSccPotentialDevicePlan {
   Gfn2ExternalPointChargeDeviceBatch external_point_charge_batch{};
   Gfn2ExternalPointChargeDeviceCache external_point_charge_cache{};
   Gfn2PeriodicEmbeddingDeviceBatch periodic_batch{};
+  /* Native XYZ-periodic terms replace molecular ES2/AES2/D4 in the
+   * stationary refresh.  Zero-token views preserve the molecular path. */
+  Gfn2NativePeriodicEwaldDeviceBatch native_ewald_batch{};
+  Gfn2NativePeriodicMultipoleDeviceBatch native_multipole_batch{};
+  Gfn2NativePeriodicD4DeviceBatch native_d4_batch{};
 };
 
 /* Final raw multipoles and the common post-SCC requested/status gate. */
@@ -136,6 +144,9 @@ struct Gfn2PostSccPotentialDeviceWorkspace {
   Gfn2AES2DeviceWorkspace aes2{};
   Gfn2D4DeviceWorkspace d4{};
   Gfn2PeriodicEmbeddingDeviceWorkspace periodic{};
+  Gfn2NativePeriodicEwaldDeviceWorkspace native_ewald{};
+  Gfn2NativePeriodicMultipoleDeviceWorkspace native_multipole{};
+  Gfn2NativePeriodicD4DeviceWorkspace native_d4{};
   Gfn2SccPotentialDeviceWorkspace composition{};
   Gfn2SccBridgeDeviceWorkspace scalar_bridge{};
 

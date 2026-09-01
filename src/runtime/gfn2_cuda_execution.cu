@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -15,6 +16,7 @@
 #include <mutex>
 #include <new>
 #include <sstream>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -37,6 +39,7 @@
 #include "backends/cuda/gfn2_scc_setup_inputs.cuh"
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 #include "backends/cuda/gfn2_terminal_classical_energy.cuh"
+#include "backends/cuda/periodic_topology.cuh"
 #include "data/parameters/d4.hpp"
 #include "data/parameters/gfn1.hpp"
 #include "data/parameters/gfn1_d3.hpp"
@@ -74,6 +77,7 @@
 #include "model/gfn2/wavefunction.hpp"
 #include "runtime/backend.hpp"
 #include "runtime/cuda_descriptor_validation.hpp"
+#include "runtime/gfn2_cpu_execution.hpp"
 #include "runtime/gfn2_cuda_execution.hpp"
 #include "runtime/gfn2_cuda_topology_staging.hpp"
 #include "runtime/nvidia_host_api.h"
@@ -319,7 +323,8 @@ bool native_lattice_active(const xtbloom_batch_t& batch) noexcept {
  * lattice builder through model/gfn2/lattice.cpp.
  */
 xtbloom_status_t validate_host_native_lattice_request(const xtbloom_batch_t& batch,
-                                                      std::string& error) {
+                                                      std::string& error,
+                                                      bool allow_native_periodic = false) {
   if (!native_lattice_active(batch)) return XTBLOOM_STATUS_SUCCESS;
 
   std::int64_t cell_elements = 0;
@@ -374,10 +379,37 @@ xtbloom_status_t validate_host_native_lattice_request(const xtbloom_batch_t& bat
     periodic = true;
   }
   if (periodic) {
-    error =
-        "native lattice/PBC descriptors are valid but native periodic execution is not "
-        "implemented yet";
-    return XTBLOOM_STATUS_NOT_IMPLEMENTED;
+    /* Native PBC and the caller-owned embedding/interaction inputs are not
+     * yet compositionally proven.  Keep this check after cell staging and
+     * semantic validation so mixed host/device descriptors are handled with
+     * the same precise refusal as an all-host request. */
+    if (batch.total_point_charges != 0) {
+      error = "native periodic PBC cannot be combined with explicit point charges";
+      return XTBLOOM_STATUS_NOT_SUPPORTED;
+    }
+    if (batch.atomic_potential_shifts.data != nullptr ||
+        batch.atomic_potential_shifts.size_bytes != 0u) {
+      error = "native periodic PBC cannot be combined with atomic_potential_shifts";
+      return XTBLOOM_STATUS_NOT_SUPPORTED;
+    }
+    if (batch.total_charge_response_elements != 0 ||
+        batch.charge_response_offsets.data != nullptr ||
+        batch.charge_response_offsets.size_bytes != 0u ||
+        batch.charge_response_matrix.data != nullptr ||
+        batch.charge_response_matrix.size_bytes != 0u) {
+      error = "native periodic PBC cannot be combined with charge_response_matrix or b+Aq";
+      return XTBLOOM_STATUS_NOT_SUPPORTED;
+    }
+    if (batch.struct_size >= XTBLOOM_BATCH_V3_SIZE && batch.total_interactions != 0) {
+      error = "native periodic PBC cannot be combined with interaction attachments";
+      return XTBLOOM_STATUS_NOT_SUPPORTED;
+    }
+    if (!allow_native_periodic) {
+      error =
+          "native lattice/PBC descriptors are valid but native periodic execution is not "
+          "implemented yet";
+      return XTBLOOM_STATUS_NOT_IMPLEMENTED;
+    }
   }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
@@ -407,6 +439,339 @@ xtbloom_status_t copy_host_buffer(const char* name, const xtbloom_const_buffer_t
   }
   return XTBLOOM_STATUS_SUCCESS;
 }
+
+std::string cuda_error_message(const char* operation, cudaError_t status);
+inline std::string cuda_error_message(const std::string& operation, cudaError_t status) {
+  return cuda_error_message(operation.c_str(), status);
+}
+
+/*
+ * Native periodic CUDA execution currently uses the CPU periodic evaluator as
+ * its scientific reference bridge.  This helper owns the only host ingress
+ * used by that bridge: device buffers are copied synchronously after the
+ * owner stream has been fenced, while host buffers are copied with memcpy so
+ * under-aligned ABI byte views remain valid.  The caller has already run the
+ * complete public descriptor validator, but retaining the memory-space and
+ * extent checks here keeps the internal bridge fail-closed when it is called
+ * from a white-box runtime test.
+ */
+template <typename T>
+xtbloom_status_t copy_cuda_or_host_buffer(const char* name, const xtbloom_const_buffer_t& buffer,
+                                          std::int64_t elements, cudaStream_t stream,
+                                          std::vector<T>& output, std::string& error,
+                                          bool allow_absent = false) {
+  std::size_t required = 0u;
+  if (!checked_bytes(elements, sizeof(T), required)) {
+    error = std::string(name) + " extent overflows size_t";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (elements == 0 && buffer.data == nullptr && allow_absent) {
+    output.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (buffer.reserved != 0u || buffer.size_bytes < required ||
+      (required != 0u && buffer.data == nullptr) ||
+      (buffer.memory_space != XTBLOOM_MEMORY_HOST &&
+       buffer.memory_space != XTBLOOM_MEMORY_CUDA_DEVICE)) {
+    error = std::string(name) + " is not a sufficiently sized host or CUDA buffer";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  output.resize(static_cast<std::size_t>(elements));
+  if (required == 0u) return XTBLOOM_STATUS_SUCCESS;
+  if (buffer.memory_space == XTBLOOM_MEMORY_HOST) {
+    std::memcpy(output.data(), buffer.data, required);
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  const cudaError_t status =
+      cudaMemcpy(output.data(), buffer.data, required, cudaMemcpyDeviceToHost);
+  if (status != cudaSuccess) {
+    error = cuda_error_message(std::string("CUDA ") + name + " download", status);
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  (void)stream;
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename T>
+xtbloom_status_t copy_host_result_buffer(const char* name, const std::vector<T>& source,
+                                         xtbloom_buffer_t& destination, cudaStream_t stream,
+                                         std::string& error) {
+  const std::size_t bytes = source.size() * sizeof(T);
+  if (bytes == 0u) return XTBLOOM_STATUS_SUCCESS;
+  if (destination.data == nullptr || destination.size_bytes < bytes || destination.reserved != 0u) {
+    error = std::string(name) + " output is not a sufficiently sized buffer";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (destination.memory_space == XTBLOOM_MEMORY_HOST) {
+    std::memcpy(destination.data, source.data(), bytes);
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (destination.memory_space != XTBLOOM_MEMORY_CUDA_DEVICE) {
+    error = std::string(name) + " output has an unknown memory space";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const cudaError_t status =
+      cudaMemcpyAsync(destination.data, source.data(), bytes, cudaMemcpyHostToDevice, stream);
+  if (status != cudaSuccess) {
+    error = cuda_error_message(std::string("CUDA ") + name + " upload", status);
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename T>
+xtbloom_const_buffer_t host_const_buffer(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0u};
+}
+
+template <typename T>
+xtbloom_buffer_t host_result_buffer(std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0u};
+}
+
+struct NativePeriodicHostBridgeStorage {
+  std::vector<std::int64_t> atom_offsets;
+  std::vector<std::int32_t> atomic_numbers;
+  std::vector<double> positions;
+  std::vector<double> molecular_charges;
+  std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
+  std::vector<std::int64_t> point_offsets;
+  std::vector<double> point_positions;
+  std::vector<double> point_values;
+  std::vector<double> point_gammas;
+  std::vector<double> potential_shifts;
+  std::vector<std::int64_t> response_offsets;
+  std::vector<double> response_matrix;
+  std::vector<std::uint8_t> interaction_descriptors;
+  std::vector<std::uint8_t> interaction_payload;
+  std::vector<double> cell_matrices;
+  std::vector<std::int32_t> periodic_axes;
+
+  std::vector<double> energies;
+  std::vector<double> forces;
+  std::vector<double> atomic_charges;
+  std::vector<double> point_forces;
+  std::vector<std::int32_t> iterations;
+  std::vector<std::uint8_t> converged;
+  std::vector<xtbloom_status_t> system_statuses;
+  std::vector<double> dipole_moments;
+  std::vector<double> strain_derivatives;
+
+  xtbloom_batch_t batch{};
+  xtbloom_batch_result_t result{};
+
+  xtbloom_status_t stage_batch(const xtbloom_batch_t& source, cudaStream_t stream,
+                               std::string& error) {
+    std::int64_t coordinates = 0;
+    std::int64_t point_coordinates = 0;
+    std::int64_t descriptor_bytes = 0;
+    if (!checked_elements(source.total_atoms, 3, coordinates) ||
+        !checked_elements(source.total_point_charges, 3, point_coordinates) ||
+        (source.struct_size >= XTBLOOM_BATCH_V3_SIZE && source.total_interactions < 0) ||
+        (source.struct_size >= XTBLOOM_BATCH_V3_SIZE &&
+         !checked_elements(source.total_interactions,
+                           static_cast<std::int64_t>(sizeof(xtbloom_interaction_t)),
+                           descriptor_bytes))) {
+      error = "native periodic CUDA bridge input extent overflows int64_t";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+
+    xtbloom_status_t status = copy_cuda_or_host_buffer(
+        "atom_offsets", source.atom_offsets, source.batch_size + 1, stream, atom_offsets, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_cuda_or_host_buffer("atomic_numbers", source.atomic_numbers, source.total_atoms,
+                                      stream, atomic_numbers, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_cuda_or_host_buffer("positions", source.positions, coordinates, stream, positions,
+                                      error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_cuda_or_host_buffer("molecular_charges", source.molecular_charges,
+                                      source.batch_size, stream, molecular_charges, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_cuda_or_host_buffer("unpaired_electrons", source.unpaired_electrons,
+                                      source.batch_size, stream, unpaired_electrons, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    const bool spin_present =
+        source.struct_size >= XTBLOOM_BATCH_V2_SIZE &&
+        (source.spin_channels.data != nullptr || source.spin_channels.size_bytes != 0u);
+    if (spin_present) {
+      status = copy_cuda_or_host_buffer("spin_channels", source.spin_channels, source.batch_size,
+                                        stream, spin_channels, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    } else {
+      spin_channels.assign(static_cast<std::size_t>(source.batch_size), 1);
+    }
+
+    if (source.total_point_charges != 0 || source.point_charge_offsets.data != nullptr ||
+        source.point_charge_offsets.size_bytes != 0u) {
+      status = copy_cuda_or_host_buffer("point_charge_offsets", source.point_charge_offsets,
+                                        source.batch_size + 1, stream, point_offsets, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    } else {
+      point_offsets.assign(static_cast<std::size_t>(source.batch_size + 1), 0);
+    }
+    status = copy_cuda_or_host_buffer("point_charge_positions", source.point_charge_positions,
+                                      point_coordinates, stream, point_positions, error, true);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status =
+        copy_cuda_or_host_buffer("point_charge_values", source.point_charge_values,
+                                 source.total_point_charges, stream, point_values, error, true);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status =
+        copy_cuda_or_host_buffer("point_charge_gammas", source.point_charge_gammas,
+                                 source.total_point_charges, stream, point_gammas, error, true);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+    const bool shifts_present = source.atomic_potential_shifts.data != nullptr ||
+                                source.atomic_potential_shifts.size_bytes != 0u;
+    if (shifts_present) {
+      status = copy_cuda_or_host_buffer("atomic_potential_shifts", source.atomic_potential_shifts,
+                                        source.total_atoms, stream, potential_shifts, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
+    const bool response_present = source.total_charge_response_elements != 0 ||
+                                  source.charge_response_offsets.data != nullptr ||
+                                  source.charge_response_offsets.size_bytes != 0u ||
+                                  source.charge_response_matrix.data != nullptr ||
+                                  source.charge_response_matrix.size_bytes != 0u;
+    if (response_present) {
+      status = copy_cuda_or_host_buffer("charge_response_offsets", source.charge_response_offsets,
+                                        source.batch_size + 1, stream, response_offsets, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      status = copy_cuda_or_host_buffer("charge_response_matrix", source.charge_response_matrix,
+                                        source.total_charge_response_elements, stream,
+                                        response_matrix, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
+
+    if (source.struct_size >= XTBLOOM_BATCH_V3_SIZE && source.total_interactions != 0) {
+      status = copy_cuda_or_host_buffer("interaction_descriptors", source.interaction_descriptors,
+                                        descriptor_bytes, stream, interaction_descriptors, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      status =
+          copy_cuda_or_host_buffer("interaction_payload", source.interaction_payload,
+                                   static_cast<std::int64_t>(source.interaction_payload.size_bytes),
+                                   stream, interaction_payload, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
+
+    const bool lattice_present =
+        source.struct_size >= XTBLOOM_BATCH_V4_SIZE &&
+        (source.cell_matrices.data != nullptr || source.cell_matrices.size_bytes != 0u ||
+         source.periodic_axes.data != nullptr || source.periodic_axes.size_bytes != 0u);
+    if (lattice_present) {
+      status = copy_cuda_or_host_buffer("cell_matrices", source.cell_matrices,
+                                        source.batch_size * 9, stream, cell_matrices, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      status = copy_cuda_or_host_buffer("periodic_axes", source.periodic_axes, source.batch_size,
+                                        stream, periodic_axes, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
+
+    std::memcpy(&batch, &source, std::min<std::size_t>(source.struct_size, sizeof(batch)));
+    batch.atom_offsets = host_const_buffer(atom_offsets);
+    batch.atomic_numbers = host_const_buffer(atomic_numbers);
+    batch.positions = host_const_buffer(positions);
+    batch.molecular_charges = host_const_buffer(molecular_charges);
+    batch.unpaired_electrons = host_const_buffer(unpaired_electrons);
+    if (source.struct_size >= XTBLOOM_BATCH_V2_SIZE) {
+      batch.spin_channels = host_const_buffer(spin_channels);
+    }
+    batch.point_charge_offsets = host_const_buffer(point_offsets);
+    batch.point_charge_positions = host_const_buffer(point_positions);
+    batch.point_charge_values = host_const_buffer(point_values);
+    batch.point_charge_gammas = host_const_buffer(point_gammas);
+    batch.atomic_potential_shifts = host_const_buffer(potential_shifts);
+    batch.charge_response_offsets = host_const_buffer(response_offsets);
+    batch.charge_response_matrix = host_const_buffer(response_matrix);
+    if (source.struct_size >= XTBLOOM_BATCH_V3_SIZE) {
+      batch.interaction_descriptors = host_const_buffer(interaction_descriptors);
+      batch.interaction_payload = host_const_buffer(interaction_payload);
+    }
+    if (source.struct_size >= XTBLOOM_BATCH_V4_SIZE) {
+      batch.cell_matrices = host_const_buffer(cell_matrices);
+      batch.periodic_axes = host_const_buffer(periodic_axes);
+    }
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  void bind_result(const xtbloom_batch_result_t& source, const xtbloom_compute_options_t& options) {
+    result = {};
+    result.struct_size = source.struct_size;
+    result.api_version = source.api_version;
+    result.reserved = source.reserved;
+    const std::size_t batch_size = static_cast<std::size_t>(batch.batch_size);
+    const std::size_t atoms = static_cast<std::size_t>(batch.total_atoms);
+    const std::size_t points = static_cast<std::size_t>(batch.total_point_charges);
+    const auto has = [&](std::uint32_t flag) { return (options.flags & flag) != 0u; };
+    if (has(XTBLOOM_COMPUTE_ENERGY)) energies.resize(batch_size);
+    if (has(XTBLOOM_COMPUTE_FORCES)) forces.resize(atoms * 3u);
+    if (has(XTBLOOM_COMPUTE_ATOMIC_CHARGES)) atomic_charges.resize(atoms);
+    if (has(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)) point_forces.resize(points * 3u);
+    iterations.resize(batch_size);
+    converged.resize(batch_size);
+    system_statuses.resize(batch_size);
+    if (has(XTBLOOM_COMPUTE_DIPOLE_MOMENTS) && source.struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE) {
+      dipole_moments.resize(batch_size * 3u);
+    }
+    if (has(XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) &&
+        source.struct_size >= XTBLOOM_BATCH_RESULT_V3_SIZE) {
+      strain_derivatives.resize(batch_size * 9u);
+    }
+    result.energies = host_result_buffer(energies);
+    result.forces = host_result_buffer(forces);
+    result.atomic_charges = host_result_buffer(atomic_charges);
+    result.point_charge_forces = host_result_buffer(point_forces);
+    result.scc_iterations = host_result_buffer(iterations);
+    result.scc_converged = host_result_buffer(converged);
+    result.per_system_status = host_result_buffer(system_statuses);
+    if (source.struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE) {
+      result.dipole_moments = host_result_buffer(dipole_moments);
+    }
+    if (source.struct_size >= XTBLOOM_BATCH_RESULT_V3_SIZE) {
+      result.strain_derivatives = host_result_buffer(strain_derivatives);
+    }
+  }
+
+  xtbloom_status_t publish_result(xtbloom_batch_result_t& destination, cudaStream_t stream,
+                                  std::string& error) {
+    xtbloom_status_t status =
+        copy_host_result_buffer("energies", energies, destination.energies, stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_host_result_buffer("forces", forces, destination.forces, stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_host_result_buffer("atomic_charges", atomic_charges, destination.atomic_charges,
+                                     stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_host_result_buffer("point_charge_forces", point_forces,
+                                     destination.point_charge_forces, stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_host_result_buffer("scc_iterations", iterations, destination.scc_iterations,
+                                     stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_host_result_buffer("scc_converged", converged, destination.scc_converged, stream,
+                                     error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = copy_host_result_buffer("per_system_status", system_statuses,
+                                     destination.per_system_status, stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    if (result.struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE) {
+      status = copy_host_result_buffer("dipole_moments", dipole_moments, destination.dipole_moments,
+                                       stream, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
+    if (result.struct_size >= XTBLOOM_BATCH_RESULT_V3_SIZE) {
+      status = copy_host_result_buffer("strain_derivatives", strain_derivatives,
+                                       destination.strain_derivatives, stream, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
+    return cudaStreamSynchronize(stream) == cudaSuccess ? XTBLOOM_STATUS_SUCCESS
+                                                        : XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+};
 
 std::uint64_t hash_mix(std::uint64_t value) noexcept {
   value ^= value >> 30u;
@@ -1622,6 +1987,11 @@ struct TopologyKey {
   double scc_mixer_damping = kDefaultMixerDamping;
   xtbloom_determinism_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
   bool periodic_enabled = false;
+  /* Native cell identity is deliberately separate from the external
+   * charge-response operator represented by periodic_enabled. */
+  bool native_lattice_enabled = false;
+  std::vector<double> cell_matrices;
+  std::vector<std::int32_t> periodic_axes;
 
   std::uint64_t fingerprint() const noexcept {
     std::uint64_t hash = 0x4750555854424b59ULL;
@@ -1643,6 +2013,9 @@ struct TopologyKey {
     hash_append(hash, double_bits(scc_mixer_damping));
     hash_append(hash, static_cast<std::uint32_t>(determinism));
     hash_append(hash, periodic_enabled ? 1u : 0u);
+    hash_append(hash, native_lattice_enabled ? 1u : 0u);
+    hash_append_vector(hash, cell_matrices);
+    hash_append_vector(hash, periodic_axes);
     return hash == 0u ? 1u : hash;
   }
 };
@@ -1672,13 +2045,18 @@ struct FixedTopologyComparisonDeviceBinding {
   const std::int32_t* expected_spin_channels = nullptr;
   const std::int64_t* expected_point_offsets = nullptr;
   const std::int64_t* expected_response_offsets = nullptr;
+  const double* expected_cell_matrices = nullptr;
+  const std::int32_t* expected_periodic_axes = nullptr;
 
   std::int64_t atom_offset_elements = 0;
   std::int64_t atomic_number_elements = 0;
   std::int64_t batch_elements = 0;
   std::int64_t point_offset_elements = 0;
   std::int64_t response_offset_elements = 0;
+  std::int64_t cell_elements = 0;
+  std::int64_t periodic_axis_elements = 0;
   std::int64_t lattice_systems = 0;
+  std::uint8_t reject_native_external_combinations = 0u;
   std::uint32_t* request_error = nullptr;
 };
 
@@ -1696,6 +2074,8 @@ __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBindi
   if (binding.batch_elements > maximum) maximum = binding.batch_elements;
   if (binding.point_offset_elements > maximum) maximum = binding.point_offset_elements;
   if (binding.response_offset_elements > maximum) maximum = binding.response_offset_elements;
+  if (binding.cell_elements > maximum) maximum = binding.cell_elements;
+  if (binding.periodic_axis_elements > maximum) maximum = binding.periodic_axis_elements;
   for (std::int64_t element = index; element < maximum; element += stride) {
     const bool mismatch =
         fixed_topology_value_differs(binding.atom_offsets, binding.expected_atom_offsets, element,
@@ -1712,7 +2092,11 @@ __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBindi
         fixed_topology_value_differs(binding.point_offsets, binding.expected_point_offsets, element,
                                      binding.point_offset_elements) ||
         fixed_topology_value_differs(binding.response_offsets, binding.expected_response_offsets,
-                                     element, binding.response_offset_elements);
+                                     element, binding.response_offset_elements) ||
+        fixed_topology_value_differs(binding.cell_matrices, binding.expected_cell_matrices, element,
+                                     binding.cell_elements) ||
+        fixed_topology_value_differs(binding.periodic_axes, binding.expected_periodic_axes, element,
+                                     binding.periodic_axis_elements);
     if (mismatch) atomicMax(binding.request_error, kGfn2RequestErrorTopologyMismatch);
   }
 }
@@ -1746,6 +2130,10 @@ __global__ void validate_lattice_request_kernel(FixedTopologyComparisonDeviceBin
     atomicMax(binding.request_error, kGfn2RequestErrorInvalid);
     return;
   }
+  if (binding.reject_native_external_combinations != 0u) {
+    atomicMax(binding.request_error, kGfn2RequestErrorNotSupported);
+    return;
+  }
   atomicMax(binding.request_error, kGfn2RequestErrorNotImplemented);
 }
 
@@ -1754,11 +2142,16 @@ cudaError_t compare_fixed_topology_async(const FixedTopologyComparisonDeviceBind
   if (binding.request_error == nullptr || binding.atom_offset_elements <= 0 ||
       binding.atomic_number_elements <= 0 || binding.batch_elements <= 0 ||
       binding.point_offset_elements < 0 || binding.response_offset_elements < 0 ||
+      binding.cell_elements < 0 || binding.periodic_axis_elements < 0 ||
       binding.expected_atom_offsets == nullptr || binding.expected_atomic_numbers == nullptr ||
       binding.expected_molecular_charges == nullptr ||
       binding.expected_unpaired_electrons == nullptr || binding.expected_spin_channels == nullptr ||
       (binding.point_offset_elements != 0 && binding.expected_point_offsets == nullptr) ||
-      (binding.response_offset_elements != 0 && binding.expected_response_offsets == nullptr)) {
+      (binding.response_offset_elements != 0 && binding.expected_response_offsets == nullptr) ||
+      (binding.cell_elements != 0 &&
+       (binding.cell_matrices == nullptr || binding.expected_cell_matrices == nullptr)) ||
+      (binding.periodic_axis_elements != 0 &&
+       (binding.periodic_axes == nullptr || binding.expected_periodic_axes == nullptr))) {
     return cudaErrorInvalidValue;
   }
   std::int64_t maximum = binding.atom_offset_elements;
@@ -1766,6 +2159,8 @@ cudaError_t compare_fixed_topology_async(const FixedTopologyComparisonDeviceBind
   maximum = std::max(maximum, binding.batch_elements);
   maximum = std::max(maximum, binding.point_offset_elements);
   maximum = std::max(maximum, binding.response_offset_elements);
+  maximum = std::max(maximum, binding.cell_elements);
+  maximum = std::max(maximum, binding.periodic_axis_elements);
   constexpr int kThreads = 256;
   const std::int64_t required_blocks = (maximum + kThreads - 1) / kThreads;
   const int blocks = static_cast<int>(std::min<std::int64_t>(required_blocks, 256));
@@ -1909,6 +2304,27 @@ TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
     return TopologyMatch::kMismatch;
   }
 
+  /* A native XYZ cell is part of the fixed topology.  An absent suffix is
+   * equivalent to canonical all-NONE metadata only when the committed key has
+   * no native periodic item; an active suffix is compared below even when all
+   * of its masks are NONE so explicit and absent canonical forms remain
+   * interchangeable. */
+  const bool lattice_active = native_lattice_active(batch);
+  if (key.native_lattice_enabled && !lattice_active) return TopologyMatch::kMismatch;
+  if (lattice_active) {
+    const std::size_t expected_cells = key.cell_matrices.size() * sizeof(double);
+    const std::size_t expected_axes = key.periodic_axes.size() * sizeof(std::int32_t);
+    if (!valid_host_extent(batch.cell_matrices, expected_cells) ||
+        !valid_host_extent(batch.periodic_axes, expected_axes)) {
+      error = "fixed-topology reuse received malformed native lattice descriptors";
+      return TopologyMatch::kInvalid;
+    }
+    if (!double_buffer_equals(batch.cell_matrices, key.cell_matrices) ||
+        !buffer_equals(batch.periodic_axes, key.periodic_axes)) {
+      return TopologyMatch::kMismatch;
+    }
+  }
+
   if (!buffer_equals(batch.atom_offsets, key.atom_offsets) ||
       !buffer_equals(batch.atomic_numbers, key.atomic_numbers) ||
       !double_buffer_equals(batch.molecular_charges, key.molecular_charges) ||
@@ -2000,7 +2416,9 @@ bool context_enqueue_host_topology_probe_available(const xtbloom_batch_t& batch)
          host_or_absent(batch.molecular_charges) && host_or_absent(batch.unpaired_electrons) &&
          (batch.struct_size < XTBLOOM_BATCH_V2_SIZE || host_or_absent(batch.spin_channels)) &&
          host_or_absent(batch.point_charge_offsets) &&
-         host_or_absent(batch.charge_response_offsets);
+         host_or_absent(batch.charge_response_offsets) &&
+         (batch.struct_size < XTBLOOM_BATCH_V4_SIZE ||
+          (host_or_absent(batch.cell_matrices) && host_or_absent(batch.periodic_axes)));
 }
 
 bool context_enqueue_shape_policy_matches(const xtbloom_batch_t& batch,
@@ -2017,6 +2435,12 @@ bool context_enqueue_shape_policy_matches(const xtbloom_batch_t& batch,
       batch.charge_response_matrix.data != nullptr || batch.charge_response_matrix.size_bytes != 0u;
   const bool periodic_enabled = batch.atomic_potential_shifts.data != nullptr ||
                                 batch.atomic_potential_shifts.size_bytes != 0u || response_active;
+  /* Device native-cell leaves are checked in stream order.  A committed native
+   * key cannot be treated as molecular merely because the request omitted the
+   * optional V4 suffix; the reverse transition remains admissible and is
+   * classified by the fixed-topology comparison. */
+  const bool lattice_active = native_lattice_active(batch);
+  if (key.native_lattice_enabled && !lattice_active) return false;
   return batch.batch_size == expected_batch && batch.total_atoms == expected_atoms &&
          batch.total_point_charges == expected_points &&
          (!response_active || batch.total_charge_response_elements == expected_response) &&
@@ -2046,6 +2470,63 @@ xtbloom_status_t validate_offsets(const char* name, const std::vector<std::int64
       error = std::string(name) + " is not monotone or contains an empty molecule";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+/* Populate the host-only preparation key with the same canonical native-cell
+ * representation produced by CUDA topology staging.  prepare_host() reaches
+ * this helper directly, so it cannot rely on the device validation kernel to
+ * reject malformed cells or to normalize signed zero. */
+xtbloom_status_t populate_host_native_lattice_key(const xtbloom_batch_t& batch, TopologyKey& key,
+                                                  std::string& error) {
+  std::int64_t cell_elements = 0;
+  if (!checked_elements(batch.batch_size, 9, cell_elements) || batch.batch_size <= 0) {
+    error = "native lattice extent overflows int64_t";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  key.cell_matrices.assign(static_cast<std::size_t>(cell_elements), 0.0);
+  key.periodic_axes.assign(static_cast<std::size_t>(batch.batch_size), XTBLOOM_PERIODIC_AXES_NONE);
+  key.native_lattice_enabled = false;
+  if (!native_lattice_active(batch)) return XTBLOOM_STATUS_SUCCESS;
+
+  xtbloom_status_t status = copy_host_buffer("cell_matrices", batch.cell_matrices, cell_elements,
+                                             key.cell_matrices, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = copy_host_buffer("periodic_axes", batch.periodic_axes, batch.batch_size,
+                            key.periodic_axes, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+    const std::size_t cell_offset = static_cast<std::size_t>(system) * 9u;
+    const std::int32_t mask = key.periodic_axes[static_cast<std::size_t>(system)];
+    double* const cell = key.cell_matrices.data() + cell_offset;
+    if (mask == XTBLOOM_PERIODIC_AXES_NONE) {
+      for (int element = 0; element < 9; ++element) {
+        if (cell[element] != 0.0) {
+          error = "a nonperiodic batch item must use an all-zero cell matrix";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+        cell[element] = 0.0;
+      }
+      continue;
+    }
+    if ((mask & ~XTBLOOM_PERIODIC_AXES_XYZ) != 0) {
+      error = "periodic_axes contains unknown mask bits";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    if (mask != XTBLOOM_PERIODIC_AXES_XYZ) {
+      error = "one- and two-dimensional periodic axes are reserved but not supported";
+      return XTBLOOM_STATUS_NOT_SUPPORTED;
+    }
+    if (!gfn2::valid_lattice_cell_3d_binary64(cell)) {
+      error = "a periodic cell must be finite, right-handed, and nonsingular";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (int element = 0; element < 9; ++element) {
+      if (cell[element] == 0.0) cell[element] = 0.0;
+    }
+    key.native_lattice_enabled = true;
   }
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -2216,6 +2697,9 @@ xtbloom_status_t make_topology_key(const xtbloom_batch_t& batch,
     }
   }
 
+  status = populate_host_native_lattice_key(batch, key, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
   key.flags = options.flags;
   key.maximum_iterations = options.max_scc_iterations;
   key.charge_tolerance = options.charge_tolerance;
@@ -2280,6 +2764,9 @@ xtbloom_status_t make_topology_only_seed(
   key.scc_mixer_damping = public_scc_mixer_damping(options);
   key.determinism = public_determinism(options);
   key.periodic_enabled = snapshot.periodic_enabled;
+  key.native_lattice_enabled = snapshot.native_lattice_enabled;
+  key.cell_matrices = snapshot.cell_matrices;
+  key.periodic_axes = snapshot.periodic_axes;
 
   std::int64_t coordinate_elements = 0;
   std::int64_t point_coordinate_elements = 0;
@@ -2294,9 +2781,31 @@ xtbloom_status_t make_topology_only_seed(
     for (std::int64_t system = 0; system < snapshot.batch_size; ++system) {
       const std::int64_t begin = snapshot.atom_offsets[static_cast<std::size_t>(system)];
       const std::int64_t end = snapshot.atom_offsets[static_cast<std::size_t>(system + 1)];
+      const std::int64_t atom_count = end - begin;
+      const bool periodic =
+          snapshot.native_lattice_enabled &&
+          snapshot.periodic_axes[static_cast<std::size_t>(system)] == XTBLOOM_PERIODIC_AXES_XYZ;
       for (std::int64_t atom = begin; atom < end; ++atom) {
         const std::int64_t local = atom - begin;
-        positions[static_cast<std::size_t>(3 * atom)] = 8.0 * static_cast<double>(local);
+        if (!periodic) {
+          positions[static_cast<std::size_t>(3 * atom)] = 8.0 * static_cast<double>(local);
+          continue;
+        }
+        /* Keep the topology-only periodic seed inside the supplied cell.
+         * The old 8-bohr spacing intentionally avoided molecular overlap but
+         * aliases exactly under an 8-bohr lattice, making setup validation
+         * report a fabricated coincident image.  Distinct fractional points
+         * along the first lattice vector preserve a deterministic, finite
+         * geometry without assuming a particular cell length. */
+        const double fraction =
+            (static_cast<double>(local) + 1.0) / (static_cast<double>(atom_count) + 1.0);
+        const std::size_t cell_offset = static_cast<std::size_t>(system) * 9u;
+        positions[static_cast<std::size_t>(3 * atom)] =
+            fraction * snapshot.cell_matrices[cell_offset + 0u];
+        positions[static_cast<std::size_t>(3 * atom) + 1u] =
+            fraction * snapshot.cell_matrices[cell_offset + 1u];
+        positions[static_cast<std::size_t>(3 * atom) + 2u] =
+            fraction * snapshot.cell_matrices[cell_offset + 2u];
       }
     }
     point_positions.assign(static_cast<std::size_t>(point_coordinate_elements), 0.0);
@@ -2323,6 +2832,9 @@ bool topology_snapshot_matches(const Gfn2CudaTopologyHostSnapshot& snapshot,
          snapshot.point_charge_offsets == key.point_offsets &&
          snapshot.charge_response_offsets == key.response_offsets &&
          snapshot.periodic_enabled == key.periodic_enabled && options.flags == key.flags &&
+         snapshot.native_lattice_enabled == key.native_lattice_enabled &&
+         snapshot.cell_matrices == key.cell_matrices &&
+         snapshot.periodic_axes == key.periodic_axes &&
          options.max_scc_iterations == key.maximum_iterations &&
          options.charge_tolerance == key.charge_tolerance &&
          options.energy_tolerance == key.energy_tolerance &&
@@ -2372,6 +2884,12 @@ struct HostPlans {
   D4Plan d4;
   ExternalPointChargePlan external;
   PeriodicEmbeddingPlan periodic;
+  /* Native XYZ periodic topology and one-electron image plans are kept
+   * alongside the legacy caller-owned b + A*q embedding plan.  The SCC driver
+   * owns its Ewald/q-d/Q copies; these two owners are used by CUDA setup to
+   * validate and upload immutable metadata without conflating the components. */
+  PeriodicShortRangePlan native_periodic;
+  PeriodicIntegralPlan native_integrals;
   SccDriverPlan driver;
 
   /* GFN1 owns scalar SCC plans that cannot be represented by the GFN2
@@ -2453,7 +2971,8 @@ struct HostPlans {
         vector_bytes(key.atom_offsets) + vector_bytes(key.atomic_numbers) +
         vector_bytes(key.molecular_charges) + vector_bytes(key.unpaired_electrons) +
         vector_bytes(key.spin_channels) + vector_bytes(key.point_offsets) +
-        vector_bytes(key.response_offsets) + common::basis_plan_resident_bytes(basis) +
+        vector_bytes(key.response_offsets) + vector_bytes(key.cell_matrices) +
+        vector_bytes(key.periodic_axes) + common::basis_plan_resident_bytes(basis) +
         vector_bytes(integrals.matrix_offsets) + vector_bytes(coordination.atom_offsets) +
         vector_bytes(coordination.covalent_radius) + vector_bytes(repulsion.atom_offsets) +
         vector_bytes(repulsion.sqrt_alpha) + vector_bytes(repulsion.effective_charge) +
@@ -2659,7 +3178,11 @@ struct HostPlans {
                                  key.charge_tolerance, key.charge_tolerance, mixer, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
-    d4_enabled = false;
+    /* Periodic images make D4 meaningful even for a one-atom primitive cell:
+     * the self-image pair/ATM terms are part of the infinite lattice sum.
+     * Keep the molecular atom-count shortcut for non-periodic requests, but
+     * let every native XYZ plan reserve the D4 descriptors and scratch. */
+    d4_enabled = key.native_lattice_enabled;
     for (std::int64_t system = 0; system < batch; ++system) {
       d4_enabled = d4_enabled || key.atom_offsets[static_cast<std::size_t>(system + 1)] -
                                          key.atom_offsets[static_cast<std::size_t>(system)] >
@@ -2679,9 +3202,18 @@ struct HostPlans {
       status = make_periodic_embedding_plan(batch, atoms, key.atom_offsets.data(), periodic, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
     }
+    if (key.native_lattice_enabled) {
+      status = make_periodic_short_range_plan(batch, atoms, key.atom_offsets.data(),
+                                              key.cell_matrices.data(), native_periodic, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      status =
+          make_periodic_integral_plan(basis, integrals, native_periodic, native_integrals, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
     status =
         make_scc_driver_plan(wavefunction_layout, mulliken, es2, es3, aes2, eigensolver, mixer,
                              d4_enabled ? &d4 : nullptr, periodic_enabled ? &periodic : nullptr,
+                             key.native_lattice_enabled ? &native_periodic : nullptr,
                              static_cast<std::uint64_t>(key.maximum_iterations),
                              key.electronic_temperature, key.energy_tolerance, driver, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -2833,6 +3365,12 @@ struct HostPlans {
       sources.periodic.plan = &periodic;
       sources.periodic.shifts = setup_array(periodic_shifts);
       sources.periodic.response_matrices = setup_array(periodic_response);
+    }
+    if (key.native_lattice_enabled) {
+      sources.native_periodic.topology = &native_periodic;
+      sources.native_periodic.integrals = &native_integrals;
+      sources.native_periodic.ewald = driver.native_ewald_plan();
+      sources.native_periodic.multipole = driver.native_multipole_plan();
     }
     return sources;
   }
@@ -3370,6 +3908,8 @@ struct PublicResultState {
   const std::int32_t* expected_spin_channels = nullptr;
   const std::int64_t* expected_point_offsets = nullptr;
   const std::int64_t* expected_response_offsets = nullptr;
+  const double* expected_lattice_cells = nullptr;
+  const std::int32_t* expected_periodic_axes = nullptr;
   double* staged_lattice_cells = nullptr;
   std::int32_t* staged_periodic_axes = nullptr;
   double* host_lattice_cells = nullptr;
@@ -3543,6 +4083,10 @@ struct Gfn2CudaExecutionCache::Impl {
     bool submitted = false;
     HostPlans host;
     Gfn2SccSetupTopology topology_owner;
+    /* Native XYZ periodic image topology.  This owner is distinct from the
+     * common ragged AO topology: it retains cell/mask/translation arrays that
+     * the native short-range, Ewald, and multipole kernels borrow directly. */
+    Gfn2CudaPeriodicTopology native_periodic_topology_owner;
     Gfn2SccSetupInputs inputs_owner;
     Gfn2SccSetupEigensolver eigensolver_owner;
     Gfn2SccIterationInitializer initializer;
@@ -3876,6 +4420,26 @@ struct Gfn2CudaExecutionCache::Impl {
     return XTBLOOM_STATUS_SUCCESS;
   }
 
+  /* A native periodic request cannot yet execute its Ewald/multipole kernels
+   * on the device.  Keep the asynchronous public contract nevertheless: the
+   * worker owns the validated CPU reference bridge, while query(false) only
+   * observes this completion record and never performs a blocking CUDA or CPU
+   * operation.  The request retains the caller's borrowed descriptors until
+   * the worker has published all requested result buffers. */
+  struct NativePeriodicAsyncState {
+    ~NativePeriodicAsyncState() {
+      if (worker.joinable()) worker.join();
+    }
+
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool done = false;
+    xtbloom_status_t status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    std::uint32_t result_flags = 0u;
+    std::string error;
+    std::thread worker;
+  };
+
   struct ActiveRequest {
     std::uint64_t id = 0u;
     xtbloom_compute_options_t options{};
@@ -3888,6 +4452,7 @@ struct Gfn2CudaExecutionCache::Impl {
     xtbloom_status_t deferred_status = XTBLOOM_STATUS_SUCCESS;
     std::string deferred_error;
     bool host_upload_release_ordered = false;
+    std::shared_ptr<NativePeriodicAsyncState> native_periodic_async;
     /* A post-Graph host-side submission failure is already an accepted CUDA
      * request because the Graph may have consumed persistent state. If the
      * first exact-stream settlement attempt itself fails, keep the request
@@ -3903,6 +4468,12 @@ struct Gfn2CudaExecutionCache::Impl {
     std::unique_ptr<Prepared> pending_prepared;
     bool pending_topology_candidate = false;
   };
+
+  /* Native XYZ periodic requests use the CPU periodic evaluator as a
+   * correctness bridge until the CUDA Ewald/multipole kernels are available.
+   * The cache is retained per CUDA context so repeated synchronous calls keep
+   * the same SCC checkpoint and strict WARM semantics as the CPU backend. */
+  std::unique_ptr<Gfn2CpuExecutionCache> native_periodic_cpu_cache;
 
   static bool request_semantic_rejection(const PublicResultState& state) noexcept {
     const auto aggregate =
@@ -3974,6 +4545,12 @@ struct Gfn2CudaExecutionCache::Impl {
 #endif
       }
     }
+    if (active_request.native_periodic_async != nullptr &&
+        active_request.native_periodic_async->worker.joinable()) {
+      /* Native periodic async bridge workers reference this implementation;
+       * join them before member teardown begins. */
+      active_request.native_periodic_async->worker.join();
+    }
     if (prepared != nullptr) {
       prepared.reset();
     }
@@ -3997,6 +4574,17 @@ struct Gfn2CudaExecutionCache::Impl {
    * strand queued work after the public Request rolls back its reservation. */
   void settle_active_request_exception_noexcept_locked() noexcept {
     if (active_request.id == 0u) return;
+
+    if (active_request.native_periodic_async != nullptr) {
+      /* The worker does not take the cache mutex, so joining while this guard
+       * still owns it is safe and guarantees no borrowed descriptor survives a
+       * failed enqueue handoff. */
+      if (active_request.native_periodic_async->worker.joinable()) {
+        active_request.native_periodic_async->worker.join();
+      }
+      active_request = {};
+      return;
+    }
 
     int caller_device = -1;
     const bool caller_device_known = cudaGetDevice(&caller_device) == cudaSuccess;
@@ -4110,6 +4698,228 @@ struct Gfn2CudaExecutionCache::Impl {
     solver_jacobi = candidate_jacobi;
     blas = candidate_blas;
     handles_created = true;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t execute_native_periodic_cpu_bridge_locked(
+      const xtbloom_batch_t& source, const xtbloom_compute_options_t& options,
+      xtbloom_batch_result_t& destination, bool require_prepared_topology, std::string& error) {
+    if (options.model != XTBLOOM_MODEL_GFN2_XTB) {
+      error = "native periodic execution is released only for GFN2";
+      return XTBLOOM_STATUS_NOT_IMPLEMENTED;
+    }
+    const cudaError_t fence_status = cudaStreamSynchronize(stream);
+    if (fence_status != cudaSuccess) {
+      error = cuda_error_message("CUDA native periodic ingress fence", fence_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    xtbloom_status_t status = validate_native_lattice_request_sync(source, error, true);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+    /* Native periodic requests use the CPU evaluator only as their current
+     * scientific implementation, but their immutable cell/mask identity is
+     * still owned by the CUDA topology staging transaction. Stage before
+     * running the bridge so device-resident descriptors are validated without
+     * host dereference, and so a changed cell cannot silently reuse the prior
+     * topology. A candidate is published only after the bridge has produced a
+     * complete result; any failure aborts it and preserves the old topology. */
+    const Gfn2CudaTopologyStagingDiagnostic topology_staged =
+        topology_staging.stage_and_validate(source, error);
+    if (!topology_staged.success()) return topology_staged.status;
+    bool topology_candidate_pending =
+        topology_staged.disposition == Gfn2CudaTopologyStageDisposition::kCandidate;
+    const auto abort_topology_candidate = [&]() noexcept {
+      if (topology_candidate_pending) {
+        topology_staging.abort_candidate();
+        topology_candidate_pending = false;
+      }
+    };
+
+    NativePeriodicHostBridgeStorage staged;
+    status = staged.stage_batch(source, stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      abort_topology_candidate();
+      return status;
+    }
+    if ((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+      bool any_periodic = false;
+      bool all_xyz = true;
+      for (const std::int32_t mask : staged.periodic_axes) {
+        any_periodic = any_periodic || mask == XTBLOOM_PERIODIC_AXES_XYZ;
+        all_xyz = all_xyz && mask == XTBLOOM_PERIODIC_AXES_XYZ;
+      }
+      if (!all_xyz) {
+        error = any_periodic ? "native-periodic strain derivatives require every batch item to use "
+                               "native XYZ periodicity"
+                             : "native-periodic strain derivatives require native XYZ periodic "
+                               "descriptors";
+        abort_topology_candidate();
+        return any_periodic ? XTBLOOM_STATUS_NOT_SUPPORTED : XTBLOOM_STATUS_NOT_IMPLEMENTED;
+      }
+    }
+    if (require_prepared_topology) {
+      if (prepared == nullptr) {
+        abort_topology_candidate();
+        error = "CUDA native periodic plan has no prepared fixed-topology runtime";
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      if (topology_candidate_pending) {
+        abort_topology_candidate();
+        error = "the batch topology does not match the fixed CUDA plan topology";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      const TopologyMatch match =
+          match_existing_topology(staged.batch, options, prepared->host.key, error);
+      if (match == TopologyMatch::kInvalid) {
+        abort_topology_candidate();
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      if (match != TopologyMatch::kMatch) {
+        abort_topology_candidate();
+        error = "the batch topology does not match the fixed CUDA plan topology";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+
+    staged.bind_result(destination, options);
+    try {
+      if (native_periodic_cpu_cache == nullptr) {
+        native_periodic_cpu_cache = std::make_unique<Gfn2CpuExecutionCache>(0);
+      }
+    } catch (const std::bad_alloc&) {
+      abort_topology_candidate();
+      error = "failed to allocate the native periodic CPU reference cache";
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    status = execute_restricted_gfn2_cpu(*native_periodic_cpu_cache, staged.batch, options,
+                                         staged.result, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      abort_topology_candidate();
+      return status;
+    }
+    if (topology_candidate_pending) {
+      const Gfn2CudaTopologyStagingDiagnostic prepared_commit =
+          topology_staging.prepare_candidate_commit(error);
+      if (!prepared_commit.success()) {
+        abort_topology_candidate();
+        return prepared_commit.status;
+      }
+      if (!topology_staging.candidate_publishable()) {
+        abort_topology_candidate();
+        error = "native periodic CUDA topology candidate is not publishable";
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+    }
+    status = staged.publish_result(destination, stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      abort_topology_candidate();
+      return status;
+    }
+    if (topology_candidate_pending && !topology_staging.publish_candidate()) {
+      error = "native periodic CUDA topology publication invariant failed";
+      /* Keep the staging owner reusable after an invariant failure.  The
+       * caller-output commit has already completed, so this is reported as a
+       * catastrophic internal error, but retaining the unpublished candidate
+       * would poison every later request with kCandidatePending. */
+      abort_topology_candidate();
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    /* The bridge owns the ABI-v3 publication boundary.  Do not rely on an
+     * internal CPU result image to carry newly released CUDA-visible flags:
+     * compute the advertised bits from the validated request here, at the
+     * same commit point as the copied buffers. */
+    destination.flags =
+        static_cast<std::uint32_t>((source.atomic_potential_shifts.data != nullptr ||
+                                    source.atomic_potential_shifts.size_bytes != 0u ||
+                                    source.charge_response_matrix.data != nullptr ||
+                                    source.charge_response_matrix.size_bytes != 0u)
+                                       ? XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES
+                                       : 0u) |
+        static_cast<std::uint32_t>((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u
+                                       ? XTBLOOM_RESULT_DIPOLE_MOMENTS
+                                       : 0u) |
+        static_cast<std::uint32_t>((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u
+                                       ? XTBLOOM_RESULT_STRAIN_DERIVATIVES
+                                       : 0u);
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t enqueue_native_periodic_cpu_bridge_locked(
+      const xtbloom_batch_t& source, const xtbloom_compute_options_t& options,
+      const xtbloom_batch_result_t& destination, bool require_prepared_topology,
+      NativePeriodicAsyncState& state, std::string& error) {
+    /* Capture only descriptor values.  The public request contract keeps the
+     * caller-owned arrays and result descriptor alive until request completion;
+     * the worker therefore may safely consume their borrowed pointers after
+     * this enqueue function returns. */
+    const xtbloom_batch_t source_copy = source;
+    const xtbloom_compute_options_t options_copy = options;
+    const xtbloom_batch_result_t destination_copy = destination;
+    xtbloom_batch_result_t* const destination_owner =
+        const_cast<xtbloom_batch_result_t*>(&destination);
+    try {
+      state.worker = std::thread([this, &state, source_copy, options_copy, destination_copy,
+                                  destination_owner, require_prepared_topology] {
+        xtbloom_status_t status = XTBLOOM_STATUS_INTERNAL_ERROR;
+        std::string worker_error;
+        std::uint32_t worker_result_flags = 0u;
+        int previous_device = -1;
+        const bool previous_device_known = cudaGetDevice(&previous_device) == cudaSuccess;
+        try {
+          const cudaError_t select_status = cudaSetDevice(device_id);
+          if (select_status == cudaSuccess) {
+            xtbloom_batch_result_t worker_result = destination_copy;
+            status = execute_native_periodic_cpu_bridge_locked(
+                source_copy, options_copy, worker_result, require_prepared_topology, worker_error);
+            if (status == XTBLOOM_STATUS_SUCCESS) {
+              /* Result flags are the only descriptor field published by the
+               * asynchronous backend.  Buffer bytes are committed by the bridge
+               * before this store and are observed after the completion record. */
+              destination_owner->flags = worker_result.flags;
+              worker_result_flags = worker_result.flags;
+            }
+          } else {
+            worker_error =
+                cuda_error_message("CUDA native periodic worker device selection", select_status);
+            status = XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+          }
+        } catch (const std::bad_alloc&) {
+          worker_error = "failed to allocate while executing the native periodic CUDA bridge";
+          status = XTBLOOM_STATUS_ALLOCATION_FAILED;
+        } catch (const std::exception& exception) {
+          worker_error = exception.what();
+          status = XTBLOOM_STATUS_INTERNAL_ERROR;
+        } catch (...) {
+          worker_error = "unknown exception while executing the native periodic CUDA bridge";
+          status = XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        if (previous_device_known && previous_device != device_id) {
+          const cudaError_t restore_status = cudaSetDevice(previous_device);
+          if (restore_status != cudaSuccess && status == XTBLOOM_STATUS_SUCCESS) {
+            worker_error = cuda_error_message("CUDA native periodic worker device restoration",
+                                              restore_status);
+            status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          }
+        }
+        {
+          std::lock_guard<std::mutex> lock(state.mutex);
+          state.status = status;
+          state.error = std::move(worker_error);
+          state.result_flags = status == XTBLOOM_STATUS_SUCCESS ? worker_result_flags : 0u;
+          state.done = true;
+        }
+        state.condition.notify_all();
+      });
+    } catch (const std::system_error& exception) {
+      error =
+          std::string("failed to start native periodic CUDA bridge worker: ") + exception.what();
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    } catch (const std::bad_alloc&) {
+      error = "failed to allocate native periodic CUDA bridge worker state";
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   }
 
@@ -4810,6 +5620,12 @@ struct Gfn2CudaExecutionCache::Impl {
                        arena_pointer<double>(arena, offset.h0_pair_scale)};
     binding.plan.es2 = candidate.plan_seed.es2_batch;
     binding.plan.aes2 = aes2_enabled ? candidate.plan_seed.aes2_batch : Gfn2AES2DeviceBatch{};
+    binding.plan.native_integrals = candidate.host.key.native_lattice_enabled
+                                        ? candidate.plan_seed.native_integrals
+                                        : Gfn2NativePeriodicIntegralDeviceBatch{};
+    binding.plan.native_short_range = candidate.host.key.native_lattice_enabled
+                                          ? candidate.plan_seed.native_short_range_batch
+                                          : Gfn2NativePeriodicShortRangeDeviceBatch{};
     binding.input = {arena_pointer<double>(arena, offset.candidate_positions), coordinates, token};
     binding.activity = {arena_pointer<std::uint8_t>(arena, offset.requested), batch,
                         arena_pointer<std::uint8_t>(arena, offset.output_published), batch, token};
@@ -5061,6 +5877,10 @@ struct Gfn2CudaExecutionCache::Impl {
                                                nullptr,
                                                0}
                      : Gfn2AES2DeviceWorkspace{};
+    binding.workspace.native_short_range =
+        candidate.host.key.native_lattice_enabled
+            ? candidate.workspace_seed.native_short_range_workspace
+            : Gfn2NativePeriodicShortRangeDeviceWorkspace{};
     binding.workspace.plan_token = token;
     binding.geometry_epoch = {arena_pointer<std::uint64_t>(arena, offset.geometry_epoch), 1, token};
     binding.plan_token = token;
@@ -5283,6 +6103,45 @@ struct Gfn2CudaExecutionCache::Impl {
     if (candidate.host.periodic_enabled) {
       candidate.plan_seed.periodic_batch.shifts = device.committed_periodic_shifts;
       candidate.plan_seed.periodic_batch.response_matrices = device.committed_periodic_response;
+    }
+
+    if (candidate.host.key.native_lattice_enabled) {
+      /* Native XYZ terms consume the exact geometry and SCC multipoles that
+       * survived numerical-refresh publication.  The setup owner initially
+       * points at topology-only seed positions and leaves charge channels
+       * empty; replace those borrowed views here so every iteration observes
+       * the committed epoch rather than stale setup geometry. */
+      candidate.plan_seed.native_short_range_batch.positions = device.committed_positions;
+      candidate.plan_seed.native_short_range_batch.position_elements = coordinates;
+      candidate.plan_seed.native_ewald_batch.positions = device.committed_positions;
+      candidate.plan_seed.native_ewald_batch.position_elements = coordinates;
+      candidate.plan_seed.native_ewald_batch.shell_charges =
+          candidate.workspace_seed.physical_topology.shell_charges;
+      candidate.plan_seed.native_ewald_batch.shell_charge_elements = shells;
+      candidate.plan_seed.native_multipole_batch.positions = device.committed_positions;
+      candidate.plan_seed.native_multipole_batch.position_elements = coordinates;
+      candidate.plan_seed.native_multipole_batch.coordination_numbers =
+          candidate.plan_seed.geometry_cache.coordination_numbers;
+      candidate.plan_seed.native_multipole_batch.coordination_number_elements = atoms;
+      candidate.plan_seed.native_multipole_batch.atomic_charges =
+          candidate.workspace_seed.physical_topology.atomic_charges;
+      candidate.plan_seed.native_multipole_batch.atomic_charge_elements = atoms;
+      candidate.plan_seed.native_multipole_batch.atomic_dipoles =
+          candidate.workspace_seed.physical_topology.atomic_dipoles;
+      candidate.plan_seed.native_multipole_batch.atomic_dipole_elements = 3 * atoms;
+      candidate.plan_seed.native_multipole_batch.atomic_quadrupoles =
+          candidate.workspace_seed.physical_topology.atomic_quadrupoles;
+      candidate.plan_seed.native_multipole_batch.atomic_quadrupole_elements = 6 * atoms;
+      if (candidate.host.d4_enabled) {
+        candidate.plan_seed.native_d4_batch.positions = device.committed_positions;
+        candidate.plan_seed.native_d4_batch.position_elements = coordinates;
+        candidate.plan_seed.native_d4_batch.coordination_numbers =
+            candidate.plan_seed.geometry_cache.coordination_numbers;
+        candidate.plan_seed.native_d4_batch.coordination_number_elements = atoms;
+        candidate.plan_seed.native_d4_batch.atomic_charges =
+            candidate.workspace_seed.physical_topology.atomic_charges;
+        candidate.plan_seed.native_d4_batch.atomic_charge_elements = atoms;
+      }
     }
 
     std::vector<Gfn2SccCacheProvenanceBinding> provenance;
@@ -6025,6 +6884,46 @@ struct Gfn2CudaExecutionCache::Impl {
       post_plan.external_point_charge_cache = candidate.plan_seed.explicit_point_charge_cache;
       post_plan.periodic_batch = periodic_batch;
 
+      /* Native XYZ-periodic post-SCC refresh must use the same immutable
+       * lattice metadata as the SCC iteration.  The stationary force pass
+       * rebuilds the final shell/atomic potentials from the committed raw
+       * q/d/Q arrays, so bind these views here rather than silently falling
+       * back to the molecular ES2/AES2/D4 evaluators. */
+      if (candidate.host.key.native_lattice_enabled) {
+        auto native_ewald = candidate.plan_seed.native_ewald_batch;
+        native_ewald.positions = positions;
+        native_ewald.position_elements = coordinates;
+        native_ewald.shell_charges = candidate.workspace_seed.physical_topology.shell_charges;
+        native_ewald.shell_charge_elements = shells;
+        post_plan.native_ewald_batch = native_ewald;
+
+        auto native_multipole = candidate.plan_seed.native_multipole_batch;
+        native_multipole.positions = positions;
+        native_multipole.position_elements = coordinates;
+        native_multipole.coordination_numbers =
+            candidate.plan_seed.geometry_cache.coordination_numbers;
+        native_multipole.coordination_number_elements = atoms;
+        native_multipole.atomic_charges = candidate.workspace_seed.physical_topology.atomic_charges;
+        native_multipole.atomic_charge_elements = atoms;
+        native_multipole.atomic_dipoles = candidate.workspace_seed.physical_topology.atomic_dipoles;
+        native_multipole.atomic_dipole_elements = atomic_dipole_elements;
+        native_multipole.atomic_quadrupoles =
+            candidate.workspace_seed.physical_topology.atomic_quadrupoles;
+        native_multipole.atomic_quadrupole_elements = atomic_quadrupole_elements;
+        post_plan.native_multipole_batch = native_multipole;
+
+        if (d4_enabled) {
+          auto native_d4 = candidate.plan_seed.native_d4_batch;
+          native_d4.positions = positions;
+          native_d4.position_elements = coordinates;
+          native_d4.coordination_numbers = candidate.plan_seed.geometry_cache.coordination_numbers;
+          native_d4.coordination_number_elements = atoms;
+          native_d4.atomic_charges = candidate.workspace_seed.physical_topology.atomic_charges;
+          native_d4.atomic_charge_elements = atoms;
+          post_plan.native_d4_batch = native_d4;
+        }
+      }
+
       std::uint32_t classical_components =
           static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kRepulsion) |
           static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kES2);
@@ -6192,6 +7091,16 @@ struct Gfn2CudaExecutionCache::Impl {
                           stationary_weighted_density,
                           matrices,
                           token};
+      if (candidate.host.key.native_lattice_enabled) {
+        /* Native image-aware reverse passes must differentiate the wrapped
+         * coordinates used by preprocessing.  The public/classical force
+         * path continues to consume the committed (unwrapped) coordinates;
+         * only the one-electron image displacement is periodicized here. */
+        const auto& native_short_range = candidate.workspace_seed.native_short_range_workspace;
+        binding.input.h0.positions = native_short_range.wrapped_positions;
+        binding.input.h0.position_elements = native_short_range.wrapped_position_elements;
+        binding.input.h0.native_periodic = candidate.plan_seed.native_integrals;
+      }
 
       auto* const post_complete_shell =
           arena_pointer<double>(execution_arena, execution.post_complete_shell);
@@ -6366,6 +7275,17 @@ struct Gfn2CudaExecutionCache::Impl {
             1,
             token};
       }
+      if (candidate.host.key.native_lattice_enabled) {
+        /* These workspaces are persistent SCC-arena ranges.  Borrowing them
+         * keeps post-SCC refresh allocation-free and preserves graph replay
+         * address stability; the native evaluators stage all values before
+         * publishing their requested component slices. */
+        post_workspace.native_ewald = candidate.workspace_seed.native_ewald_workspace;
+        post_workspace.native_multipole = candidate.workspace_seed.native_multipole_workspace;
+        if (d4_enabled) {
+          post_workspace.native_d4 = candidate.workspace_seed.native_d4_workspace;
+        }
+      }
       post_workspace.composition = {
           arena_pointer<double>(execution_arena, execution.post_composition_shell),
           shells,
@@ -6489,6 +7409,55 @@ struct Gfn2CudaExecutionCache::Impl {
           classical_geometry,
           token,
           {}};
+      if (candidate.host.key.native_lattice_enabled) {
+        /* The SCC iteration stores native derivative tuples in its persistent
+         * arena.  Borrow those exact ranges for the stationary force reverse
+         * pass; only the converged physical q/d/Q projections are replaced in
+         * the immutable batch views below. */
+        binding.workspace.classical.native_short_range_workspace =
+            candidate.workspace_seed.native_short_range_workspace;
+        binding.workspace.classical.native_ewald_workspace =
+            candidate.workspace_seed.native_ewald_workspace;
+        binding.workspace.classical.native_multipole_workspace =
+            candidate.workspace_seed.native_multipole_workspace;
+        binding.workspace.classical.native_d4_workspace =
+            candidate.workspace_seed.native_d4_workspace;
+        auto native_short_range = candidate.plan_seed.native_short_range_batch;
+        native_short_range.positions = positions;
+        native_short_range.position_elements = coordinates;
+        native_short_range.atomic_numbers = atomic_numbers;
+        native_short_range.atomic_number_elements = atoms;
+        auto native_ewald = candidate.plan_seed.native_ewald_batch;
+        native_ewald.positions = positions;
+        native_ewald.position_elements = coordinates;
+        native_ewald.shell_charges = stationary_shell_charges;
+        native_ewald.shell_charge_elements = shells;
+        auto native_multipole = candidate.plan_seed.native_multipole_batch;
+        native_multipole.positions = positions;
+        native_multipole.position_elements = coordinates;
+        native_multipole.coordination_numbers =
+            candidate.plan_seed.geometry_cache.coordination_numbers;
+        native_multipole.coordination_number_elements = atoms;
+        native_multipole.atomic_charges = stationary_atomic_charges;
+        native_multipole.atomic_charge_elements = atoms;
+        native_multipole.atomic_dipoles = stationary_atomic_dipoles;
+        native_multipole.atomic_dipole_elements = atomic_dipole_elements;
+        native_multipole.atomic_quadrupoles = stationary_atomic_quadrupoles;
+        native_multipole.atomic_quadrupole_elements = atomic_quadrupole_elements;
+        auto native_d4 = candidate.plan_seed.native_d4_batch;
+        native_d4.positions = positions;
+        native_d4.position_elements = coordinates;
+        native_d4.atomic_numbers = atomic_numbers;
+        native_d4.atomic_number_elements = atoms;
+        native_d4.coordination_numbers = candidate.plan_seed.geometry_cache.coordination_numbers;
+        native_d4.coordination_number_elements = atoms;
+        native_d4.atomic_charges = stationary_atomic_charges;
+        native_d4.atomic_charge_elements = atoms;
+        binding.plan.classical_plan.native_short_range_batch = native_short_range;
+        binding.plan.classical_plan.native_ewald_batch = native_ewald;
+        binding.plan.classical_plan.native_multipole_batch = native_multipole;
+        binding.plan.classical_plan.native_d4_batch = native_d4;
+      }
       if (gfn1_enabled) {
         binding.workspace.classical.gfn1_correction = {
             arena_pointer<double>(execution_arena, execution.gfn1_weights),
@@ -6579,6 +7548,28 @@ struct Gfn2CudaExecutionCache::Impl {
       if (cuda_status != cudaSuccess) {
         error = cuda_error_message("CUDA initial geometry-cache construction", cuda_status);
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      if (candidate.host.key.native_lattice_enabled) {
+        /* The setup smoke runs the stationary force chain before the normal
+         * numerical-refresh head.  Populate the native image-aware workspace
+         * explicitly so wrapped coordinates (and periodic CN) are valid
+         * inputs to the native H0/classical reverse leaves exercised below. */
+        auto native_short_range = candidate.plan_seed.native_short_range_batch;
+        native_short_range.positions = binding.input.classical.positions;
+        native_short_range.position_elements = binding.input.classical.position_elements;
+        cuda_status = evaluate_gfn2_native_periodic_short_range_cuda(
+            native_short_range, candidate.workspace_seed.native_short_range_workspace,
+            binding.plan.coordination_cache.coordination_numbers,
+            candidate.workspace_seed.native_short_range_workspace.repulsion_energies,
+            candidate.workspace_seed.native_short_range_workspace.repulsion_gradients,
+            candidate.workspace_seed.native_short_range_workspace.repulsion_strain,
+            binding.diagnostics.coordination_system_errors,
+            binding.diagnostics.coordination_device_error, stream);
+        if (cuda_status != cudaSuccess) {
+          error = cuda_error_message("CUDA initial native periodic short-range construction",
+                                     cuda_status);
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
       }
       if (!gfn1_enabled) {
         cuda_status = reset_gfn2_aes2_device_errors_cuda(
@@ -6706,6 +7697,16 @@ struct Gfn2CudaExecutionCache::Impl {
     const std::int64_t points = candidate.host.external.total_point_charges;
     const std::uint64_t token = candidate.host.plan_token;
     const std::uint32_t requested = candidate.host.key.flags;
+    /* The internal inference publication ABI predates the v3 strain suffix.
+     * Strain is published by the energy/force bridge, so keep it in the
+     * complete request identity above but omit it from this fixed-property
+     * publication mask. */
+    const std::uint32_t publication_requested =
+        requested & (static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_FORCES) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS));
     const bool d4_enabled = candidate.host.d4_enabled;
     const bool gfn1_enabled = candidate.host.gfn1_enabled;
     const bool energy_requested =
@@ -6885,7 +7886,29 @@ struct Gfn2CudaExecutionCache::Impl {
         candidate.numerical.preprocessing.geometry_epoch,
         candidate.numerical.device.committed_generations,
         batch,
+        candidate.host.key.native_lattice_enabled
+            ? candidate.workspace_seed.native_short_range_workspace.repulsion_energies
+            : nullptr,
+        candidate.host.key.native_lattice_enabled ? batch : 0,
     };
+    if (candidate.host.key.native_lattice_enabled && d4_enabled) {
+      /* Native periodic ATM consumes the same committed geometry/CN views as
+       * the SCC iteration.  Keep the old molecular D4 descriptor empty on
+       * this route so terminal validation cannot accidentally mix pair-list
+       * and image-aware terms. */
+      inference.terminal_plan.native_d4_batch = candidate.plan_seed.native_d4_batch;
+      /* `repulsion` may use a terminal-arena copy of atomic numbers when the
+       * immutable setup owner did not retain a device view.  Native D4 is
+       * validated as one zero-copy descriptor and therefore must borrow that
+       * exact pointer rather than the setup-only seed pointer. */
+      inference.terminal_plan.native_d4_batch.atomic_numbers = terminal_atomic_numbers;
+      inference.terminal_plan.native_d4_batch.atomic_number_elements = atoms;
+      inference.terminal_plan.native_d4_batch.positions =
+          candidate.numerical.device.committed_positions;
+      inference.terminal_plan.native_d4_batch.position_elements = coordinates;
+      inference.terminal_plan.native_d4_batch.active_mask = candidate.numerical.device.eligible;
+      inference.terminal_plan.native_d4_batch.active_mask_elements = batch;
+    }
     inference.terminal_activity = {
         candidate.numerical.device.eligible, batch, token, {nullptr, 0, 0}};
     inference.terminal_results = {
@@ -6923,6 +7946,13 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::uint64_t>(arena, offset.terminal_epoch_snapshot);
     inference.terminal_workspace.epoch_snapshot_elements = 1;
     inference.terminal_workspace.plan_token = token;
+    if (candidate.host.key.native_lattice_enabled && d4_enabled) {
+      /* Reuse the fixed SCC arena.  The terminal ATM launch is ordered after
+       * the SCC loop and before the stationary force reverse pass, so this
+       * borrow adds no per-call allocation or transfer. */
+      inference.terminal_workspace.native_d4_workspace =
+          candidate.workspace_seed.native_d4_workspace;
+    }
     inference.terminal_diagnostics = {
         arena_pointer<std::uint32_t>(arena, offset.terminal_repulsion_error),
         arena_pointer_if<std::uint32_t>(arena, offset.terminal_d4_system_errors,
@@ -6959,7 +7989,7 @@ struct Gfn2CudaExecutionCache::Impl {
     };
     inference.publication_plan = {
         kGfn2InferencePublicationAbiVersion,
-        requested,
+        publication_requested,
         token,
         static_cast<std::uint64_t>(candidate.host.key.maximum_iterations),
         batch,
@@ -7106,6 +8136,8 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t expected_spin_channels = 0u;
       std::size_t expected_point_offsets = 0u;
       std::size_t expected_response_offsets = 0u;
+      std::size_t expected_lattice_cells = 0u;
+      std::size_t expected_periodic_axes = 0u;
       std::size_t lattice_cells = 0u;
       std::size_t periodic_axes = 0u;
     } device_offset;
@@ -7143,6 +8175,8 @@ struct Gfn2CudaExecutionCache::Impl {
     device_offset.expected_spin_channels = device_layout.append<std::int32_t>(batch);
     device_offset.expected_point_offsets = device_layout.append<std::int64_t>(batch + 1);
     device_offset.expected_response_offsets = device_layout.append<std::int64_t>(batch + 1);
+    device_offset.expected_lattice_cells = device_layout.append<double>(lattice_elements);
+    device_offset.expected_periodic_axes = device_layout.append<std::int32_t>(batch);
     device_offset.lattice_cells = device_layout.append<double>(lattice_elements);
     device_offset.periodic_axes = device_layout.append<std::int32_t>(batch);
     if (!host_layout.valid() || !device_layout.valid()) {
@@ -7207,6 +8241,10 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::int64_t>(device_arena, device_offset.expected_point_offsets);
     state.expected_response_offsets =
         arena_pointer<std::int64_t>(device_arena, device_offset.expected_response_offsets);
+    state.expected_lattice_cells =
+        arena_pointer<double>(device_arena, device_offset.expected_lattice_cells);
+    state.expected_periodic_axes =
+        arena_pointer<std::int32_t>(device_arena, device_offset.expected_periodic_axes);
     state.staged_lattice_cells = arena_pointer<double>(device_arena, device_offset.lattice_cells);
     state.staged_periodic_axes =
         arena_pointer<std::int32_t>(device_arena, device_offset.periodic_axes);
@@ -7252,6 +8290,8 @@ struct Gfn2CudaExecutionCache::Impl {
     upload(device_offset.expected_spin_channels, candidate.host.key.spin_channels);
     upload(device_offset.expected_point_offsets, candidate.host.key.point_offsets);
     upload(device_offset.expected_response_offsets, candidate.host.key.response_offsets);
+    upload(device_offset.expected_lattice_cells, candidate.host.key.cell_matrices);
+    upload(device_offset.expected_periodic_axes, candidate.host.key.periodic_axes);
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA fixed-topology comparison upload", cuda_status);
       return XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -7395,6 +8435,26 @@ struct Gfn2CudaExecutionCache::Impl {
         message << " system=" << std::distance(execution_system_errors, first_system_error)
                 << " system_error=" << *first_system_error;
       }
+      /* Candidate setup failures otherwise expose only the execution-level
+       * mapping (for example, kClassicalForceFailure).  Include the first
+       * nested force-stage code while the validation arena is still live so a
+       * native periodic binding defect remains actionable without a debugger. */
+      std::vector<std::uint32_t> classical_errors(static_cast<std::size_t>(batch), 0u);
+      std::uint32_t classical_device_error = 0u;
+      if (cudaMemcpy(classical_errors.data(), binding.diagnostics.classical_system_errors,
+                     static_cast<std::size_t>(batch) * sizeof(std::uint32_t),
+                     cudaMemcpyDeviceToHost) == cudaSuccess &&
+          cudaMemcpy(&classical_device_error, binding.diagnostics.classical_device_error,
+                     sizeof(classical_device_error), cudaMemcpyDeviceToHost) == cudaSuccess) {
+        const auto first_classical = std::find_if(classical_errors.begin(), classical_errors.end(),
+                                                  [](std::uint32_t value) { return value != 0u; });
+        message << " classical_device_error=" << classical_device_error;
+        if (first_classical != classical_errors.end()) {
+          message << " classical_system="
+                  << std::distance(classical_errors.begin(), first_classical)
+                  << " classical_system_error=" << *first_classical;
+        }
+      }
       error = message.str();
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
@@ -7468,6 +8528,38 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     candidate->submitted = true;
 
+    if (candidate->host.key.native_lattice_enabled) {
+      /* Upload the immutable cell/image topology once per prepared plan.  The
+       * common AO topology above intentionally has no cell fields, so native
+       * descriptors must borrow this dedicated owner rather than trying to
+       * reinterpret Gfn2RaggedTopologyView as a periodic view. */
+      Gfn2CudaPeriodicTopologyInput native_topology_input{};
+      native_topology_input.batch_size = candidate->host.basis.batch_size;
+      native_topology_input.total_atoms = candidate->host.basis.total_atoms;
+      native_topology_input.atom_offsets = candidate->host.key.atom_offsets.data();
+      native_topology_input.cell_matrices = candidate->host.key.cell_matrices.data();
+      native_topology_input.periodic_axes = candidate->host.key.periodic_axes.data();
+      /* Native D4 needs the complete 50-bohr translation superset.  The
+       * short-range and coordination consumers apply their own narrower
+       * predicates, so sharing this larger immutable topology preserves one
+       * cache identity without truncating D4 image contributions. */
+      native_topology_input.image_cutoff = 50.0;
+      native_topology_input.plan_token = token;
+      native_topology_input.cell_generation =
+          candidate->host.geometry_generation == 0u ? 1u : candidate->host.geometry_generation;
+      const auto native_topology_diagnostic = Gfn2CudaPeriodicTopology::create(
+          native_topology_input, stream, candidate->native_periodic_topology_owner);
+      if (!native_topology_diagnostic.success()) {
+        error = setup_error_message("CUDA native periodic topology construction",
+                                    native_topology_diagnostic.status,
+                                    static_cast<std::uint32_t>(native_topology_diagnostic.error),
+                                    static_cast<std::uint32_t>(native_topology_diagnostic.field),
+                                    native_topology_diagnostic.index);
+        return native_topology_diagnostic.status;
+      }
+      candidate->submitted = true;
+    }
+
     auto input_diagnostic =
         candidate->host.gfn1_enabled
             ? Gfn2SccSetupInputs::create(candidate->host.gfn1_input_sources(),
@@ -7498,6 +8590,22 @@ struct Gfn2CudaExecutionCache::Impl {
                                   static_cast<std::uint32_t>(input_diagnostic.field),
                                   input_diagnostic.index);
       return input_diagnostic.status;
+    }
+    /* Native periodic leaves are uploaded with an empty topology field because
+     * the input owner does not own the separate cell/translation arena.  Bind
+     * all three native physics descriptors to the exact topology view produced
+     * above before the plan is copied into the SCC binding.  Without this
+     * projection a future native launch would fail closed (or, worse, consume
+     * a zero-sized topology) even though the immutable metadata upload passed.
+     */
+    if (candidate->host.key.native_lattice_enabled) {
+      const auto native_topology = candidate->native_periodic_topology_owner.device_view();
+      candidate->plan_seed.native_short_range_batch.topology = native_topology;
+      candidate->plan_seed.native_ewald_batch.topology = native_topology;
+      candidate->plan_seed.native_multipole_batch.topology = native_topology;
+      if (candidate->host.d4_enabled) {
+        candidate->plan_seed.native_d4_batch.topology = native_topology;
+      }
     }
     /* Uniform-field storage is part of every fixed CUDA plan so FRESH calls
      * can attach, change, or detach a field without changing the SCC arena.
@@ -7736,6 +8844,10 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     candidate->submitted = true;
+    /* Native XYZ plans now use the same device SCC loop as molecular plans.
+     * The native Ewald/multipole leaves are projected into the existing ES2 /
+     * AES2 component slots, so no separate host bridge or graph variant is
+     * needed at this boundary. */
     if (build_request_graph) {
       status = build_request_execution_graph(*candidate, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -7897,6 +9009,13 @@ struct Gfn2CudaExecutionCache::Impl {
         (options.flags & static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
     const bool dipoles_requested =
         (options.flags & static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS)) != 0u;
+    const bool strain_requested =
+        (options.flags & static_cast<std::uint32_t>(XTBLOOM_COMPUTE_STRAIN_DERIVATIVES)) != 0u;
+    std::int64_t strain_elements = 0;
+    if (strain_requested && !checked_elements(batch.batch_size, 9, strain_elements)) {
+      error = "strain_derivatives extent overflows int64_t";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
     status = validate_output("energies", result->energies, energy_requested ? batch.batch_size : 0,
                              sizeof(double), alignof(double));
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -7919,6 +9038,13 @@ struct Gfn2CudaExecutionCache::Impl {
         validate_output("dipole_moments", dipole_buffer, dipoles_requested ? dipole_elements : 0,
                         sizeof(double), alignof(double));
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    const xtbloom_buffer_t& strain_buffer = result->struct_size >= XTBLOOM_BATCH_RESULT_V3_SIZE
+                                                ? result->strain_derivatives
+                                                : absent_output;
+    status =
+        validate_output("strain_derivatives", strain_buffer, strain_requested ? strain_elements : 0,
+                        sizeof(double), alignof(double));
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = validate_output("scc_iterations", result->scc_iterations, batch.batch_size,
                              sizeof(std::int32_t), alignof(std::int32_t));
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -7930,7 +9056,8 @@ struct Gfn2CudaExecutionCache::Impl {
   }
 
   xtbloom_status_t validate_native_lattice_request_sync(const xtbloom_batch_t& batch,
-                                                        std::string& error) {
+                                                        std::string& error,
+                                                        bool allow_native_periodic = false) {
     if (native_lattice_staging_poisoned) {
       error = "CUDA native-cell staging is poisoned by an earlier stream-settlement failure";
       return XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -7964,7 +9091,7 @@ struct Gfn2CudaExecutionCache::Impl {
     const bool cells_host = batch.cell_matrices.memory_space == XTBLOOM_MEMORY_HOST;
     const bool axes_host = batch.periodic_axes.memory_space == XTBLOOM_MEMORY_HOST;
     if (cells_host && axes_host) {
-      return validate_host_native_lattice_request(batch, error);
+      return validate_host_native_lattice_request(batch, error, allow_native_periodic);
     }
 
     if (native_lattice_event.get() == nullptr) {
@@ -8071,7 +9198,7 @@ struct Gfn2CudaExecutionCache::Impl {
                 std::min<std::size_t>(batch.struct_size, sizeof(staged_batch)));
     staged_batch.cell_matrices = {staged_cells, cell_bytes, XTBLOOM_MEMORY_HOST, 0u};
     staged_batch.periodic_axes = {staged_axes, axes_bytes, XTBLOOM_MEMORY_HOST, 0u};
-    return validate_host_native_lattice_request(staged_batch, error);
+    return validate_host_native_lattice_request(staged_batch, error, allow_native_periodic);
   }
 
   xtbloom_status_t reset_request_topology_error_locked(Prepared& current, std::string& error) {
@@ -8105,6 +9232,7 @@ struct Gfn2CudaExecutionCache::Impl {
                                   batch.charge_response_offsets.size_bytes != 0u ||
                                   batch.charge_response_matrix.data != nullptr ||
                                   batch.charge_response_matrix.size_bytes != 0u;
+    const bool lattice_active = native_lattice_active(batch);
     if (batch.batch_size != expected_batch || batch.total_atoms != expected_atoms ||
         batch.total_point_charges != expected_points || options.model != key.model ||
         options.flags != key.flags || options.max_scc_iterations != key.maximum_iterations ||
@@ -8117,6 +9245,10 @@ struct Gfn2CudaExecutionCache::Impl {
         public_determinism(options) != key.determinism ||
         periodic_enabled != key.periodic_enabled) {
       error = "the batch or compute policy does not match the fixed CUDA plan topology";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    if (key.native_lattice_enabled && !lattice_active) {
+      error = "the request omitted the native lattice required by the fixed CUDA plan topology";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
@@ -8147,6 +9279,23 @@ struct Gfn2CudaExecutionCache::Impl {
     binding.batch_elements = expected_batch;
     binding.point_offset_elements = point_offsets_active ? expected_batch + 1 : 0;
     binding.response_offset_elements = response_active ? expected_batch + 1 : 0;
+    /* A molecular fixed plan may still be used by the asynchronous lattice
+     * refusal matrix.  In that case the lattice validator owns the deferred
+     * NOT_IMPLEMENTED/NOT_SUPPORTED/INVALID result; comparing the incoming
+     * XYZ bytes against the plan's all-zero molecular snapshot here would
+     * incorrectly turn the refusal into an immediate topology mismatch.  Once
+     * a plan is genuinely native-periodic, its immutable cell and axis mask
+     * remain part of the identity and must be compared before execution. */
+    const bool compare_lattice_identity = lattice_active && key.native_lattice_enabled;
+    if (compare_lattice_identity) {
+      if (!checked_elements(expected_batch, 9, binding.cell_elements)) {
+        error = "native lattice topology extent overflows int64_t";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      binding.periodic_axis_elements = expected_batch;
+      binding.expected_cell_matrices = state.expected_lattice_cells;
+      binding.expected_periodic_axes = state.expected_periodic_axes;
+    }
     binding.request_error = state.request_topology_error;
 
     if (!validate_or_bind_fixed_topology_field("atom_offsets", batch.atom_offsets, key.atom_offsets,
@@ -8188,6 +9337,15 @@ struct Gfn2CudaExecutionCache::Impl {
         !validate_or_bind_fixed_topology_field(
             "charge_response_offsets", batch.charge_response_offsets, key.response_offsets,
             state.expected_response_offsets, binding.response_offsets, error)) {
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    if (compare_lattice_identity &&
+        (!validate_or_bind_fixed_topology_field("cell_matrices", batch.cell_matrices,
+                                                key.cell_matrices, state.expected_lattice_cells,
+                                                binding.cell_matrices, error) ||
+         !validate_or_bind_fixed_topology_field("periodic_axes", batch.periodic_axes,
+                                                key.periodic_axes, state.expected_periodic_axes,
+                                                binding.periodic_axes, error))) {
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
@@ -8245,6 +9403,17 @@ struct Gfn2CudaExecutionCache::Impl {
     binding.cell_matrices = state.staged_lattice_cells;
     binding.periodic_axes = state.staged_periodic_axes;
     binding.lattice_systems = batch.batch_size;
+    binding.reject_native_external_combinations =
+        (batch.total_point_charges != 0 || batch.atomic_potential_shifts.data != nullptr ||
+         batch.atomic_potential_shifts.size_bytes != 0u ||
+         batch.total_charge_response_elements != 0 ||
+         batch.charge_response_offsets.data != nullptr ||
+         batch.charge_response_offsets.size_bytes != 0u ||
+         batch.charge_response_matrix.data != nullptr ||
+         batch.charge_response_matrix.size_bytes != 0u ||
+         (batch.struct_size >= XTBLOOM_BATCH_V3_SIZE && batch.total_interactions != 0))
+            ? 1u
+            : 0u;
     binding.request_error = state.request_topology_error;
     cuda_status = validate_lattice_request_async(binding, stream);
     if (cuda_status != cudaSuccess) {
@@ -8956,7 +10125,12 @@ struct Gfn2CudaExecutionCache::Impl {
     const auto preprocessing_launch =
         compose_gfn2_preprocessing_epoch_cuda(preprocessing, execution_stream);
     if (!preprocessing_launch.success()) {
-      error = "CUDA numerical preprocessing composer rejected the runtime binding";
+      error = "CUDA numerical preprocessing composer rejected the runtime binding: binding_error=" +
+              std::to_string(static_cast<std::uint32_t>(preprocessing_launch.binding.error)) +
+              " field=" +
+              std::to_string(static_cast<std::uint32_t>(preprocessing_launch.binding.field)) +
+              " index=" + std::to_string(preprocessing_launch.binding.index) +
+              " cuda=" + std::to_string(static_cast<int>(preprocessing_launch.cuda_status));
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
@@ -9063,6 +10237,36 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
     }
 
+    /* Fresh SCC restoration copies the immutable initializer image over the
+     * iteration arena.  Native periodic short-range geometry is deliberately
+     * refreshed before SCC so its CN feeds the Hamiltonian, but that copy also
+     * clears the image-aware wrapped coordinates, repulsion tuple, and strain
+     * scratch consumed by the terminal energy/force leaves.  Rebuild the
+     * complete short-range tuple after the restore boundary (and before SCC)
+     * so FRESH and WARM share the same committed geometry without retaining a
+     * stale zero-valued repulsion candidate.  The native evaluator is
+     * allocation-free and stream-ordered, therefore this remains safe during
+     * asynchronous graph capture as well as synchronous execution.
+     */
+    if (current.host.key.native_lattice_enabled) {
+      auto native_short_range = current.plan_seed.native_short_range_batch;
+      native_short_range.positions = current.numerical.device.committed_positions;
+      native_short_range.position_elements = current.numerical.device.total_atoms * 3;
+      auto& native_workspace = current.workspace_seed.native_short_range_workspace;
+      cuda_status = evaluate_gfn2_native_periodic_short_range_cuda(
+          native_short_range, native_workspace, native_workspace.coordination,
+          native_workspace.repulsion_energies, native_workspace.repulsion_gradients,
+          native_workspace.repulsion_strain,
+          current.numerical.preprocessing.diagnostics.geometry_system_errors,
+          current.numerical.preprocessing.diagnostics.geometry_device_error, stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA native periodic short-range post-restore rebuild",
+                                   cuda_status);
+        return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                    : XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+    }
+
     /* The synchronous path launches the production device-resident early-stop
      * Graph. The asynchronous request Graph instead captures the bounded
      * iteration DAG at setup. Nesting a device-launched/tail-launched SCC
@@ -9070,10 +10274,21 @@ struct Gfn2CudaExecutionCache::Impl {
      * boundary on CUDA 12.9/Blackwell; the bounded body keeps one prebuilt
      * request-Graph launch per call and introduces no steady-state allocation,
      * host polling, transfer, or synchronization. */
+    /* Device-tail SCC graphs launch their numerical body with
+     * cudaStreamGraphFireAndForget.  That body is therefore not ordered with
+     * the ordinary terminal kernels enqueued immediately afterwards on the
+     * caller stream.  Native periodic leaves reuse the SCC arena for their
+     * Ewald/multipole/D4 scratch, so allowing the fire-and-forget graph here
+     * races the terminal force pass and can surface as a deferred illegal
+     * address.  Keep native-periodic requests on the bounded caller-stream
+     * loop until the graph has an explicit completion edge; asynchronous
+     * requests already select this same bounded path while capturing. */
+    const bool native_periodic_request = current.host.key.native_lattice_enabled;
+    const bool use_bounded_scc = capture_bounded_scc || native_periodic_request;
     const Gfn2SccLoopLaunchResult loop =
-        capture_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
-                                  current.scc_binding, inference.epoch_consumer, execution_stream)
-                            : current.scc_loop.launch(execution_stream);
+        use_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
+                              current.scc_binding, inference.epoch_consumer, execution_stream)
+                        : current.scc_loop.launch(execution_stream);
     if (!loop.success()) {
       std::ostringstream message;
       message << "CUDA SCC loop submission failed: mode="
@@ -10128,11 +11343,13 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.scc_conditional_graph_ready = current.scc_loop.conditional_graph_ready() ? 1u : 0u;
     identity.scc_loop_fallback_reason =
         static_cast<std::uint32_t>(current.scc_loop.fallback_reason());
+    identity.native_lattice_enabled = current.host.key.native_lattice_enabled ? 1u : 0u;
     identity.batch_size = current.host.basis.batch_size;
     identity.total_atoms = current.host.basis.total_atoms;
     identity.total_shells = current.host.basis.total_shells;
     identity.total_orbitals = current.host.basis.total_orbitals;
     identity.total_point_charges = current.host.external.total_point_charges;
+    identity.native_lattice_systems = current.host.basis.batch_size;
     identity.solver_handle = opaque_address(solver);
     identity.solver_parameters = opaque_address(solver_parameters);
     identity.blas_handle = opaque_address(blas);
@@ -10175,7 +11392,7 @@ struct Gfn2CudaExecutionCache::Impl {
         opaque_address(current.eigensolver_binding.cache.geometry_generations);
     identity.overlap_factor_statuses =
         opaque_address(current.eigensolver_binding.cache.factor_statuses);
-    const auto opaque_buffer = [](const double* address, std::int64_t elements) noexcept {
+    const auto opaque_buffer = [](const auto* address, std::int64_t elements) noexcept {
       return Gfn2CudaOpaqueBufferIdentity{opaque_address(address), elements};
     };
     const auto& numerical = current.numerical.device;
@@ -10216,6 +11433,12 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.committed_periodic_response =
         opaque_buffer(numerical.committed_periodic_response,
                       numerical.periodic_enabled != 0u ? numerical.total_response_elements : 0);
+    identity.committed_native_cell_matrices =
+        opaque_buffer(current.public_result.expected_lattice_cells,
+                      static_cast<std::int64_t>(current.host.key.cell_matrices.size()));
+    identity.committed_native_periodic_axes =
+        opaque_buffer(current.public_result.expected_periodic_axes,
+                      static_cast<std::int64_t>(current.host.key.periodic_axes.size()));
     identity.committed_generation_elements = numerical.batch_size;
     identity.numerical_eligible_elements = numerical.batch_size;
     identity.overlap_factor_generation_elements = numerical.batch_size;
@@ -10375,10 +11598,24 @@ xtbloom_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = implementation.validate_public_request_pointers(batch, options, &result, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
-    status = implementation.validate_native_lattice_request_sync(batch, error);
+    status = implementation.validate_native_lattice_request_sync(
+        batch, error, native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = implementation.ensure_handles(error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+    /* The native CUDA force path already computes the individual periodic
+     * derivative tuples, but its internal publication ABI predates the
+     * ABI-v3 strain outlet.  Keep ordinary native requests on the CUDA graph;
+     * route only an explicit strain request through the validated CPU periodic
+     * bridge until the device strain aggregate is exposed end to end. */
+    const bool native_periodic_strain_request =
+        native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB &&
+        (options.flags & static_cast<std::uint32_t>(XTBLOOM_COMPUTE_STRAIN_DERIVATIVES)) != 0u;
+    if (native_periodic_strain_request) {
+      return implementation.execute_native_periodic_cpu_bridge_locked(
+          batch, options, result, require_prepared_topology, error);
+    }
 
     const Gfn2CudaTopologyStagingDiagnostic staged =
         implementation.topology_staging.stage_and_validate(batch, error);
@@ -10643,6 +11880,35 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
       status = implementation.ensure_handles(error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+      /* The internal CUDA publication image still does not carry the full
+       * ABI-v3 native-periodic result suffix, and fixed-topology comparison
+       * for the in-progress native plan is not yet a valid asynchronous
+       * submission.  Route every native-periodic async request through the
+       * validated CPU reference worker until the native publication/Graph
+       * path exposes those semantics end to end.  Molecular requests retain
+       * the normal stream-ordered CUDA path. */
+      const bool native_periodic_request =
+          native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB;
+      const bool native_periodic_bridge_allowed =
+          native_periodic_request && (!require_prepared_topology ||
+                                      (implementation.prepared != nullptr &&
+                                       implementation.prepared->host.key.native_lattice_enabled));
+      if (native_periodic_bridge_allowed) {
+        std::shared_ptr<Gfn2CudaExecutionCache::Impl::NativePeriodicAsyncState> bridge_state;
+        try {
+          bridge_state = std::make_shared<Gfn2CudaExecutionCache::Impl::NativePeriodicAsyncState>();
+        } catch (const std::bad_alloc&) {
+          error = "failed to allocate native periodic CUDA bridge state";
+          return XTBLOOM_STATUS_ALLOCATION_FAILED;
+        }
+        status = implementation.enqueue_native_periodic_cpu_bridge_locked(
+            batch, options, result, require_prepared_topology, *bridge_state, error);
+        if (status != XTBLOOM_STATUS_SUCCESS) return status;
+        implementation.active_request.native_periodic_async = std::move(bridge_state);
+        return XTBLOOM_STATUS_SUCCESS;
+      }
+
       const Gfn2CudaSccStartMode start_mode = public_scc_start_mode(options);
       std::unique_ptr<Gfn2CudaExecutionCache::Impl::Prepared> candidate;
       bool topology_candidate_pending = false;
@@ -11069,6 +12335,22 @@ xtbloom_status_t Gfn2CudaExecutionCache::probe(bool wait,
   try {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     auto& active = impl_->active_request;
+    if (active.native_periodic_async != nullptr) {
+      auto& bridge = *active.native_periodic_async;
+      std::unique_lock<std::mutex> bridge_lock(bridge.mutex);
+      if (!bridge.done) {
+        if (!wait) {
+          result.complete = false;
+          return XTBLOOM_STATUS_SUCCESS;
+        }
+        bridge.condition.wait(bridge_lock, [&bridge] { return bridge.done; });
+      }
+      result.complete = true;
+      result.completion_status = bridge.status;
+      result.result_flags = bridge.result_flags;
+      result.completion_error = bridge.error;
+      return XTBLOOM_STATUS_SUCCESS;
+    }
     Gfn2CudaExecutionCache::Impl::Prepared* current_owner =
         active.pending_prepared != nullptr ? active.pending_prepared.get() : impl_->prepared.get();
     if (active.id == 0u || current_owner == nullptr) {
@@ -11278,6 +12560,13 @@ void Gfn2CudaExecutionCache::settle_noexcept() noexcept {
   try {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->active_request.id == 0u) return;
+    if (impl_->active_request.native_periodic_async != nullptr) {
+      if (impl_->active_request.native_periodic_async->worker.joinable()) {
+        impl_->active_request.native_periodic_async->worker.join();
+      }
+      impl_->active_request = {};
+      return;
+    }
     if (impl_->active_request.completion_ready) {
       if (impl_->active_request.pending_topology_candidate) {
         impl_->topology_staging.abort_candidate();
@@ -11468,7 +12757,8 @@ xtbloom_status_t Gfn2CudaExecutionCache::prepare_topology_only(
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = impl_->validate_public_request_pointers(batch, options, nullptr, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
-    status = impl_->validate_native_lattice_request_sync(batch, error);
+    status = impl_->validate_native_lattice_request_sync(
+        batch, error, native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = impl_->ensure_handles(error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;

@@ -25,8 +25,18 @@ from typing import Any
 
 import numpy as np
 
-from .exceptions import XTBloomRuntimeError, XTBloomValueError
-from .interface import Calculator, Result, _resolve_uhf, _validated_compute_setting
+from .exceptions import (
+    XTBloomNotSupportedError,
+    XTBloomRuntimeError,
+    XTBloomValueError,
+)
+from .interface import (
+    Calculator,
+    Result,
+    _normalize_periodic,
+    _resolve_uhf,
+    _validated_compute_setting,
+)
 
 
 class XTBloom(ase.calculators.calculator.Calculator):
@@ -194,7 +204,7 @@ class XTBloom(ase.calculators.calculator.Calculator):
         properties: list[str] | None = None,
         system_changes: list[str] = ase.calculators.calculator.all_changes,
     ) -> None:
-        """Calculate the requested ASE properties for a molecular structure."""
+        """Calculate requested ASE properties for molecular or XYZ-periodic input."""
         if not properties:
             properties = ["energy"]
         ase.calculators.calculator.Calculator.calculate(
@@ -221,6 +231,8 @@ class XTBloom(ase.calculators.calculator.Calculator):
                 positions=atoms.positions / Bohr,
                 charge=_get_charge(atoms, parameters),
                 uhf=_get_uhf(atoms, parameters),
+                cell=_ase_cell(atoms),
+                pbc=_ase_pbc(atoms),
             )
 
         assert xtb is not None
@@ -238,13 +250,26 @@ class XTBloom(ase.calculators.calculator.Calculator):
 
 
 def _validate_ase_atoms(atoms: ase.Atoms) -> None:
-    """Reject periodic ASE inputs until native periodic execution is released."""
-    if np.any(atoms.pbc):
-        raise ase.calculators.calculator.InputError(
-            "xTBloom does not support periodic ASE systems yet; the ABI-v4 "
-            "lattice descriptor exists, but native periodic execution and "
-            "the ASE adapter are not implemented"
-        )
+    """Validate ASE's cell/PBC pair against the released native 3D contract."""
+    try:
+        _normalize_periodic(_ase_cell(atoms), _ase_pbc(atoms))
+    except (XTBloomNotSupportedError, XTBloomValueError) as error:
+        raise ase.calculators.calculator.InputError(str(error)) from error
+
+
+def _ase_pbc(atoms: ase.Atoms) -> bool | np.ndarray:
+    """Return ASE periodicity while preserving partial-axis information."""
+    pbc = np.asarray(atoms.pbc)
+    if pbc.ndim == 0:
+        return bool(pbc)
+    return np.asarray(pbc, dtype=bool)
+
+
+def _ase_cell(atoms: ase.Atoms) -> np.ndarray | None:
+    """Return an ASE direct cell in bohr, or ``None`` for a molecule."""
+    if not np.any(np.asarray(atoms.pbc)):
+        return None
+    return np.asarray(atoms.cell.array, dtype=np.float64) / Bohr
 
 
 def _create_api_calculator(
@@ -258,6 +283,8 @@ def _create_api_calculator(
             atoms.positions / Bohr,
             charge=_get_charge(atoms, parameters),
             uhf=_get_uhf(atoms, parameters),
+            cell=_ase_cell(atoms),
+            pbc=_ase_pbc(atoms),
             backend=parameters.backend,
             device_id=parameters.device_id,
             cpu_threads=parameters.cpu_threads,
@@ -271,7 +298,7 @@ def _create_api_calculator(
             determinism=parameters.determinism,
             warm_start=bool(parameters.warm_start),
         )
-    except XTBloomValueError as e:
+    except (XTBloomNotSupportedError, XTBloomValueError) as e:
         raise ase.calculators.calculator.InputError(str(e)) from e
 
 

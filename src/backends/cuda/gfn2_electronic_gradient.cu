@@ -25,6 +25,53 @@ __global__ void propagate_success_mask_kernel(const Gfn2ForceDeviceActivity acti
                              : 0u;
 }
 
+/*
+ * The CPU periodic force composer accumulates the stationary Hamiltonian
+ * adjoint into a zeroed overlap buffer and subtracts W only afterwards.  The
+ * molecular CUDA path historically seeded H0 with -W, which is algebraically
+ * equivalent but not bitwise equivalent for large cancelling values.  Native
+ * periodic requests clear that seed before the Hamiltonian reverse so the
+ * device follows the CPU operation order exactly.
+ */
+__global__ void clear_native_periodic_overlap_seed_kernel(const Gfn2IntegralDeviceBatch batch,
+                                                          const std::uint8_t* active_mask,
+                                                          double* overlap_adjoint) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (active_mask[system] != 1u) {
+    return;
+  }
+  const std::int64_t begin = batch.matrix_offsets[system];
+  const std::int64_t end = batch.matrix_offsets[system + 1];
+  for (std::int64_t matrix = begin + threadIdx.x; matrix < end; matrix += blockDim.x) {
+    overlap_adjoint[matrix] = 0.0;
+  }
+}
+
+/* Apply the deferred -W step after the stationary Hamiltonian adjoint. */
+__global__ void subtract_native_periodic_weighted_density_kernel(
+    const Gfn2IntegralDeviceBatch batch, const std::uint8_t* active_mask,
+    const double* energy_weighted_density, double* overlap_adjoint, std::uint32_t* system_errors,
+    std::uint32_t* device_error, std::uint32_t* sequence_active) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (active_mask[system] != 1u) {
+    return;
+  }
+  const std::int64_t begin = batch.matrix_offsets[system];
+  const std::int64_t end = batch.matrix_offsets[system + 1];
+  for (std::int64_t matrix = begin + threadIdx.x; matrix < end; matrix += blockDim.x) {
+    const double updated = overlap_adjoint[matrix] - energy_weighted_density[matrix];
+    if (!isfinite(updated)) {
+      constexpr std::uint32_t kNonfiniteArithmetic =
+          static_cast<std::uint32_t>(Gfn2HamiltonianForceDeviceError::kNonfiniteArithmetic);
+      atomicCAS(system_errors + system, 0u, kNonfiniteArithmetic);
+      atomicCAS(device_error, 0u, kNonfiniteArithmetic);
+      atomicExch(sequence_active, 0u);
+      continue;
+    }
+    overlap_adjoint[matrix] = updated;
+  }
+}
+
 cudaError_t validate_active_composition(
     const Gfn2ElectronicGradientRequest& request, const Gfn2IntegralDeviceBatch& integral_batch,
     const Gfn2HamiltonianDeviceBatch& hamiltonian_batch, const Gfn2ForceDeviceActivity& activity,
@@ -123,6 +170,19 @@ cudaError_t compose_gfn2_electronic_gradient_cuda(
     return status;
   }
 
+  const bool native_periodic = h0_input.native_periodic.plan_token != 0u;
+  if (native_periodic) {
+    /* H0's generic seed includes -W for the molecular route.  Native
+     * periodic H0 intentionally defers that subtraction until after the
+     * stationary Hamiltonian reverse, matching the CPU accumulation order. */
+    clear_native_periodic_overlap_seed_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+        integral_batch, workspace.h0_success_mask, h0_output.overlap_adjoint);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+  }
+
   const Gfn2ForceDeviceActivity hamiltonian_activity{workspace.h0_success_mask,
                                                      activity.system_statuses,
                                                      activity.batch_elements, activity.plan_token};
@@ -141,23 +201,50 @@ cudaError_t compose_gfn2_electronic_gradient_cuda(
     return status;
   }
 
+  if (native_periodic) {
+    subtract_native_periodic_weighted_density_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+        integral_batch, workspace.hamiltonian_success_mask, h0_input.energy_weighted_density,
+        hamiltonian_output.overlap_adjoint, diagnostics.hamiltonian_system_errors,
+        diagnostics.hamiltonian_device_error, hamiltonian_workspace.sequence_active);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+    /* A non-finite deferred subtraction is a peer-local Hamiltonian error;
+     * refresh the mask before allowing the integral reverse to consume it. */
+    propagate_success_mask_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+        hamiltonian_activity, diagnostics.hamiltonian_system_errors,
+        workspace.hamiltonian_success_mask);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+  }
+
   const Gfn2ForceDeviceActivity integral_activity{workspace.hamiltonian_success_mask,
                                                   activity.system_statuses, activity.batch_elements,
                                                   activity.plan_token};
-  const Gfn2IntegralForceDeviceInput integral_input{h0_input.positions,
-                                                    h0_input.position_elements,
-                                                    hamiltonian_output.overlap_adjoint,
-                                                    hamiltonian_output.overlap_adjoint_elements,
-                                                    hamiltonian_output.dipole_adjoint,
-                                                    hamiltonian_output.dipole_adjoint_elements,
-                                                    hamiltonian_output.quadrupole_adjoint,
-                                                    hamiltonian_output.quadrupole_adjoint_elements,
-                                                    integral_batch.plan_token};
+  Gfn2IntegralForceDeviceInput integral_input{h0_input.positions,
+                                              h0_input.position_elements,
+                                              hamiltonian_output.overlap_adjoint,
+                                              hamiltonian_output.overlap_adjoint_elements,
+                                              hamiltonian_output.dipole_adjoint,
+                                              hamiltonian_output.dipole_adjoint_elements,
+                                              hamiltonian_output.quadrupole_adjoint,
+                                              hamiltonian_output.quadrupole_adjoint_elements,
+                                              integral_batch.plan_token};
+  integral_input.native_periodic = h0_input.native_periodic;
+  integral_input.density = h0_input.density;
+  integral_input.density_elements = h0_input.density_elements;
+  integral_input.coordination_numbers = h0_input.coordination_numbers;
+  integral_input.coordination_elements = h0_input.coordination_elements;
+  integral_input.h0_plan = h0_plan;
   const Gfn2IntegralForceDeviceOutput integral_output{
       h0_output.gradients, h0_output.gradient_elements, integral_batch.plan_token};
-  return add_gfn2_integral_gradient_cuda(
+  status = add_gfn2_integral_gradient_cuda(
       integral_batch, integral_activity, integral_input, integral_output, integral_workspace,
       diagnostics.integral_system_errors, diagnostics.integral_device_error, stream);
+  return status;
 }
 
 }  // namespace xtbloom::detail::cuda

@@ -10,6 +10,7 @@
 
 #include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
+#include "backends/cuda/gfn2_native_periodic_integrals.cuh"
 
 namespace xtbloom::detail::cuda {
 
@@ -24,6 +25,19 @@ struct Gfn2IntegralForceDeviceInput {
   const double* quadrupole_adjoint = nullptr;
   std::int64_t quadrupole_adjoint_elements = 0;
   std::uint64_t plan_token = 0u;
+  /* Native XYZ-periodic image metadata.  A zero token keeps the established
+   * molecular shell-pair kernels and their compact task schedule. */
+  Gfn2NativePeriodicIntegralDeviceBatch native_periodic{};
+  /* Native periodic H0 is an image sum.  Its reverse contribution therefore
+   * has to be contracted per image alongside the overlap integral rather than
+   * folded into the global overlap adjoint.  These fields are only inspected
+   * when native_periodic.plan_token is nonzero; molecular callers may leave
+   * them at their zero-value defaults. */
+  const double* density = nullptr;
+  std::int64_t density_elements = 0;
+  const double* coordination_numbers = nullptr;
+  std::int64_t coordination_elements = 0;
+  Gfn2H0DevicePlan h0_plan{};
 };
 
 struct Gfn2IntegralForceDeviceOutput {

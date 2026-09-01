@@ -93,6 +93,8 @@ struct PublicBatch {
   std::vector<double> periodic_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrix;
+  std::vector<double> cell_matrices;
+  std::vector<std::int32_t> periodic_axes;
 
   /* ABI-v3 uniform external electric fields (one attachment per system when
    * non-empty). A zero vector is still an explicit attachment for WARM
@@ -104,6 +106,7 @@ struct PublicBatch {
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
   std::vector<double> dipole_moments;
+  std::vector<double> strain_derivatives;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
@@ -168,6 +171,8 @@ struct PublicBatch {
     batch.charge_response_offsets = input_buffer(response_offsets);
     batch.charge_response_matrix = input_buffer(response_matrix);
     batch.spin_channels = input_buffer(spin_channels);
+    batch.cell_matrices = input_buffer(cell_matrices);
+    batch.periodic_axes = input_buffer(periodic_axes);
 
     const std::size_t systems = static_cast<std::size_t>(batch.batch_size);
     energies.assign(systems, -71.0);
@@ -175,6 +180,7 @@ struct PublicBatch {
     atomic_charges.assign(atomic_numbers.size(), -73.0);
     point_forces.assign(3u * point_values.size(), -74.0);
     dipole_moments.assign(3u * systems, -78.0);
+    strain_derivatives.assign(9u * systems, -79.0);
     iterations.assign(systems, -75);
     converged.assign(systems, 76u);
     statuses.assign(systems, -77);
@@ -184,6 +190,7 @@ struct PublicBatch {
     result.atomic_charges = output_buffer(atomic_charges);
     result.point_charge_forces = output_buffer(point_forces);
     result.dipole_moments = output_buffer(dipole_moments);
+    result.strain_derivatives = output_buffer(strain_derivatives);
     result.scc_iterations = output_buffer(iterations);
     result.scc_converged = output_buffer(converged);
     result.per_system_status = output_buffer(statuses);
@@ -205,6 +212,7 @@ struct PublicOutputImage {
         atomic_charges(request.atomic_charges),
         point_forces(request.point_forces),
         dipole_moments(request.dipole_moments),
+        strain_derivatives(request.strain_derivatives),
         iterations(request.iterations),
         converged(request.converged),
         statuses(request.statuses),
@@ -214,6 +222,7 @@ struct PublicOutputImage {
     return same_bytes(energies, request.energies) && same_bytes(forces, request.forces) &&
            same_bytes(atomic_charges, request.atomic_charges) &&
            same_bytes(point_forces, request.point_forces) &&
+           same_bytes(strain_derivatives, request.strain_derivatives) &&
            same_bytes(dipole_moments, request.dipole_moments) &&
            same_bytes(iterations, request.iterations) && same_bytes(converged, request.converged) &&
            same_bytes(statuses, request.statuses) && flags == request.result.flags;
@@ -224,6 +233,7 @@ struct PublicOutputImage {
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
   std::vector<double> dipole_moments;
+  std::vector<double> strain_derivatives;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
@@ -244,6 +254,27 @@ PublicBatch make_h2_he_batch() {
   request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 7.0, 0.0, 0.0};
   request.molecular_charges = {0.0, 0.0};
   request.unpaired_electrons = {0, 0};
+  return request;
+}
+
+PublicBatch make_periodic_h2_batch() {
+  PublicBatch request;
+  request.atom_offsets = {0, 2, 4};
+  request.atomic_numbers = {1, 1, 1, 1};
+  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 2.30, 0.0, 0.0, 3.70, 0.0, 0.0};
+  request.molecular_charges = {0.0, 0.0};
+  request.unpaired_electrons = {0, 0};
+  request.cell_matrices = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0,
+                           8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  request.periodic_axes = {XTBLOOM_PERIODIC_AXES_XYZ, XTBLOOM_PERIODIC_AXES_XYZ};
+  return request;
+}
+
+PublicBatch make_periodic_h2_he_batch() {
+  PublicBatch request = make_h2_he_batch();
+  request.cell_matrices = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0,
+                           8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  request.periodic_axes = {XTBLOOM_PERIODIC_AXES_XYZ, XTBLOOM_PERIODIC_AXES_XYZ};
   return request;
 }
 
@@ -323,6 +354,11 @@ PublicBatch slice_system(const PublicBatch& source, std::size_t system) {
   result.unpaired_electrons = {source.unpaired_electrons[system]};
   if (!source.spin_channels.empty()) {
     result.spin_channels = {source.spin_channels[system]};
+  }
+  if (!source.cell_matrices.empty()) {
+    result.cell_matrices.assign(source.cell_matrices.begin() + 9u * system,
+                                source.cell_matrices.begin() + 9u * (system + 1u));
+    result.periodic_axes = {source.periodic_axes[system]};
   }
   return result;
 }
@@ -2621,9 +2657,328 @@ int test_plan_multi_threaded_reuse() {
   return 0;
 }
 
+int test_native_periodic_cpu_energy_and_warm() {
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request;
+  request.atom_offsets = {0, 2};
+  request.atomic_numbers = {1, 1};
+  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  request.molecular_charges = {0.0};
+  request.unpaired_electrons = {0};
+  request.cell_matrices = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  request.periodic_axes = {XTBLOOM_PERIODIC_AXES_XYZ};
+  request.bind(XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES);
+
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.converged[0] == 1u);
+  CHECK(std::isfinite(request.energies[0]));
+  for (double charge : request.atomic_charges) CHECK(std::isfinite(charge));
+  const double first_energy = request.energies[0];
+
+  request.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.converged[0] == 1u);
+  CHECK(std::isfinite(request.energies[0]));
+  CHECK(std::abs(request.energies[0] - first_energy) < 1.0e-8);
+
+  /* Geometry is intentionally excluded from the warm identity: a changed
+   * coordinate may consume the compatible checkpoint and reconverge.  The
+   * immutable native cell is part of that identity, however, so changing it
+   * must reject the request transactionally before any result publication. */
+  request.positions[0] += 0.05;
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const auto energies_before_cell_change = request.energies;
+  const auto charges_before_cell_change = request.atomic_charges;
+  const auto flags_before_cell_change = request.result.flags;
+  request.cell_matrices[0] += 0.1;
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(request.energies == energies_before_cell_change);
+  CHECK(request.atomic_charges == charges_before_cell_change);
+  CHECK(request.result.flags == flags_before_cell_change);
+  return 0;
+}
+
+int test_native_periodic_cpu_energy_and_force() {
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request;
+  request.atom_offsets = {0, 2};
+  request.atomic_numbers = {1, 1};
+  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  request.molecular_charges = {0.0};
+  request.unpaired_electrons = {0};
+  request.cell_matrices = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  request.periodic_axes = {XTBLOOM_PERIODIC_AXES_XYZ};
+  request.bind(XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+               XTBLOOM_COMPUTE_STRAIN_DERIVATIVES);
+
+  const xtbloom_status_t status =
+      xtbloom_compute(context.get(), &request.batch, &request.options, &request.result);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    std::cerr << "native periodic force request failed: " << status << " "
+              << xtbloom_get_last_error() << '\n';
+  }
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.converged[0] == 1u);
+  CHECK(std::isfinite(request.energies[0]));
+  CHECK(std::all_of(request.forces.begin(), request.forces.end(),
+                    [](double value) { return std::isfinite(value); }));
+  CHECK(std::all_of(request.strain_derivatives.begin(), request.strain_derivatives.end(),
+                    [](double value) { return std::isfinite(value); }));
+  CHECK((request.result.flags & XTBLOOM_RESULT_STRAIN_DERIVATIVES) != 0u);
+  for (std::size_t row = 0u; row < 3u; ++row) {
+    for (std::size_t column = row + 1u; column < 3u; ++column) {
+      CHECK(request.strain_derivatives[3u * row + column] ==
+            request.strain_derivatives[3u * column + row]);
+    }
+  }
+  CHECK(std::abs(request.forces[0] + request.forces[3]) < 1.0e-9);
+
+  /* The public force is -dE/dR for the complete periodic SCC free energy,
+   * including image H0, Ewald, damped q/d/Q, repulsion, and D4 terms.  Check
+   * the nontrivial x component against an independently recomputed central
+   * difference rather than only checking finiteness and net-force symmetry. */
+  constexpr double step = 1.0e-4;
+  const double analytic_force = request.forces[0];
+  const double analytic_strain_xx = request.strain_derivatives[0];
+  request.positions[0] += step;
+  request.bind(XTBLOOM_COMPUTE_ENERGY);
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const double energy_plus = request.energies[0];
+  request.positions[0] -= 2.0 * step;
+  request.bind(XTBLOOM_COMPUTE_ENERGY);
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const double energy_minus = request.energies[0];
+  const double finite_difference_force = -(energy_plus - energy_minus) / (2.0 * step);
+  CHECK(near(analytic_force, finite_difference_force, 5.0e-4));
+
+  /* Strain derivatives use an affine Cartesian deformation: positions and
+   * every direct-cell row are transformed together.  For this orthogonal
+   * fixture, epsilon_xx scales all x components by (1 + epsilon). */
+  const std::vector<double> reference_positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  const std::vector<double> reference_cell = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  const auto set_xx_strain = [&](double strain) {
+    request.positions = reference_positions;
+    request.cell_matrices = reference_cell;
+    for (std::size_t atom = 0u; atom < request.atomic_numbers.size(); ++atom) {
+      request.positions[3u * atom] *= 1.0 + strain;
+    }
+    for (std::size_t row = 0u; row < 3u; ++row) {
+      request.cell_matrices[3u * row] *= 1.0 + strain;
+    }
+    request.bind(XTBLOOM_COMPUTE_ENERGY);
+  };
+  set_xx_strain(step);
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const double strain_energy_plus = request.energies[0];
+  set_xx_strain(-step);
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const double strain_energy_minus = request.energies[0];
+  const double finite_difference_strain = (strain_energy_plus - strain_energy_minus) / (2.0 * step);
+  CHECK(near(analytic_strain_xx, finite_difference_strain, 5.0e-4));
+  return 0;
+}
+
+int test_native_periodic_cpu_ragged_batches() {
+  const std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                              XTBLOOM_COMPUTE_ATOMIC_CHARGES | XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+  for (const bool homogeneous : {true, false}) {
+    ContextHandle batch_context = make_cpu_context(2);
+    ContextHandle sequential_context = make_cpu_context(1);
+    CHECK(batch_context != nullptr);
+    CHECK(sequential_context != nullptr);
+
+    PublicBatch batch = homogeneous ? make_periodic_h2_batch() : make_periodic_h2_he_batch();
+    batch.bind(flags);
+    CHECK(xtbloom_compute(batch_context.get(), &batch.batch, &batch.options, &batch.result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(std::all_of(batch.statuses.begin(), batch.statuses.end(),
+                      [](std::int32_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
+    CHECK(std::all_of(batch.energies.begin(), batch.energies.end(),
+                      [](double value) { return std::isfinite(value); }));
+    CHECK(std::all_of(batch.forces.begin(), batch.forces.end(),
+                      [](double value) { return std::isfinite(value); }));
+    CHECK(std::all_of(batch.atomic_charges.begin(), batch.atomic_charges.end(),
+                      [](double value) { return std::isfinite(value); }));
+    CHECK(std::all_of(batch.strain_derivatives.begin(), batch.strain_derivatives.end(),
+                      [](double value) { return std::isfinite(value); }));
+    CHECK((batch.result.flags & XTBLOOM_RESULT_STRAIN_DERIVATIVES) != 0u);
+
+    /* Compare a true ragged public batch with independently constructed
+     * singleton calls.  The singleton requests use a different native plan,
+     * so agreement exercises packing and per-system publication rather than
+     * merely re-reading the same output slice. */
+    for (std::size_t system = 0u; system < 2u; ++system) {
+      PublicBatch singleton = slice_system(batch, system);
+      singleton.bind(flags);
+      CHECK(xtbloom_compute(sequential_context.get(), &singleton.batch, &singleton.options,
+                            &singleton.result) == XTBLOOM_STATUS_SUCCESS);
+      CHECK(singleton.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+      CHECK(near(batch.energies[system], singleton.energies[0], 2.0e-10));
+      CHECK(near(batch.strain_derivatives[9u * system], singleton.strain_derivatives[0], 2.0e-9));
+      const std::size_t atom_begin = static_cast<std::size_t>(batch.atom_offsets[system]);
+      const std::size_t atom_end = static_cast<std::size_t>(batch.atom_offsets[system + 1u]);
+      for (std::size_t atom = atom_begin; atom < atom_end; ++atom) {
+        const std::size_t local = atom - atom_begin;
+        CHECK(near(batch.atomic_charges[atom], singleton.atomic_charges[local], 2.0e-9));
+        for (std::size_t axis = 0u; axis < 3u; ++axis) {
+          CHECK(near(batch.forces[3u * atom + axis], singleton.forces[3u * local + axis], 2.0e-8));
+        }
+      }
+      for (std::size_t entry = 1u; entry < 9u; ++entry) {
+        CHECK(near(batch.strain_derivatives[9u * system + entry],
+                   singleton.strain_derivatives[entry], 2.0e-8));
+      }
+    }
+  }
+  return 0;
+}
+
+int test_native_periodic_cpu_peer_failure_isolated() {
+  ContextHandle context = make_cpu_context(2);
+  CHECK(context != nullptr);
+
+  PublicBatch request;
+  request.atom_offsets = {0, 2, 4};
+  request.atomic_numbers = {1, 1, 1, 1};
+  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 3.30, 0.0, 0.0, 3.300001, 0.0, 0.0};
+  request.molecular_charges = {0.0, 0.0};
+  request.unpaired_electrons = {0, 0};
+  request.cell_matrices = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0,
+                           8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  request.periodic_axes = {XTBLOOM_PERIODIC_AXES_XYZ, XTBLOOM_PERIODIC_AXES_XYZ};
+  const std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                              XTBLOOM_COMPUTE_ATOMIC_CHARGES | XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+  request.bind(flags);
+
+  /* A nearly coincident second H2 makes its overlap eigensolve fail while the
+   * first periodic peer remains an ordinary converged system. */
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.converged[0] == 1u);
+  CHECK(request.statuses[1] == XTBLOOM_STATUS_EIGENSOLVER_FAILED ||
+        request.statuses[1] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
+  CHECK(request.converged[1] == 0u);
+  CHECK(std::isfinite(request.energies[0]));
+  CHECK(std::all_of(request.forces.begin(), request.forces.begin() + 6u,
+                    [](double value) { return std::isfinite(value); }));
+  CHECK(std::all_of(request.atomic_charges.begin(), request.atomic_charges.begin() + 2u,
+                    [](double value) { return std::isfinite(value); }));
+  CHECK(std::all_of(request.strain_derivatives.begin(), request.strain_derivatives.begin() + 9u,
+                    [](double value) { return std::isfinite(value); }));
+  CHECK(std::isnan(request.energies[1]));
+  CHECK(std::all_of(request.forces.begin() + 6u, request.forces.end(),
+                    [](double value) { return std::isnan(value); }));
+  CHECK(std::all_of(request.atomic_charges.begin() + 2u, request.atomic_charges.end(),
+                    [](double value) { return std::isnan(value); }));
+  CHECK(std::all_of(request.strain_derivatives.begin() + 9u, request.strain_derivatives.end(),
+                    [](double value) { return std::isnan(value); }));
+  return 0;
+}
+
+int test_native_periodic_cpu_translation_invariance() {
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request;
+  request.atom_offsets = {0, 2};
+  request.atomic_numbers = {1, 1};
+  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  request.molecular_charges = {0.0};
+  request.unpaired_electrons = {0};
+  request.cell_matrices = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  request.periodic_axes = {XTBLOOM_PERIODIC_AXES_XYZ};
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  request.bind(flags);
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const double reference_energy = request.energies[0];
+  const std::vector<double> reference_forces = request.forces;
+  const std::vector<double> reference_charges = request.atomic_charges;
+
+  const std::array<double, 3> translation = {0.11, -0.07, 0.09};
+  for (std::size_t atom = 0u; atom < 2u; ++atom) {
+    for (std::size_t axis = 0u; axis < 3u; ++axis) {
+      request.positions[3u * atom + axis] += translation[axis];
+    }
+  }
+  request.bind(flags);
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(near(request.energies[0], reference_energy, 2.0e-11));
+  for (std::size_t coordinate = 0u; coordinate < request.forces.size(); ++coordinate) {
+    CHECK(near(request.forces[coordinate], reference_forces[coordinate], 2.0e-9));
+  }
+  for (std::size_t atom = 0u; atom < request.atomic_charges.size(); ++atom) {
+    CHECK(near(request.atomic_charges[atom], reference_charges[atom], 2.0e-11));
+  }
+  for (std::size_t axis = 0u; axis < 3u; ++axis) {
+    CHECK(std::abs(request.forces[axis] + request.forces[3u + axis]) < 2.0e-9);
+  }
+  return 0;
+}
+
+int test_native_periodic_cpu_unrestricted_and_temperature() {
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request;
+  request.atom_offsets = {0, 2};
+  request.atomic_numbers = {1, 1};
+  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  request.molecular_charges = {1.0};
+  request.unpaired_electrons = {1};
+  request.spin_channels = {2};
+  request.cell_matrices = {8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0};
+  request.periodic_axes = {XTBLOOM_PERIODIC_AXES_XYZ};
+  request.bind(XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES);
+  request.options.electronic_temperature = 0.01;
+
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(request.converged[0] == 1u);
+  CHECK(std::isfinite(request.energies[0]));
+  CHECK(std::all_of(request.forces.begin(), request.forces.end(),
+                    [](double value) { return std::isfinite(value); }));
+  CHECK(std::all_of(request.atomic_charges.begin(), request.atomic_charges.end(),
+                    [](double value) { return std::isfinite(value); }));
+  CHECK(std::abs(request.forces[0] + request.forces[3]) < 1.0e-8);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
+  if (const int line = test_native_periodic_cpu_energy_and_force(); line != 0) {
+    return line;
+  }
+  if (const int line = test_native_periodic_cpu_ragged_batches(); line != 0) {
+    return line;
+  }
+  if (const int line = test_native_periodic_cpu_peer_failure_isolated(); line != 0) {
+    return line;
+  }
+  if (const int line = test_native_periodic_cpu_translation_invariance(); line != 0) {
+    return line;
+  }
+  if (const int line = test_native_periodic_cpu_unrestricted_and_temperature(); line != 0) {
+    return line;
+  }
   if (const int line = test_explicit_thread_counts_are_deterministic(); line != 0) {
     return line;
   }
@@ -2726,6 +3081,9 @@ int main() {
     return line;
   }
   if (const int line = test_electric_field_translation_invariance(); line != 0) {
+    return line;
+  }
+  if (const int line = test_native_periodic_cpu_energy_and_warm(); line != 0) {
     return line;
   }
   return 0;

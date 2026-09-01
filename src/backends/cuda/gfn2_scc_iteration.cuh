@@ -23,6 +23,11 @@
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_hamiltonian.cuh"
 #include "backends/cuda/gfn2_mulliken.cuh"
+#include "backends/cuda/gfn2_native_periodic_d4.cuh"
+#include "backends/cuda/gfn2_native_periodic_ewald.cuh"
+#include "backends/cuda/gfn2_native_periodic_integrals.cuh"
+#include "backends/cuda/gfn2_native_periodic_multipole.cuh"
+#include "backends/cuda/gfn2_native_periodic_short_range.cuh"
 #include "backends/cuda/gfn2_occupations.cuh"
 #include "backends/cuda/gfn2_periodic_embedding.cuh"
 #include "backends/cuda/gfn2_scc.cuh"
@@ -49,7 +54,7 @@ namespace xtbloom::detail::cuda {
  * v5 adds uniform electric-field execution. ABI v6 adds the topology-fixed
  * density contraction tile count used by direct and Graph launches. ABI v7
  * reuses that setup-selected schedule for Hamiltonian assembly. */
-inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 7u;
+inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 9u;
 
 /*
  * Which numerical-body stages one launch runs. The production device-tail loop
@@ -301,6 +306,15 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2ExternalPointChargeDeviceBatch explicit_point_charge_batch{};
   Gfn2ExternalPointChargeDeviceCache explicit_point_charge_cache{};
   Gfn2PeriodicEmbeddingDeviceBatch periodic_batch{};
+  /* Native XYZ periodic descriptors are retained alongside the legacy b+Aq
+   * embedding descriptor.  They are immutable plan projections; the SCC
+   * composer can therefore switch term consumers without rebuilding setup
+   * metadata or conflating the two periodic contracts. */
+  Gfn2NativePeriodicShortRangeDeviceBatch native_short_range_batch{};
+  Gfn2NativePeriodicIntegralDeviceBatch native_integrals{};
+  Gfn2NativePeriodicEwaldDeviceBatch native_ewald_batch{};
+  Gfn2NativePeriodicMultipoleDeviceBatch native_multipole_batch{};
+  Gfn2NativePeriodicD4DeviceBatch native_d4_batch{};
   Gfn2ElectricFieldDeviceBatch electric_field_batch{};
   Gfn2SccBridgeDeviceBatch scalar_bridge_batch{};
   Gfn2HamiltonianDeviceBatch hamiltonian_batch{};
@@ -418,6 +432,10 @@ struct Gfn2SccIterationDeviceWorkspace {
   Gfn2AES2DeviceWorkspace aes2_workspace{};
   Gfn2D4DeviceWorkspace d4_workspace{};
   Gfn2PeriodicEmbeddingDeviceWorkspace periodic_workspace{};
+  Gfn2NativePeriodicShortRangeDeviceWorkspace native_short_range_workspace{};
+  Gfn2NativePeriodicEwaldDeviceWorkspace native_ewald_workspace{};
+  Gfn2NativePeriodicMultipoleDeviceWorkspace native_multipole_workspace{};
+  Gfn2NativePeriodicD4DeviceWorkspace native_d4_workspace{};
   Gfn2SccPotentialDeviceWorkspace potential_workspace{};
   Gfn2HamiltonianDeviceWorkspace hamiltonian_workspace{};
   Gfn2EigensolverDeviceWorkspace eigensolver_workspace{};

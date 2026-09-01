@@ -24,6 +24,8 @@
 #define EXPECTED_RESULT_QUADRUPOLE_OFFSET 208
 #define EXPECTED_RESULT_WIBERG_OFFSET 232
 #define EXPECTED_RESULT_SPIN_OFFSET 256
+#define EXPECTED_RESULT_STRAIN_OFFSET 280
+#define EXPECTED_RESULT_V3_SIZE 304
 #define EXPECTED_DLPACK_SHAPE_OFFSET 40
 #elif UINTPTR_MAX == UINT32_MAX
 #define EXPECTED_CONTEXT_OPTIONS_SIZE 28
@@ -45,6 +47,8 @@
 #define EXPECTED_RESULT_QUADRUPOLE_OFFSET 144
 #define EXPECTED_RESULT_WIBERG_OFFSET 160
 #define EXPECTED_RESULT_SPIN_OFFSET 176
+#define EXPECTED_RESULT_STRAIN_OFFSET 192
+#define EXPECTED_RESULT_V3_SIZE 208
 #define EXPECTED_DLPACK_SHAPE_OFFSET 36
 #else
 #error "c_api_test requires a 32-bit or 64-bit pointer ABI"
@@ -136,6 +140,8 @@ _Static_assert(XTBLOOM_BATCH_RESULT_V1_SIZE == EXPECTED_RESULT_V1_SIZE,
                "batch-result ABI-v1 prefix must match the target pointer width");
 _Static_assert(XTBLOOM_BATCH_RESULT_V2_SIZE == EXPECTED_RESULT_V2_SIZE,
                "batch-result ABI-v2 image must match the target pointer width");
+_Static_assert(XTBLOOM_BATCH_RESULT_V3_SIZE == EXPECTED_RESULT_V3_SIZE,
+               "batch-result ABI-v3 image must match the target pointer width");
 _Static_assert(offsetof(xtbloom_batch_result_t, dipole_moments) == EXPECTED_RESULT_DIPOLE_OFFSET,
                "batch-result ABI-v2 suffix must match the target pointer width");
 _Static_assert(offsetof(xtbloom_batch_result_t, quadrupole_moments) ==
@@ -145,8 +151,15 @@ _Static_assert(offsetof(xtbloom_batch_result_t, wiberg_orders) == EXPECTED_RESUL
                "batch-result Wiberg outlet offset must remain stable");
 _Static_assert(offsetof(xtbloom_batch_result_t, spin_populations) == EXPECTED_RESULT_SPIN_OFFSET,
                "batch-result spin outlet offset must remain stable");
+_Static_assert(offsetof(xtbloom_batch_result_t, strain_derivatives) ==
+                   EXPECTED_RESULT_STRAIN_OFFSET,
+               "batch-result strain outlet offset must match the target pointer width");
 _Static_assert(XTBLOOM_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "dipole publication result flag must remain at bit 4");
+_Static_assert(XTBLOOM_COMPUTE_STRAIN_DERIVATIVES == (1 << 5),
+               "strain compute flag must remain at bit 5");
+_Static_assert(XTBLOOM_RESULT_STRAIN_DERIVATIVES == (1 << 5),
+               "strain publication result flag must remain at bit 5");
 _Static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
                "request state tag must remain 32-bit");
 _Static_assert(XTBLOOM_REQUEST_INFO_V1_SIZE == 24,
@@ -291,7 +304,7 @@ static int check_workspace_query_init(void) {
   return 1;
 }
 
-/* Exercise the ABI-v4 batch and ABI-v2 result initializers: full-size images
+/* Exercise the ABI-v4 batch and ABI-v3 result initializers: full-size images
  * must zero the interaction/lattice suffixes and the result outlets, while a short
  * ABI-v1 prefix must still initialize without touching caller bytes it does
  * not own. */
@@ -317,13 +330,14 @@ static int check_batch_result_suffix_init(void) {
   if (xtbloom_batch_result_init(&result, sizeof(result)) != XTBLOOM_STATUS_SUCCESS) {
     return 0;
   }
-  if (result.struct_size != XTBLOOM_BATCH_RESULT_V2_SIZE ||
+  if (result.struct_size != XTBLOOM_BATCH_RESULT_V3_SIZE ||
       result.api_version != XTBLOOM_API_VERSION || result.dipole_moments.data != NULL ||
       result.quadrupole_moments.data != NULL || result.wiberg_orders.data != NULL ||
-      result.spin_populations.data != NULL) {
+      result.spin_populations.data != NULL || result.strain_derivatives.data != NULL) {
     return 0;
   }
   if (!check_short_batch_result_init(XTBLOOM_BATCH_RESULT_V1_SIZE) ||
+      !check_short_batch_result_init(XTBLOOM_BATCH_RESULT_V2_SIZE) ||
       !check_short_batch_result_init(XTBLOOM_BATCH_RESULT_V2_SIZE - 1)) {
     return 0;
   }
@@ -340,10 +354,11 @@ static xtbloom_buffer_t output_view(void* data, size_t size_bytes) {
   return buffer;
 }
 
-/* Prove that a valid native 3D request is rejected before caller publication.
- * No eigensolver provider is needed because the availability gate precedes
- * model setup and execution. */
-static int check_periodic_refusal_is_atomic(xtbloom_context_t* context) {
+/* Prove that a malformed native 3D derivative request is rejected before
+ * caller publication.  Periodic CPU forces are now executable, so exercise
+ * the common transactional alias gate instead of relying on the old
+ * not-implemented force shell. */
+static int check_periodic_invalid_request_is_atomic(xtbloom_context_t* context) {
   const int64_t atom_offsets[2] = {0, 1};
   const int32_t atomic_numbers[1] = {2};
   const double positions[3] = {0.0, 0.0, 0.0};
@@ -377,15 +392,18 @@ static int check_periodic_refusal_is_atomic(xtbloom_context_t* context) {
   batch.periodic_axes = input_view(axes, sizeof(axes));
   result.flags = 0x5a5a5a5au;
   result.energies = output_view(&energy, sizeof(energy));
-  result.forces = output_view(forces, sizeof(forces));
+  /* Deliberately alias the caller-owned cell input.  Validation must reject
+   * this before the eigensolver or periodic force path can touch outputs. */
+  result.forces = output_view((void*)cell, sizeof(cell));
   result.scc_iterations = output_view(&iterations, sizeof(iterations));
   result.scc_converged = output_view(&converged, sizeof(converged));
   result.per_system_status = output_view(&system_status, sizeof(system_status));
 
   const xtbloom_status_t status = xtbloom_compute(context, &batch, &compute, &result);
-  return status == XTBLOOM_STATUS_NOT_IMPLEMENTED && result.flags == 0x5a5a5a5au &&
+  return status == XTBLOOM_STATUS_INVALID_ARGUMENT && result.flags == 0x5a5a5a5au &&
          energy == 123.0 && forces[0] == 11.0 && forces[1] == 12.0 && forces[2] == 13.0 &&
-         iterations == 17 && converged == 9 && system_status == XTBLOOM_STATUS_INTERNAL_ERROR;
+         cell[0] == 4.0 && cell[4] == 5.0 && cell[8] == 6.0 && iterations == 17 && converged == 9 &&
+         system_status == XTBLOOM_STATUS_INTERNAL_ERROR;
 }
 
 static int check_request_info_init(void) {
@@ -615,8 +633,8 @@ int main(void) {
     fprintf(stderr, "CPU request ABI shell behavior is incorrect: %s\n", xtbloom_get_last_error());
     return 9;
   }
-  if (!check_periodic_refusal_is_atomic(context)) {
-    fprintf(stderr, "native periodic refusal modified caller output: %s\n",
+  if (!check_periodic_invalid_request_is_atomic(context)) {
+    fprintf(stderr, "native periodic invalid request modified caller output: %s\n",
             xtbloom_get_last_error());
     return 10;
   }

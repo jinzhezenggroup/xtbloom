@@ -80,9 +80,11 @@ COMPUTE_FORCES = 1 << 1
 COMPUTE_ATOMIC_CHARGES = 1 << 2
 COMPUTE_POINT_CHARGE_FORCES = 1 << 3
 COMPUTE_DIPOLE_MOMENTS = 1 << 4
+COMPUTE_STRAIN_DERIVATIVES = 1 << 5
 
 RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
 RESULT_DIPOLE_MOMENTS = 1 << 4
+RESULT_STRAIN_DERIVATIVES = 1 << 5
 
 # Interaction-type tags (mirror of xtbloom_interaction_type_t). Both released
 # backends execute the uniform electric field; the remaining values stay
@@ -228,7 +230,7 @@ class ComputeOptions(ctypes.Structure):
 
 
 class BatchResult(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_result_t`` through the ABI-v2 suffix."""
+    """ctypes mirror of ``xtbloom_batch_result_t`` through the ABI-v3 suffix."""
 
     _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
@@ -246,6 +248,7 @@ class BatchResult(ctypes.Structure):
         ("quadrupole_moments", Buffer),
         ("wiberg_orders", Buffer),
         ("spin_populations", Buffer),
+        ("strain_derivatives", Buffer),
     ]
 
 
@@ -1251,6 +1254,7 @@ __all__ = [
     "COMPUTE_ENERGY",
     "COMPUTE_FORCES",
     "COMPUTE_POINT_CHARGE_FORCES",
+    "COMPUTE_STRAIN_DERIVATIVES",
     "DEFAULT_ELECTRONIC_TEMPERATURE",
     "DEFAULT_SCC_MIXER_DAMPING",
     "DEFAULT_SCC_MIXER_HISTORY",
@@ -1294,6 +1298,7 @@ __all__ = [
     "REQUEST_PENDING",
     "RESULT_DIPOLE_MOMENTS",
     "RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES",
+    "RESULT_STRAIN_DERIVATIVES",
     "SCC_MIXER_MODIFIED_BROYDEN",
     "SCC_START_FRESH",
     "SCC_START_WARM",
