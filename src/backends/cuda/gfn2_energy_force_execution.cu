@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 #include "backends/cuda/gfn2_energy_force_execution.cuh"
@@ -637,6 +639,7 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
       plan.force_composition_batch, Gfn2ForceCompositionComponent::kExplicitPointChargeForce);
   const bool point_output = results.forces.point_forces != nullptr;
   const bool physics_masks_valid = validate_restricted_physics_masks(plan);
+  const bool native_h0_periodic = input.h0.native_periodic.plan_token != 0u;
   if (!physics_masks_valid || input.plan_token != token || results.plan_token != token ||
       intermediates.plan_token != token || workspace.plan_token != token ||
       diagnostics.plan_token != token ||
@@ -730,7 +733,11 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
         input.electric_field.vectors == nullptr ||
         input.raw_atomic_charge_elements != plan.integral_batch.total_atoms ||
         input.raw_atomic_charges == nullptr)) ||
-      input.h0.positions != input.classical.positions || plan.geometry_generation == 0u ||
+      /* Native periodic H0 evaluates one-electron images from its wrapped
+       * central-cell view, while classical terms differentiate the caller's
+       * coordinates.  Molecular execution still requires one shared view. */
+      ((!native_h0_periodic && input.h0.positions != input.classical.positions) ||
+       plan.geometry_generation == 0u) ||
       diagnostics.total_energy_system_errors == nullptr ||
       diagnostics.total_energy_device_error == nullptr ||
       diagnostics.coordination_system_errors == nullptr ||
@@ -1286,7 +1293,9 @@ static cudaError_t execute_energy_force_impl(
   for (const AddressRange& write :
        {plan_failure_range, energy_result_range, staged_energy_range, execution_system_range,
         execution_device_range, energy_system_range, energy_device_range}) {
-    if (ranges_overlap(admission_range, write)) return cudaErrorInvalidValue;
+    if (ranges_overlap(admission_range, write)) {
+      return cudaErrorInvalidValue;
+    }
   }
   if (geometry != nullptr &&
       (geometry->plan_token != plan.plan_token || geometry->epoch.plan_token != plan.plan_token ||
@@ -1444,12 +1453,19 @@ static cudaError_t execute_energy_force_impl(
   if (status != cudaSuccess) {
     return status;
   }
+  /* Native periodic classical forces contract the multipole CN adjoint through
+   * their image-aware topology.  The molecular pair-list/dense CN VJP below
+   * intentionally remains disabled for that route: its cache contains only
+   * central-cell pairs and would both miss self-images and close the shared
+   * coordination sequence on an otherwise valid periodic request. */
+  const bool native_periodic =
+      plan.classical_plan.native_short_range_batch.topology.plan_token != 0u;
   /* Step 5: the committed sparse pair list is a second H0 coordination VJP
    * candidate.  It is parity-gated against the dense reference on both scalar
    * and device-epoch execution, so Graph replay receives the same protection
    * without capturing a host generation. */
-  const bool sparse_vjp_enabled =
-      plan.pairlist_committed.plan_token != 0u && plan.pairlist_batch.plan_token != 0u;
+  const bool sparse_vjp_enabled = !native_periodic && plan.pairlist_committed.plan_token != 0u &&
+                                  plan.pairlist_batch.plan_token != 0u;
   const std::int64_t gradient_elements = plan.integral_batch.total_atoms * 3;
   if (sparse_vjp_enabled) {
     Gfn2PairListConsumerView sparse_consumer = plan.pairlist_committed;
@@ -1489,37 +1505,75 @@ static cudaError_t execute_energy_force_impl(
       return status;
     }
   }
-  status = geometry == nullptr
-               ? add_gfn2_coordination_vjp_cuda(
-                     plan.coordination_batch, plan.coordination_cache, plan.geometry_generation,
-                     intermediates.h0.coordination_adjoint, intermediates.h0.gradients,
-                     workspace.coordination, diagnostics.coordination_system_errors,
-                     diagnostics.coordination_device_error, stream)
-               : add_gfn2_coordination_vjp_cuda(
-                     plan.coordination_batch, plan.coordination_cache, geometry->epoch,
-                     intermediates.h0.coordination_adjoint, intermediates.h0.gradients,
-                     workspace.coordination, diagnostics.coordination_system_errors,
-                     diagnostics.coordination_device_error, stream);
-  if (status != cudaSuccess) {
-    return status;
+  if (!native_periodic) {
+    status = geometry == nullptr
+                 ? add_gfn2_coordination_vjp_cuda(
+                       plan.coordination_batch, plan.coordination_cache, plan.geometry_generation,
+                       intermediates.h0.coordination_adjoint, intermediates.h0.gradients,
+                       workspace.coordination, diagnostics.coordination_system_errors,
+                       diagnostics.coordination_device_error, stream)
+                 : add_gfn2_coordination_vjp_cuda(
+                       plan.coordination_batch, plan.coordination_cache, geometry->epoch,
+                       intermediates.h0.coordination_adjoint, intermediates.h0.gradients,
+                       workspace.coordination, diagnostics.coordination_system_errors,
+                       diagnostics.coordination_device_error, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    /* A device-side topology preflight closes its leaf sequence.  Promote both
+     * sparse and dense sequence failures before the parity kernel can traverse
+     * atom_offsets or inspect either gradient candidate. */
+    status = promote_cn_vjp_sequence_failures_and_gate(
+        sparse_vjp_enabled, batch_size, plan.integral_batch.atom_offsets,
+        workspace.electronic_success_mask, workspace.sparse_sequence_active,
+        workspace.coordination.sequence_active, workspace.plan_failure, intermediates.h0.gradients,
+        workspace.sparse_gradient_scratch, intermediates.h0.gradients,
+        diagnostics.coordination_system_errors, diagnostics.execution_device_error, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    merge_stage_errors_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+        batch_size, workspace.electronic_success_mask, diagnostics.coordination_system_errors,
+        workspace.plan_failure, workspace.coordination_success_mask,
+        Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure,
+        diagnostics.execution_system_errors, diagnostics.execution_device_error);
+  } else {
+    /* Native periodic H0 contributes an explicit dE/dCN adjoint.  Contract it
+     * through the image-aware coordination model before entering the
+     * classical-force leaf; that keeps the H0 CN response in the electronic
+     * gradient, matching the CPU stationary force decomposition. */
+    auto native_short_range = plan.classical_plan.native_short_range_batch;
+    native_short_range.active_mask = workspace.electronic_success_mask;
+    native_short_range.active_mask_elements = batch_size;
+    status = reset_gfn2_native_periodic_short_range_errors_cuda(
+        batch_size, diagnostics.coordination_system_errors, diagnostics.coordination_device_error,
+        stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    status = add_gfn2_native_periodic_coordination_vjp_cuda(
+        native_short_range, workspace.classical.native_short_range_workspace,
+        intermediates.h0.coordination_adjoint, intermediates.h0.gradients,
+        workspace.classical.gradient_scratch, gradient_elements,
+        workspace.classical.sequence_active, diagnostics.coordination_system_errors,
+        diagnostics.coordination_device_error, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    record_sequence_plan_failure_kernel<<<1, 1, 0, stream>>>(
+        workspace.classical.sequence_active,
+        Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure, workspace.plan_failure,
+        diagnostics.execution_device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
+    merge_stage_errors_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+        batch_size, workspace.electronic_success_mask, diagnostics.coordination_system_errors,
+        workspace.plan_failure, workspace.coordination_success_mask,
+        Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure,
+        diagnostics.execution_system_errors, diagnostics.execution_device_error);
   }
-  /* A device-side topology preflight closes its leaf sequence.  Promote both
-   * sparse and dense sequence failures before the parity kernel can traverse
-   * atom_offsets or inspect either gradient candidate. */
-  status = promote_cn_vjp_sequence_failures_and_gate(
-      sparse_vjp_enabled, batch_size, plan.integral_batch.atom_offsets,
-      workspace.electronic_success_mask, workspace.sparse_sequence_active,
-      workspace.coordination.sequence_active, workspace.plan_failure, intermediates.h0.gradients,
-      workspace.sparse_gradient_scratch, intermediates.h0.gradients,
-      diagnostics.coordination_system_errors, diagnostics.execution_device_error, stream);
-  if (status != cudaSuccess) {
-    return status;
-  }
-  merge_stage_errors_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-      batch_size, workspace.electronic_success_mask, diagnostics.coordination_system_errors,
-      workspace.plan_failure, workspace.coordination_success_mask,
-      Gfn2EnergyForceExecutionDeviceError::kCoordinationGradientFailure,
-      diagnostics.execution_system_errors, diagnostics.execution_device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;

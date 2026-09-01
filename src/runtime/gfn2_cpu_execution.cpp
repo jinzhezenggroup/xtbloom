@@ -8,7 +8,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -2200,6 +2199,78 @@ struct Gfn2CpuExecutionCache::Impl {
     }
   }
 };
+
+xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& cache,
+                                                         Gfn2CpuPeriodicSnapshot& snapshot,
+                                                         std::string& error) {
+  try {
+    std::lock_guard<std::mutex> lock(cache.impl_->mutex);
+    const auto& implementation = *cache.impl_;
+    if (implementation.systems.empty() ||
+        implementation.systems.size() != implementation.system_statuses.size()) {
+      error = "CPU periodic snapshot has no completed system state";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+
+    std::vector<Gfn2CpuPeriodicSystemSnapshot> captured;
+    captured.resize(implementation.systems.size());
+    for (std::size_t index = 0u; index < implementation.systems.size(); ++index) {
+      const SystemExecution& system = *implementation.systems[index];
+      Gfn2CpuPeriodicSystemSnapshot& output = captured[index];
+      output.native_periodic = system.native_periodic;
+      output.status = implementation.system_statuses[index];
+      if (!system.native_periodic) continue;
+
+      const std::size_t atoms = static_cast<std::size_t>(system.wavefunction_layout.total_atoms);
+      const std::size_t shells = static_cast<std::size_t>(system.wavefunction_layout.total_shells);
+      const std::size_t matrices = static_cast<std::size_t>(system.native_ewald_matrix.size());
+      const auto copy = [](auto& destination, const auto* source, std::size_t count) {
+        destination.assign(source, source + count);
+      };
+      copy(output.shell_charges, system.driver_workspace.shell_charges, shells);
+      copy(output.coordination_numbers, system.coordination_numbers.data(), atoms);
+      copy(output.atomic_charges, system.driver_workspace.atomic_charges, atoms);
+      copy(output.atomic_dipoles, system.driver_workspace.atomic_dipoles, atoms * 3u);
+      copy(output.atomic_quadrupoles, system.driver_workspace.atomic_quadrupoles, atoms * 6u);
+
+      copy(output.ewald_matrix, system.native_ewald_matrix.data(), matrices);
+      copy(output.ewald_shell_potentials, system.native_ewald_shell_potentials.data(), shells);
+      copy(output.ewald_energies, system.native_ewald_energies.data(), 1u);
+      copy(output.ewald_gradients, system.native_ewald_gradients.data(), atoms * 3u);
+      copy(output.ewald_strain, system.native_ewald_strain_derivatives.data(), 9u);
+
+      copy(output.multipole_charge_dipole, system.native_multipole_charge_dipole.data(),
+           atoms * atoms * 3u);
+      copy(output.multipole_dipole_dipole, system.native_multipole_dipole_dipole.data(),
+           atoms * atoms * 9u);
+      copy(output.multipole_charge_quadrupole, system.native_multipole_charge_quadrupole.data(),
+           atoms * atoms * 6u);
+      copy(output.multipole_charge_potentials, system.native_multipole_charge_potentials.data(),
+           atoms);
+      copy(output.multipole_dipole_potentials, system.native_multipole_dipole_potentials.data(),
+           atoms * 3u);
+      copy(output.multipole_quadrupole_potentials,
+           system.native_multipole_quadrupole_potentials.data(), atoms * 6u);
+      copy(output.multipole_energies, system.native_multipole_energies.data(), 1u);
+      copy(output.multipole_gradients, system.native_multipole_gradients.data(), atoms * 3u);
+      copy(output.multipole_strain, system.native_multipole_strain_derivatives.data(), 9u);
+      copy(output.multipole_coordination_adjoint,
+           system.native_multipole_coordination_adjoint.data(), atoms);
+    }
+    snapshot.systems = std::move(captured);
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the CPU periodic state snapshot";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    error = "unknown failure while capturing the CPU periodic state snapshot";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+}
 
 Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa)
     : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa)) {}

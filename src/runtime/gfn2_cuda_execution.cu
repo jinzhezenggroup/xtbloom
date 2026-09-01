@@ -39,6 +39,7 @@
 #include "backends/cuda/gfn2_scc_setup_inputs.cuh"
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 #include "backends/cuda/gfn2_terminal_classical_energy.cuh"
+#include "backends/cuda/periodic_topology.cuh"
 #include "data/parameters/d4.hpp"
 #include "data/parameters/gfn1.hpp"
 #include "data/parameters/gfn1_d3.hpp"
@@ -2780,9 +2781,31 @@ xtbloom_status_t make_topology_only_seed(
     for (std::int64_t system = 0; system < snapshot.batch_size; ++system) {
       const std::int64_t begin = snapshot.atom_offsets[static_cast<std::size_t>(system)];
       const std::int64_t end = snapshot.atom_offsets[static_cast<std::size_t>(system + 1)];
+      const std::int64_t atom_count = end - begin;
+      const bool periodic =
+          snapshot.native_lattice_enabled &&
+          snapshot.periodic_axes[static_cast<std::size_t>(system)] == XTBLOOM_PERIODIC_AXES_XYZ;
       for (std::int64_t atom = begin; atom < end; ++atom) {
         const std::int64_t local = atom - begin;
-        positions[static_cast<std::size_t>(3 * atom)] = 8.0 * static_cast<double>(local);
+        if (!periodic) {
+          positions[static_cast<std::size_t>(3 * atom)] = 8.0 * static_cast<double>(local);
+          continue;
+        }
+        /* Keep the topology-only periodic seed inside the supplied cell.
+         * The old 8-bohr spacing intentionally avoided molecular overlap but
+         * aliases exactly under an 8-bohr lattice, making setup validation
+         * report a fabricated coincident image.  Distinct fractional points
+         * along the first lattice vector preserve a deterministic, finite
+         * geometry without assuming a particular cell length. */
+        const double fraction =
+            (static_cast<double>(local) + 1.0) / (static_cast<double>(atom_count) + 1.0);
+        const std::size_t cell_offset = static_cast<std::size_t>(system) * 9u;
+        positions[static_cast<std::size_t>(3 * atom)] =
+            fraction * snapshot.cell_matrices[cell_offset + 0u];
+        positions[static_cast<std::size_t>(3 * atom) + 1u] =
+            fraction * snapshot.cell_matrices[cell_offset + 1u];
+        positions[static_cast<std::size_t>(3 * atom) + 2u] =
+            fraction * snapshot.cell_matrices[cell_offset + 2u];
       }
     }
     point_positions.assign(static_cast<std::size_t>(point_coordinate_elements), 0.0);
@@ -2861,6 +2884,12 @@ struct HostPlans {
   D4Plan d4;
   ExternalPointChargePlan external;
   PeriodicEmbeddingPlan periodic;
+  /* Native XYZ periodic topology and one-electron image plans are kept
+   * alongside the legacy caller-owned b + A*q embedding plan.  The SCC driver
+   * owns its Ewald/q-d/Q copies; these two owners are used by CUDA setup to
+   * validate and upload immutable metadata without conflating the components. */
+  PeriodicShortRangePlan native_periodic;
+  PeriodicIntegralPlan native_integrals;
   SccDriverPlan driver;
 
   /* GFN1 owns scalar SCC plans that cannot be represented by the GFN2
@@ -3149,7 +3178,11 @@ struct HostPlans {
                                  key.charge_tolerance, key.charge_tolerance, mixer, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
-    d4_enabled = false;
+    /* Periodic images make D4 meaningful even for a one-atom primitive cell:
+     * the self-image pair/ATM terms are part of the infinite lattice sum.
+     * Keep the molecular atom-count shortcut for non-periodic requests, but
+     * let every native XYZ plan reserve the D4 descriptors and scratch. */
+    d4_enabled = key.native_lattice_enabled;
     for (std::int64_t system = 0; system < batch; ++system) {
       d4_enabled = d4_enabled || key.atom_offsets[static_cast<std::size_t>(system + 1)] -
                                          key.atom_offsets[static_cast<std::size_t>(system)] >
@@ -3169,9 +3202,18 @@ struct HostPlans {
       status = make_periodic_embedding_plan(batch, atoms, key.atom_offsets.data(), periodic, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
     }
+    if (key.native_lattice_enabled) {
+      status = make_periodic_short_range_plan(batch, atoms, key.atom_offsets.data(),
+                                              key.cell_matrices.data(), native_periodic, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      status =
+          make_periodic_integral_plan(basis, integrals, native_periodic, native_integrals, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
     status =
         make_scc_driver_plan(wavefunction_layout, mulliken, es2, es3, aes2, eigensolver, mixer,
                              d4_enabled ? &d4 : nullptr, periodic_enabled ? &periodic : nullptr,
+                             key.native_lattice_enabled ? &native_periodic : nullptr,
                              static_cast<std::uint64_t>(key.maximum_iterations),
                              key.electronic_temperature, key.energy_tolerance, driver, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -3323,6 +3365,12 @@ struct HostPlans {
       sources.periodic.plan = &periodic;
       sources.periodic.shifts = setup_array(periodic_shifts);
       sources.periodic.response_matrices = setup_array(periodic_response);
+    }
+    if (key.native_lattice_enabled) {
+      sources.native_periodic.topology = &native_periodic;
+      sources.native_periodic.integrals = &native_integrals;
+      sources.native_periodic.ewald = driver.native_ewald_plan();
+      sources.native_periodic.multipole = driver.native_multipole_plan();
     }
     return sources;
   }
@@ -4035,6 +4083,10 @@ struct Gfn2CudaExecutionCache::Impl {
     bool submitted = false;
     HostPlans host;
     Gfn2SccSetupTopology topology_owner;
+    /* Native XYZ periodic image topology.  This owner is distinct from the
+     * common ragged AO topology: it retains cell/mask/translation arrays that
+     * the native short-range, Ewald, and multipole kernels borrow directly. */
+    Gfn2CudaPeriodicTopology native_periodic_topology_owner;
     Gfn2SccSetupInputs inputs_owner;
     Gfn2SccSetupEigensolver eigensolver_owner;
     Gfn2SccIterationInitializer initializer;
@@ -4772,7 +4824,23 @@ struct Gfn2CudaExecutionCache::Impl {
       abort_topology_candidate();
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
-    destination.flags = staged.result.flags;
+    /* The bridge owns the ABI-v3 publication boundary.  Do not rely on an
+     * internal CPU result image to carry newly released CUDA-visible flags:
+     * compute the advertised bits from the validated request here, at the
+     * same commit point as the copied buffers. */
+    destination.flags =
+        static_cast<std::uint32_t>((source.atomic_potential_shifts.data != nullptr ||
+                                    source.atomic_potential_shifts.size_bytes != 0u ||
+                                    source.charge_response_matrix.data != nullptr ||
+                                    source.charge_response_matrix.size_bytes != 0u)
+                                       ? XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES
+                                       : 0u) |
+        static_cast<std::uint32_t>((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u
+                                       ? XTBLOOM_RESULT_DIPOLE_MOMENTS
+                                       : 0u) |
+        static_cast<std::uint32_t>((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u
+                                       ? XTBLOOM_RESULT_STRAIN_DERIVATIVES
+                                       : 0u);
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -5552,6 +5620,12 @@ struct Gfn2CudaExecutionCache::Impl {
                        arena_pointer<double>(arena, offset.h0_pair_scale)};
     binding.plan.es2 = candidate.plan_seed.es2_batch;
     binding.plan.aes2 = aes2_enabled ? candidate.plan_seed.aes2_batch : Gfn2AES2DeviceBatch{};
+    binding.plan.native_integrals = candidate.host.key.native_lattice_enabled
+                                        ? candidate.plan_seed.native_integrals
+                                        : Gfn2NativePeriodicIntegralDeviceBatch{};
+    binding.plan.native_short_range = candidate.host.key.native_lattice_enabled
+                                          ? candidate.plan_seed.native_short_range_batch
+                                          : Gfn2NativePeriodicShortRangeDeviceBatch{};
     binding.input = {arena_pointer<double>(arena, offset.candidate_positions), coordinates, token};
     binding.activity = {arena_pointer<std::uint8_t>(arena, offset.requested), batch,
                         arena_pointer<std::uint8_t>(arena, offset.output_published), batch, token};
@@ -5803,6 +5877,10 @@ struct Gfn2CudaExecutionCache::Impl {
                                                nullptr,
                                                0}
                      : Gfn2AES2DeviceWorkspace{};
+    binding.workspace.native_short_range =
+        candidate.host.key.native_lattice_enabled
+            ? candidate.workspace_seed.native_short_range_workspace
+            : Gfn2NativePeriodicShortRangeDeviceWorkspace{};
     binding.workspace.plan_token = token;
     binding.geometry_epoch = {arena_pointer<std::uint64_t>(arena, offset.geometry_epoch), 1, token};
     binding.plan_token = token;
@@ -6025,6 +6103,45 @@ struct Gfn2CudaExecutionCache::Impl {
     if (candidate.host.periodic_enabled) {
       candidate.plan_seed.periodic_batch.shifts = device.committed_periodic_shifts;
       candidate.plan_seed.periodic_batch.response_matrices = device.committed_periodic_response;
+    }
+
+    if (candidate.host.key.native_lattice_enabled) {
+      /* Native XYZ terms consume the exact geometry and SCC multipoles that
+       * survived numerical-refresh publication.  The setup owner initially
+       * points at topology-only seed positions and leaves charge channels
+       * empty; replace those borrowed views here so every iteration observes
+       * the committed epoch rather than stale setup geometry. */
+      candidate.plan_seed.native_short_range_batch.positions = device.committed_positions;
+      candidate.plan_seed.native_short_range_batch.position_elements = coordinates;
+      candidate.plan_seed.native_ewald_batch.positions = device.committed_positions;
+      candidate.plan_seed.native_ewald_batch.position_elements = coordinates;
+      candidate.plan_seed.native_ewald_batch.shell_charges =
+          candidate.workspace_seed.physical_topology.shell_charges;
+      candidate.plan_seed.native_ewald_batch.shell_charge_elements = shells;
+      candidate.plan_seed.native_multipole_batch.positions = device.committed_positions;
+      candidate.plan_seed.native_multipole_batch.position_elements = coordinates;
+      candidate.plan_seed.native_multipole_batch.coordination_numbers =
+          candidate.plan_seed.geometry_cache.coordination_numbers;
+      candidate.plan_seed.native_multipole_batch.coordination_number_elements = atoms;
+      candidate.plan_seed.native_multipole_batch.atomic_charges =
+          candidate.workspace_seed.physical_topology.atomic_charges;
+      candidate.plan_seed.native_multipole_batch.atomic_charge_elements = atoms;
+      candidate.plan_seed.native_multipole_batch.atomic_dipoles =
+          candidate.workspace_seed.physical_topology.atomic_dipoles;
+      candidate.plan_seed.native_multipole_batch.atomic_dipole_elements = 3 * atoms;
+      candidate.plan_seed.native_multipole_batch.atomic_quadrupoles =
+          candidate.workspace_seed.physical_topology.atomic_quadrupoles;
+      candidate.plan_seed.native_multipole_batch.atomic_quadrupole_elements = 6 * atoms;
+      if (candidate.host.d4_enabled) {
+        candidate.plan_seed.native_d4_batch.positions = device.committed_positions;
+        candidate.plan_seed.native_d4_batch.position_elements = coordinates;
+        candidate.plan_seed.native_d4_batch.coordination_numbers =
+            candidate.plan_seed.geometry_cache.coordination_numbers;
+        candidate.plan_seed.native_d4_batch.coordination_number_elements = atoms;
+        candidate.plan_seed.native_d4_batch.atomic_charges =
+            candidate.workspace_seed.physical_topology.atomic_charges;
+        candidate.plan_seed.native_d4_batch.atomic_charge_elements = atoms;
+      }
     }
 
     std::vector<Gfn2SccCacheProvenanceBinding> provenance;
@@ -6767,6 +6884,46 @@ struct Gfn2CudaExecutionCache::Impl {
       post_plan.external_point_charge_cache = candidate.plan_seed.explicit_point_charge_cache;
       post_plan.periodic_batch = periodic_batch;
 
+      /* Native XYZ-periodic post-SCC refresh must use the same immutable
+       * lattice metadata as the SCC iteration.  The stationary force pass
+       * rebuilds the final shell/atomic potentials from the committed raw
+       * q/d/Q arrays, so bind these views here rather than silently falling
+       * back to the molecular ES2/AES2/D4 evaluators. */
+      if (candidate.host.key.native_lattice_enabled) {
+        auto native_ewald = candidate.plan_seed.native_ewald_batch;
+        native_ewald.positions = positions;
+        native_ewald.position_elements = coordinates;
+        native_ewald.shell_charges = candidate.workspace_seed.physical_topology.shell_charges;
+        native_ewald.shell_charge_elements = shells;
+        post_plan.native_ewald_batch = native_ewald;
+
+        auto native_multipole = candidate.plan_seed.native_multipole_batch;
+        native_multipole.positions = positions;
+        native_multipole.position_elements = coordinates;
+        native_multipole.coordination_numbers =
+            candidate.plan_seed.geometry_cache.coordination_numbers;
+        native_multipole.coordination_number_elements = atoms;
+        native_multipole.atomic_charges = candidate.workspace_seed.physical_topology.atomic_charges;
+        native_multipole.atomic_charge_elements = atoms;
+        native_multipole.atomic_dipoles = candidate.workspace_seed.physical_topology.atomic_dipoles;
+        native_multipole.atomic_dipole_elements = atomic_dipole_elements;
+        native_multipole.atomic_quadrupoles =
+            candidate.workspace_seed.physical_topology.atomic_quadrupoles;
+        native_multipole.atomic_quadrupole_elements = atomic_quadrupole_elements;
+        post_plan.native_multipole_batch = native_multipole;
+
+        if (d4_enabled) {
+          auto native_d4 = candidate.plan_seed.native_d4_batch;
+          native_d4.positions = positions;
+          native_d4.position_elements = coordinates;
+          native_d4.coordination_numbers = candidate.plan_seed.geometry_cache.coordination_numbers;
+          native_d4.coordination_number_elements = atoms;
+          native_d4.atomic_charges = candidate.workspace_seed.physical_topology.atomic_charges;
+          native_d4.atomic_charge_elements = atoms;
+          post_plan.native_d4_batch = native_d4;
+        }
+      }
+
       std::uint32_t classical_components =
           static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kRepulsion) |
           static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kES2);
@@ -6934,6 +7091,16 @@ struct Gfn2CudaExecutionCache::Impl {
                           stationary_weighted_density,
                           matrices,
                           token};
+      if (candidate.host.key.native_lattice_enabled) {
+        /* Native image-aware reverse passes must differentiate the wrapped
+         * coordinates used by preprocessing.  The public/classical force
+         * path continues to consume the committed (unwrapped) coordinates;
+         * only the one-electron image displacement is periodicized here. */
+        const auto& native_short_range = candidate.workspace_seed.native_short_range_workspace;
+        binding.input.h0.positions = native_short_range.wrapped_positions;
+        binding.input.h0.position_elements = native_short_range.wrapped_position_elements;
+        binding.input.h0.native_periodic = candidate.plan_seed.native_integrals;
+      }
 
       auto* const post_complete_shell =
           arena_pointer<double>(execution_arena, execution.post_complete_shell);
@@ -7108,6 +7275,17 @@ struct Gfn2CudaExecutionCache::Impl {
             1,
             token};
       }
+      if (candidate.host.key.native_lattice_enabled) {
+        /* These workspaces are persistent SCC-arena ranges.  Borrowing them
+         * keeps post-SCC refresh allocation-free and preserves graph replay
+         * address stability; the native evaluators stage all values before
+         * publishing their requested component slices. */
+        post_workspace.native_ewald = candidate.workspace_seed.native_ewald_workspace;
+        post_workspace.native_multipole = candidate.workspace_seed.native_multipole_workspace;
+        if (d4_enabled) {
+          post_workspace.native_d4 = candidate.workspace_seed.native_d4_workspace;
+        }
+      }
       post_workspace.composition = {
           arena_pointer<double>(execution_arena, execution.post_composition_shell),
           shells,
@@ -7231,6 +7409,55 @@ struct Gfn2CudaExecutionCache::Impl {
           classical_geometry,
           token,
           {}};
+      if (candidate.host.key.native_lattice_enabled) {
+        /* The SCC iteration stores native derivative tuples in its persistent
+         * arena.  Borrow those exact ranges for the stationary force reverse
+         * pass; only the converged physical q/d/Q projections are replaced in
+         * the immutable batch views below. */
+        binding.workspace.classical.native_short_range_workspace =
+            candidate.workspace_seed.native_short_range_workspace;
+        binding.workspace.classical.native_ewald_workspace =
+            candidate.workspace_seed.native_ewald_workspace;
+        binding.workspace.classical.native_multipole_workspace =
+            candidate.workspace_seed.native_multipole_workspace;
+        binding.workspace.classical.native_d4_workspace =
+            candidate.workspace_seed.native_d4_workspace;
+        auto native_short_range = candidate.plan_seed.native_short_range_batch;
+        native_short_range.positions = positions;
+        native_short_range.position_elements = coordinates;
+        native_short_range.atomic_numbers = atomic_numbers;
+        native_short_range.atomic_number_elements = atoms;
+        auto native_ewald = candidate.plan_seed.native_ewald_batch;
+        native_ewald.positions = positions;
+        native_ewald.position_elements = coordinates;
+        native_ewald.shell_charges = stationary_shell_charges;
+        native_ewald.shell_charge_elements = shells;
+        auto native_multipole = candidate.plan_seed.native_multipole_batch;
+        native_multipole.positions = positions;
+        native_multipole.position_elements = coordinates;
+        native_multipole.coordination_numbers =
+            candidate.plan_seed.geometry_cache.coordination_numbers;
+        native_multipole.coordination_number_elements = atoms;
+        native_multipole.atomic_charges = stationary_atomic_charges;
+        native_multipole.atomic_charge_elements = atoms;
+        native_multipole.atomic_dipoles = stationary_atomic_dipoles;
+        native_multipole.atomic_dipole_elements = atomic_dipole_elements;
+        native_multipole.atomic_quadrupoles = stationary_atomic_quadrupoles;
+        native_multipole.atomic_quadrupole_elements = atomic_quadrupole_elements;
+        auto native_d4 = candidate.plan_seed.native_d4_batch;
+        native_d4.positions = positions;
+        native_d4.position_elements = coordinates;
+        native_d4.atomic_numbers = atomic_numbers;
+        native_d4.atomic_number_elements = atoms;
+        native_d4.coordination_numbers = candidate.plan_seed.geometry_cache.coordination_numbers;
+        native_d4.coordination_number_elements = atoms;
+        native_d4.atomic_charges = stationary_atomic_charges;
+        native_d4.atomic_charge_elements = atoms;
+        binding.plan.classical_plan.native_short_range_batch = native_short_range;
+        binding.plan.classical_plan.native_ewald_batch = native_ewald;
+        binding.plan.classical_plan.native_multipole_batch = native_multipole;
+        binding.plan.classical_plan.native_d4_batch = native_d4;
+      }
       if (gfn1_enabled) {
         binding.workspace.classical.gfn1_correction = {
             arena_pointer<double>(execution_arena, execution.gfn1_weights),
@@ -7321,6 +7548,28 @@ struct Gfn2CudaExecutionCache::Impl {
       if (cuda_status != cudaSuccess) {
         error = cuda_error_message("CUDA initial geometry-cache construction", cuda_status);
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      if (candidate.host.key.native_lattice_enabled) {
+        /* The setup smoke runs the stationary force chain before the normal
+         * numerical-refresh head.  Populate the native image-aware workspace
+         * explicitly so wrapped coordinates (and periodic CN) are valid
+         * inputs to the native H0/classical reverse leaves exercised below. */
+        auto native_short_range = candidate.plan_seed.native_short_range_batch;
+        native_short_range.positions = binding.input.classical.positions;
+        native_short_range.position_elements = binding.input.classical.position_elements;
+        cuda_status = evaluate_gfn2_native_periodic_short_range_cuda(
+            native_short_range, candidate.workspace_seed.native_short_range_workspace,
+            binding.plan.coordination_cache.coordination_numbers,
+            candidate.workspace_seed.native_short_range_workspace.repulsion_energies,
+            candidate.workspace_seed.native_short_range_workspace.repulsion_gradients,
+            candidate.workspace_seed.native_short_range_workspace.repulsion_strain,
+            binding.diagnostics.coordination_system_errors,
+            binding.diagnostics.coordination_device_error, stream);
+        if (cuda_status != cudaSuccess) {
+          error = cuda_error_message("CUDA initial native periodic short-range construction",
+                                     cuda_status);
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
       }
       if (!gfn1_enabled) {
         cuda_status = reset_gfn2_aes2_device_errors_cuda(
@@ -7448,6 +7697,16 @@ struct Gfn2CudaExecutionCache::Impl {
     const std::int64_t points = candidate.host.external.total_point_charges;
     const std::uint64_t token = candidate.host.plan_token;
     const std::uint32_t requested = candidate.host.key.flags;
+    /* The internal inference publication ABI predates the v3 strain suffix.
+     * Strain is published by the energy/force bridge, so keep it in the
+     * complete request identity above but omit it from this fixed-property
+     * publication mask. */
+    const std::uint32_t publication_requested =
+        requested & (static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_FORCES) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) |
+                     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS));
     const bool d4_enabled = candidate.host.d4_enabled;
     const bool gfn1_enabled = candidate.host.gfn1_enabled;
     const bool energy_requested =
@@ -7627,7 +7886,29 @@ struct Gfn2CudaExecutionCache::Impl {
         candidate.numerical.preprocessing.geometry_epoch,
         candidate.numerical.device.committed_generations,
         batch,
+        candidate.host.key.native_lattice_enabled
+            ? candidate.workspace_seed.native_short_range_workspace.repulsion_energies
+            : nullptr,
+        candidate.host.key.native_lattice_enabled ? batch : 0,
     };
+    if (candidate.host.key.native_lattice_enabled && d4_enabled) {
+      /* Native periodic ATM consumes the same committed geometry/CN views as
+       * the SCC iteration.  Keep the old molecular D4 descriptor empty on
+       * this route so terminal validation cannot accidentally mix pair-list
+       * and image-aware terms. */
+      inference.terminal_plan.native_d4_batch = candidate.plan_seed.native_d4_batch;
+      /* `repulsion` may use a terminal-arena copy of atomic numbers when the
+       * immutable setup owner did not retain a device view.  Native D4 is
+       * validated as one zero-copy descriptor and therefore must borrow that
+       * exact pointer rather than the setup-only seed pointer. */
+      inference.terminal_plan.native_d4_batch.atomic_numbers = terminal_atomic_numbers;
+      inference.terminal_plan.native_d4_batch.atomic_number_elements = atoms;
+      inference.terminal_plan.native_d4_batch.positions =
+          candidate.numerical.device.committed_positions;
+      inference.terminal_plan.native_d4_batch.position_elements = coordinates;
+      inference.terminal_plan.native_d4_batch.active_mask = candidate.numerical.device.eligible;
+      inference.terminal_plan.native_d4_batch.active_mask_elements = batch;
+    }
     inference.terminal_activity = {
         candidate.numerical.device.eligible, batch, token, {nullptr, 0, 0}};
     inference.terminal_results = {
@@ -7665,6 +7946,13 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::uint64_t>(arena, offset.terminal_epoch_snapshot);
     inference.terminal_workspace.epoch_snapshot_elements = 1;
     inference.terminal_workspace.plan_token = token;
+    if (candidate.host.key.native_lattice_enabled && d4_enabled) {
+      /* Reuse the fixed SCC arena.  The terminal ATM launch is ordered after
+       * the SCC loop and before the stationary force reverse pass, so this
+       * borrow adds no per-call allocation or transfer. */
+      inference.terminal_workspace.native_d4_workspace =
+          candidate.workspace_seed.native_d4_workspace;
+    }
     inference.terminal_diagnostics = {
         arena_pointer<std::uint32_t>(arena, offset.terminal_repulsion_error),
         arena_pointer_if<std::uint32_t>(arena, offset.terminal_d4_system_errors,
@@ -7701,7 +7989,7 @@ struct Gfn2CudaExecutionCache::Impl {
     };
     inference.publication_plan = {
         kGfn2InferencePublicationAbiVersion,
-        requested,
+        publication_requested,
         token,
         static_cast<std::uint64_t>(candidate.host.key.maximum_iterations),
         batch,
@@ -8147,6 +8435,26 @@ struct Gfn2CudaExecutionCache::Impl {
         message << " system=" << std::distance(execution_system_errors, first_system_error)
                 << " system_error=" << *first_system_error;
       }
+      /* Candidate setup failures otherwise expose only the execution-level
+       * mapping (for example, kClassicalForceFailure).  Include the first
+       * nested force-stage code while the validation arena is still live so a
+       * native periodic binding defect remains actionable without a debugger. */
+      std::vector<std::uint32_t> classical_errors(static_cast<std::size_t>(batch), 0u);
+      std::uint32_t classical_device_error = 0u;
+      if (cudaMemcpy(classical_errors.data(), binding.diagnostics.classical_system_errors,
+                     static_cast<std::size_t>(batch) * sizeof(std::uint32_t),
+                     cudaMemcpyDeviceToHost) == cudaSuccess &&
+          cudaMemcpy(&classical_device_error, binding.diagnostics.classical_device_error,
+                     sizeof(classical_device_error), cudaMemcpyDeviceToHost) == cudaSuccess) {
+        const auto first_classical = std::find_if(classical_errors.begin(), classical_errors.end(),
+                                                  [](std::uint32_t value) { return value != 0u; });
+        message << " classical_device_error=" << classical_device_error;
+        if (first_classical != classical_errors.end()) {
+          message << " classical_system="
+                  << std::distance(classical_errors.begin(), first_classical)
+                  << " classical_system_error=" << *first_classical;
+        }
+      }
       error = message.str();
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
@@ -8220,6 +8528,38 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     candidate->submitted = true;
 
+    if (candidate->host.key.native_lattice_enabled) {
+      /* Upload the immutable cell/image topology once per prepared plan.  The
+       * common AO topology above intentionally has no cell fields, so native
+       * descriptors must borrow this dedicated owner rather than trying to
+       * reinterpret Gfn2RaggedTopologyView as a periodic view. */
+      Gfn2CudaPeriodicTopologyInput native_topology_input{};
+      native_topology_input.batch_size = candidate->host.basis.batch_size;
+      native_topology_input.total_atoms = candidate->host.basis.total_atoms;
+      native_topology_input.atom_offsets = candidate->host.key.atom_offsets.data();
+      native_topology_input.cell_matrices = candidate->host.key.cell_matrices.data();
+      native_topology_input.periodic_axes = candidate->host.key.periodic_axes.data();
+      /* Native D4 needs the complete 50-bohr translation superset.  The
+       * short-range and coordination consumers apply their own narrower
+       * predicates, so sharing this larger immutable topology preserves one
+       * cache identity without truncating D4 image contributions. */
+      native_topology_input.image_cutoff = 50.0;
+      native_topology_input.plan_token = token;
+      native_topology_input.cell_generation =
+          candidate->host.geometry_generation == 0u ? 1u : candidate->host.geometry_generation;
+      const auto native_topology_diagnostic = Gfn2CudaPeriodicTopology::create(
+          native_topology_input, stream, candidate->native_periodic_topology_owner);
+      if (!native_topology_diagnostic.success()) {
+        error = setup_error_message("CUDA native periodic topology construction",
+                                    native_topology_diagnostic.status,
+                                    static_cast<std::uint32_t>(native_topology_diagnostic.error),
+                                    static_cast<std::uint32_t>(native_topology_diagnostic.field),
+                                    native_topology_diagnostic.index);
+        return native_topology_diagnostic.status;
+      }
+      candidate->submitted = true;
+    }
+
     auto input_diagnostic =
         candidate->host.gfn1_enabled
             ? Gfn2SccSetupInputs::create(candidate->host.gfn1_input_sources(),
@@ -8250,6 +8590,22 @@ struct Gfn2CudaExecutionCache::Impl {
                                   static_cast<std::uint32_t>(input_diagnostic.field),
                                   input_diagnostic.index);
       return input_diagnostic.status;
+    }
+    /* Native periodic leaves are uploaded with an empty topology field because
+     * the input owner does not own the separate cell/translation arena.  Bind
+     * all three native physics descriptors to the exact topology view produced
+     * above before the plan is copied into the SCC binding.  Without this
+     * projection a future native launch would fail closed (or, worse, consume
+     * a zero-sized topology) even though the immutable metadata upload passed.
+     */
+    if (candidate->host.key.native_lattice_enabled) {
+      const auto native_topology = candidate->native_periodic_topology_owner.device_view();
+      candidate->plan_seed.native_short_range_batch.topology = native_topology;
+      candidate->plan_seed.native_ewald_batch.topology = native_topology;
+      candidate->plan_seed.native_multipole_batch.topology = native_topology;
+      if (candidate->host.d4_enabled) {
+        candidate->plan_seed.native_d4_batch.topology = native_topology;
+      }
     }
     /* Uniform-field storage is part of every fixed CUDA plan so FRESH calls
      * can attach, change, or detach a field without changing the SCC arena.
@@ -8488,15 +8844,11 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     candidate->submitted = true;
-    /* Native XYZ periodic plans currently execute through the validated CPU
-     * periodic bridge.  That bridge publishes the ABI-v3 strain suffix on the
-     * host and never enters the molecular CUDA request graph; capturing the
-     * ordinary graph here would therefore feed the strain bit into the
-     * device-only inference publication binding, which intentionally has no
-     * strain storage and rejects the request.  Keep the fixed topology and
-     * SCC setup intact, but defer graph construction for native-periodic plans
-     * until CUDA-native Ewald/multipole publication is available. */
-    if (build_request_graph && !candidate->host.key.native_lattice_enabled) {
+    /* Native XYZ plans now use the same device SCC loop as molecular plans.
+     * The native Ewald/multipole leaves are projected into the existing ES2 /
+     * AES2 component slots, so no separate host bridge or graph variant is
+     * needed at this boundary. */
+    if (build_request_graph) {
       status = build_request_execution_graph(*candidate, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
     }
@@ -9773,7 +10125,12 @@ struct Gfn2CudaExecutionCache::Impl {
     const auto preprocessing_launch =
         compose_gfn2_preprocessing_epoch_cuda(preprocessing, execution_stream);
     if (!preprocessing_launch.success()) {
-      error = "CUDA numerical preprocessing composer rejected the runtime binding";
+      error = "CUDA numerical preprocessing composer rejected the runtime binding: binding_error=" +
+              std::to_string(static_cast<std::uint32_t>(preprocessing_launch.binding.error)) +
+              " field=" +
+              std::to_string(static_cast<std::uint32_t>(preprocessing_launch.binding.field)) +
+              " index=" + std::to_string(preprocessing_launch.binding.index) +
+              " cuda=" + std::to_string(static_cast<int>(preprocessing_launch.cuda_status));
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
@@ -9880,6 +10237,36 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
     }
 
+    /* Fresh SCC restoration copies the immutable initializer image over the
+     * iteration arena.  Native periodic short-range geometry is deliberately
+     * refreshed before SCC so its CN feeds the Hamiltonian, but that copy also
+     * clears the image-aware wrapped coordinates, repulsion tuple, and strain
+     * scratch consumed by the terminal energy/force leaves.  Rebuild the
+     * complete short-range tuple after the restore boundary (and before SCC)
+     * so FRESH and WARM share the same committed geometry without retaining a
+     * stale zero-valued repulsion candidate.  The native evaluator is
+     * allocation-free and stream-ordered, therefore this remains safe during
+     * asynchronous graph capture as well as synchronous execution.
+     */
+    if (current.host.key.native_lattice_enabled) {
+      auto native_short_range = current.plan_seed.native_short_range_batch;
+      native_short_range.positions = current.numerical.device.committed_positions;
+      native_short_range.position_elements = current.numerical.device.total_atoms * 3;
+      auto& native_workspace = current.workspace_seed.native_short_range_workspace;
+      cuda_status = evaluate_gfn2_native_periodic_short_range_cuda(
+          native_short_range, native_workspace, native_workspace.coordination,
+          native_workspace.repulsion_energies, native_workspace.repulsion_gradients,
+          native_workspace.repulsion_strain,
+          current.numerical.preprocessing.diagnostics.geometry_system_errors,
+          current.numerical.preprocessing.diagnostics.geometry_device_error, stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA native periodic short-range post-restore rebuild",
+                                   cuda_status);
+        return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                    : XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+    }
+
     /* The synchronous path launches the production device-resident early-stop
      * Graph. The asynchronous request Graph instead captures the bounded
      * iteration DAG at setup. Nesting a device-launched/tail-launched SCC
@@ -9887,10 +10274,21 @@ struct Gfn2CudaExecutionCache::Impl {
      * boundary on CUDA 12.9/Blackwell; the bounded body keeps one prebuilt
      * request-Graph launch per call and introduces no steady-state allocation,
      * host polling, transfer, or synchronization. */
+    /* Device-tail SCC graphs launch their numerical body with
+     * cudaStreamGraphFireAndForget.  That body is therefore not ordered with
+     * the ordinary terminal kernels enqueued immediately afterwards on the
+     * caller stream.  Native periodic leaves reuse the SCC arena for their
+     * Ewald/multipole/D4 scratch, so allowing the fire-and-forget graph here
+     * races the terminal force pass and can surface as a deferred illegal
+     * address.  Keep native-periodic requests on the bounded caller-stream
+     * loop until the graph has an explicit completion edge; asynchronous
+     * requests already select this same bounded path while capturing. */
+    const bool native_periodic_request = current.host.key.native_lattice_enabled;
+    const bool use_bounded_scc = capture_bounded_scc || native_periodic_request;
     const Gfn2SccLoopLaunchResult loop =
-        capture_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
-                                  current.scc_binding, inference.epoch_consumer, execution_stream)
-                            : current.scc_loop.launch(execution_stream);
+        use_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
+                              current.scc_binding, inference.epoch_consumer, execution_stream)
+                        : current.scc_loop.launch(execution_stream);
     if (!loop.success()) {
       std::ostringstream message;
       message << "CUDA SCC loop submission failed: mode="
@@ -11206,12 +11604,15 @@ xtbloom_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache
     status = implementation.ensure_handles(error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
-    /* Native XYZ periodicity is deliberately kept off the molecular CUDA
-     * graph until the dedicated Ewald/multipole kernels land.  Route only
-     * this explicitly identified case through the validated CPU periodic
-     * reference bridge; molecular and external-operator requests continue
-     * through the existing CUDA graph below. */
-    if (native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB) {
+    /* The native CUDA force path already computes the individual periodic
+     * derivative tuples, but its internal publication ABI predates the
+     * ABI-v3 strain outlet.  Keep ordinary native requests on the CUDA graph;
+     * route only an explicit strain request through the validated CPU periodic
+     * bridge until the device strain aggregate is exposed end to end. */
+    const bool native_periodic_strain_request =
+        native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB &&
+        (options.flags & static_cast<std::uint32_t>(XTBLOOM_COMPUTE_STRAIN_DERIVATIVES)) != 0u;
+    if (native_periodic_strain_request) {
       return implementation.execute_native_periodic_cpu_bridge_locked(
           batch, options, result, require_prepared_topology, error);
     }
@@ -11480,12 +11881,13 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       status = implementation.ensure_handles(error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
-      /* Native periodic GFN2 has a validated synchronous CPU reference bridge
-       * while the device Ewald/multipole kernels are still being developed.
-       * Run that bridge on a worker so context/plan enqueue remains genuinely
-       * nonblocking.  A fixed molecular plan must continue through the normal
-       * stream-ordered refusal path; only a native-periodic plan may reuse its
-       * immutable topology during asynchronous execution. */
+      /* The internal CUDA publication image still does not carry the full
+       * ABI-v3 native-periodic result suffix, and fixed-topology comparison
+       * for the in-progress native plan is not yet a valid asynchronous
+       * submission.  Route every native-periodic async request through the
+       * validated CPU reference worker until the native publication/Graph
+       * path exposes those semantics end to end.  Molecular requests retain
+       * the normal stream-ordered CUDA path. */
       const bool native_periodic_request =
           native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB;
       const bool native_periodic_bridge_allowed =
@@ -11506,6 +11908,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
         implementation.active_request.native_periodic_async = std::move(bridge_state);
         return XTBLOOM_STATUS_SUCCESS;
       }
+
       const Gfn2CudaSccStartMode start_mode = public_scc_start_mode(options);
       std::unique_ptr<Gfn2CudaExecutionCache::Impl::Prepared> candidate;
       bool topology_candidate_pending = false;

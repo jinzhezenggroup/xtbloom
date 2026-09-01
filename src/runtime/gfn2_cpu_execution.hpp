@@ -6,11 +6,14 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "cpu_dispatch/features.hpp"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail {
+
+struct Gfn2CpuPeriodicSnapshot;
 
 /*
  * Context-owned cache for restricted host GFN2 execution.
@@ -51,7 +54,53 @@ class Gfn2CpuExecutionCache {
                                                       bool& reused, std::string& error);
   friend std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(
       Gfn2CpuExecutionCache& cache) noexcept;
+  friend xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& cache,
+                                                                  Gfn2CpuPeriodicSnapshot& snapshot,
+                                                                  std::string& error);
 };
+
+/*
+ * Read-only state exported to the CUDA periodic bridge after a completed CPU
+ * SCC attempt.  The vectors are deliberately value-owned: the CPU cache may
+ * start another request only after the bridge has finished consuming this
+ * snapshot, and no CUDA work can retain pointers into a mutable SystemExecution.
+ */
+struct Gfn2CpuPeriodicSystemSnapshot {
+  bool native_periodic = false;
+  xtbloom_status_t status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  std::vector<double> shell_charges;
+  std::vector<double> coordination_numbers;
+  std::vector<double> atomic_charges;
+  std::vector<double> atomic_dipoles;
+  std::vector<double> atomic_quadrupoles;
+
+  std::vector<double> ewald_matrix;
+  std::vector<double> ewald_shell_potentials;
+  std::vector<double> ewald_energies;
+  std::vector<double> ewald_gradients;
+  std::vector<double> ewald_strain;
+
+  std::vector<double> multipole_charge_dipole;
+  std::vector<double> multipole_dipole_dipole;
+  std::vector<double> multipole_charge_quadrupole;
+  std::vector<double> multipole_charge_potentials;
+  std::vector<double> multipole_dipole_potentials;
+  std::vector<double> multipole_quadrupole_potentials;
+  std::vector<double> multipole_energies;
+  std::vector<double> multipole_gradients;
+  std::vector<double> multipole_strain;
+  std::vector<double> multipole_coordination_adjoint;
+};
+
+struct Gfn2CpuPeriodicSnapshot {
+  std::vector<Gfn2CpuPeriodicSystemSnapshot> systems;
+};
+
+/* Capture the converged/terminal native-periodic state without exposing the
+ * CPU cache's private SystemExecution objects to CUDA code. */
+xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& cache,
+                                                         Gfn2CpuPeriodicSnapshot& snapshot,
+                                                         std::string& error);
 
 /*
  * Execute one already descriptor-validated host request.

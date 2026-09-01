@@ -915,6 +915,29 @@ const std::vector<double>& PeriodicMultipolePlan::multipole_valence_cn() const n
   return data_ == nullptr ? empty : data_->multipole_valence_cn;
 }
 
+const std::vector<std::int64_t>& PeriodicMultipolePlan::direct_translation_offsets()
+    const noexcept {
+  static const std::vector<std::int64_t> empty;
+  return data_ == nullptr ? empty : data_->direct_translation_offsets;
+}
+
+const std::vector<std::int64_t>& PeriodicMultipolePlan::reciprocal_translation_offsets()
+    const noexcept {
+  static const std::vector<std::int64_t> empty;
+  return data_ == nullptr ? empty : data_->reciprocal_translation_offsets;
+}
+
+const std::vector<LatticeTranslation>& PeriodicMultipolePlan::direct_translations() const noexcept {
+  static const std::vector<LatticeTranslation> empty;
+  return data_ == nullptr ? empty : data_->direct_translations;
+}
+
+const std::vector<LatticeTranslation>& PeriodicMultipolePlan::reciprocal_translations()
+    const noexcept {
+  static const std::vector<LatticeTranslation> empty;
+  return data_ == nullptr ? empty : data_->reciprocal_translations;
+}
+
 bool PeriodicMultipolePlan::overlaps_storage(const void* pointer,
                                              std::size_t bytes) const noexcept {
   if (bytes == 0u) return false;

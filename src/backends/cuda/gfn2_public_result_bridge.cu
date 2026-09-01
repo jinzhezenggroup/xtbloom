@@ -19,7 +19,11 @@ constexpr std::uint32_t kKnownProperties =
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_FORCES) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) |
-    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS);
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS) |
+    /* Strain is staged and published by the native-periodic owner alongside
+     * this bridge; accepting the request bit here keeps the aggregate gate
+     * from rejecting an otherwise valid ABI-v3 transaction. */
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_STRAIN_DERIVATIVES);
 constexpr std::uint32_t kKnownResultFlags =
     static_cast<std::uint32_t>(XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES) |
     static_cast<std::uint32_t>(XTBLOOM_RESULT_DIPOLE_MOMENTS);

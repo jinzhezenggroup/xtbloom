@@ -82,6 +82,9 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
                   const Gfn2TerminalClassicalEnergyDeviceDiagnostics& diagnostics) noexcept {
   const std::int64_t batch = plan.repulsion.batch_size;
   const bool d4 = component_enabled(plan, Gfn2TerminalClassicalEnergyComponent::kD4Atm);
+  const bool native_d4 = d4 && plan.native_d4_batch.plan_token != 0u;
+  const bool native_repulsion =
+      plan.native_repulsion_energies != nullptr || plan.native_repulsion_elements != 0;
   if (plan.abi_version != kGfn2TerminalClassicalEnergyAbiVersion || plan.plan_token == 0u ||
       (plan.enabled_components & ~kGfn2TerminalClassicalEnergyAllComponents) != 0u || batch <= 0 ||
       batch > std::numeric_limits<int>::max() || plan.repulsion.total_atoms <= 0 ||
@@ -95,6 +98,10 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       !aligned(plan.committed_generations, alignof(std::uint64_t)) ||
       activity.plan_token != plan.plan_token || activity.batch_elements != batch ||
       !aligned(activity.requested_mask, alignof(std::uint8_t)) ||
+      (native_repulsion && (plan.native_repulsion_elements != batch ||
+                            !aligned(plan.native_repulsion_energies, alignof(double)))) ||
+      (!native_repulsion &&
+       (plan.native_repulsion_energies != nullptr || plan.native_repulsion_elements != 0)) ||
       (activity.admission.error == nullptr
            ? activity.admission.error_elements != 0 || activity.admission.plan_token != 0u
            : activity.admission.error_elements != 1 ||
@@ -127,7 +134,26 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
              plan.repulsion.effective_charge_elements != 0) {
     return false;
   }
-  if (d4) {
+  if (d4 && native_d4) {
+    const auto& native = plan.native_d4_batch;
+    const auto& native_workspace = workspace.native_d4_workspace;
+    const bool native_valid =
+        native.topology.plan_token == plan.plan_token && native.topology.batch_size == batch &&
+        native.topology.total_atoms == plan.repulsion.total_atoms &&
+        native.plan_token == plan.plan_token &&
+        native.atomic_numbers == plan.repulsion.atomic_numbers &&
+        native.atomic_number_elements == plan.repulsion.total_atoms &&
+        native.positions == plan.repulsion.positions &&
+        native.position_elements == plan.repulsion.total_atoms * 3 &&
+        native.coordination_numbers != nullptr &&
+        native.coordination_number_elements == plan.repulsion.total_atoms &&
+        native.image_cutoff >= 50.0 && native_workspace.plan_token == plan.plan_token &&
+        native_workspace.atom_energy != nullptr &&
+        native_workspace.atom_energy_elements == plan.repulsion.total_atoms;
+    if (!native_valid) {
+      return false;
+    }
+  } else if (d4) {
     if (plan.d4_batch.batch_size != batch ||
         plan.d4_batch.total_atoms != plan.repulsion.total_atoms ||
         plan.d4_batch.plan_token != plan.plan_token ||
@@ -146,14 +172,15 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
         workspace.d4.system_error_elements < batch) {
       return false;
     }
-  } else if (results.d4_atm != nullptr || results.d4_atm_elements != 0 ||
+  } else if (native_d4 || workspace.native_d4_workspace.plan_token != 0u ||
+             results.d4_atm != nullptr || results.d4_atm_elements != 0 ||
              workspace.d4_atm_candidate != nullptr || workspace.d4_atm_elements != 0 ||
              diagnostics.d4_system_errors != nullptr || diagnostics.d4_system_error_elements != 0 ||
              diagnostics.d4_device_error != nullptr) {
     return false;
   }
 
-  std::array<AddressRange, 9> reads{};
+  std::array<AddressRange, 10> reads{};
   std::array<AddressRange, 9> writes{};
   if (!make_range(plan.repulsion.atom_offsets, batch + 1, reads[0]) ||
       !make_range(plan.repulsion.atomic_numbers, plan.repulsion.total_atoms, reads[1]) ||
@@ -165,6 +192,8 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       !make_range(plan.repulsion.sqrt_alpha, plan.repulsion.sqrt_alpha_elements, reads[7]) ||
       !make_range(plan.repulsion.effective_charge, plan.repulsion.effective_charge_elements,
                   reads[8]) ||
+      !make_range(plan.native_repulsion_energies,
+                  native_repulsion ? plan.native_repulsion_elements : 0, reads[9]) ||
       !make_range(results.repulsion, batch, writes[0]) ||
       !make_range(results.d4_atm, d4 ? batch : 0, writes[1]) ||
       !make_range(workspace.repulsion_candidate, batch, writes[2]) ||
@@ -185,11 +214,13 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
   for (const AddressRange& write : writes) {
     if (overlaps(plan_error, write)) return false;
   }
-  if (d4) {
+  if (d4 && !native_d4) {
     const cudaError_t d4_validation = validate_gfn2_d4_atm_pairlist_cuda(
         plan.d4_batch, plan.d4_parameters, plan.geometry_epoch, plan.d4_cache,
         workspace.d4_atm_candidate, workspace.d4, diagnostics.d4_device_error);
-    if (d4_validation != cudaSuccess) return false;
+    if (d4_validation != cudaSuccess) {
+      return false;
+    }
 
     /* The D4 leaf validates its own output and workspace ranges.  The outer
      * composer additionally protects repulsion/publication storage and its
@@ -320,6 +351,32 @@ __global__ void publish_terminal_classical_energy_kernel(
   if (d4) results.d4_atm[system] = atm;
 }
 
+/* Native D4 ATM evaluates one deterministic per-atom contribution because
+ * that is also the natural unit for its force/VJP workspace.  The terminal
+ * composer consumes one scalar per ragged peer, so reduce the committed atom
+ * slice here before the common generation/error gate publishes it. */
+__global__ void reduce_native_d4_atm_kernel(
+    Gfn2TerminalClassicalEnergyDevicePlan plan, Gfn2TerminalClassicalEnergyDeviceActivity activity,
+    Gfn2TerminalClassicalEnergyDeviceWorkspace workspace,
+    Gfn2TerminalClassicalEnergyDeviceDiagnostics diagnostics) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (threadIdx.x != 0 || system >= plan.repulsion.batch_size ||
+      !gfn2_request_admitted(activity.admission) || activity.requested_mask[system] != 1u ||
+      atomicAdd(diagnostics.plan_error, 0u) != 0u || diagnostics.d4_system_errors[system] != 0u) {
+    return;
+  }
+  const std::int64_t begin = plan.repulsion.atom_offsets[system];
+  const std::int64_t end = plan.repulsion.atom_offsets[system + 1];
+  double total = 0.0;
+  for (std::int64_t atom = begin; atom < end; ++atom)
+    total += workspace.native_d4_workspace.atom_energy[atom];
+  if (!isfinite(total)) {
+    record_system_error(diagnostics.system_errors, system, SystemError::kNonfiniteD4Atm);
+    return;
+  }
+  workspace.d4_atm_candidate[system] = total;
+}
+
 cudaError_t check_launch() noexcept { return cudaPeekAtLastError(); }
 
 }  // namespace
@@ -330,11 +387,13 @@ cudaError_t evaluate_gfn2_terminal_classical_energy_cuda(
     const Gfn2TerminalClassicalEnergyDeviceResults& results,
     const Gfn2TerminalClassicalEnergyDeviceWorkspace& workspace,
     const Gfn2TerminalClassicalEnergyDeviceDiagnostics& diagnostics, cudaStream_t stream) noexcept {
-  if (!valid_common(plan, activity, results, workspace, diagnostics)) {
+  const bool valid = valid_common(plan, activity, results, workspace, diagnostics);
+  if (!valid) {
     return cudaErrorInvalidValue;
   }
   const std::int64_t batch = plan.repulsion.batch_size;
   const bool d4 = component_enabled(plan, Gfn2TerminalClassicalEnergyComponent::kD4Atm);
+  const bool native_d4 = d4 && plan.native_d4_batch.plan_token != 0u;
 
   cudaError_t status =
       cudaMemsetAsync(diagnostics.system_errors, 0,
@@ -351,7 +410,30 @@ cudaError_t evaluate_gfn2_terminal_classical_energy_cuda(
   }
   if (status != cudaSuccess) return status;
 
-  if (d4) {
+  if (d4 && native_d4) {
+    auto native = plan.native_d4_batch;
+    native.active_mask = activity.requested_mask;
+    native.active_mask_elements = activity.batch_elements;
+    native.coordination_numbers = workspace.native_d4_workspace.coordination;
+    native.coordination_number_elements = plan.repulsion.total_atoms;
+    status = reset_gfn2_native_periodic_d4_errors_cuda(batch, diagnostics.d4_system_errors,
+                                                       diagnostics.d4_device_error, stream);
+    if (status == cudaSuccess) {
+      status = evaluate_gfn2_native_periodic_d4_coordination_cuda(
+          native, workspace.native_d4_workspace, workspace.native_d4_workspace.coordination,
+          diagnostics.d4_system_errors, diagnostics.d4_device_error, stream);
+    }
+    if (status == cudaSuccess) {
+      status = evaluate_gfn2_native_periodic_d4_atm_cuda(
+          native, workspace.native_d4_workspace, workspace.native_d4_workspace.atom_energy,
+          diagnostics.d4_system_errors, diagnostics.d4_device_error, stream);
+    }
+    if (status == cudaSuccess) {
+      reduce_native_d4_atm_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0,
+                                    stream>>>(plan, activity, workspace, diagnostics);
+      status = check_launch();
+    }
+  } else if (d4) {
     status = cudaMemsetAsync(workspace.d4_atm_candidate, 0,
                              static_cast<std::size_t>(batch) * sizeof(double), stream);
     if (status == cudaSuccess) {
@@ -366,10 +448,20 @@ cudaError_t evaluate_gfn2_terminal_classical_energy_cuda(
   status = check_launch();
   if (status != cudaSuccess) return status;
 
-  status = add_gfn2_repulsion_cuda(plan.repulsion, workspace.repulsion_candidate, nullptr,
-                                   diagnostics.repulsion_device_error, stream);
+  if (plan.native_repulsion_energies != nullptr) {
+    status = cudaMemcpyAsync(workspace.repulsion_candidate, plan.native_repulsion_energies,
+                             static_cast<std::size_t>(batch) * sizeof(double),
+                             cudaMemcpyDeviceToDevice, stream);
+  } else {
+    status = add_gfn2_repulsion_cuda(plan.repulsion, workspace.repulsion_candidate, nullptr,
+                                     diagnostics.repulsion_device_error, stream);
+  }
   if (status != cudaSuccess) return status;
-  if (d4) {
+  /* Native periodic D4 has already produced the ATM candidate above.  The
+   * molecular pair-list leaf is a separate physical route and must not run
+   * on the same terminal request: its cache is intentionally absent for a
+   * native XYZ plan. */
+  if (d4 && !native_d4) {
     status = evaluate_gfn2_d4_atm_pairlist_cuda(
         plan.d4_batch, plan.d4_parameters, plan.geometry_epoch, plan.d4_cache,
         workspace.d4_atm_candidate, workspace.d4, diagnostics.d4_device_error, stream);

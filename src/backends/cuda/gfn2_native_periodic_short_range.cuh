@@ -44,6 +44,10 @@ struct Gfn2NativePeriodicShortRangeDeviceBatch {
   std::int64_t position_elements = 0;
   const double* covalent_radii = nullptr;
   std::int64_t covalent_radius_elements = 0;
+  /* Optional peer-selection mask used by stationary reverse passes.  A null
+   * view preserves the standalone all-peer evaluator contract. */
+  const std::uint8_t* active_mask = nullptr;
+  std::int64_t active_mask_elements = 0;
 };
 
 /*
@@ -92,6 +96,19 @@ cudaError_t evaluate_gfn2_native_periodic_short_range_cuda(
     const Gfn2NativePeriodicShortRangeDeviceWorkspace& workspace, double* coordination_numbers,
     double* repulsion_energies, double* repulsion_gradients, double* repulsion_strain,
     std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream = nullptr) noexcept;
+
+/* Back-propagate a stationary dE/dCN field through the same wrapped image
+ * topology used by the forward coordination evaluator.  `gradients` is the
+ * existing dE/dR accumulator and `gradient_scratch` is an unpublished
+ * transaction buffer; a peer is copied only after all of its periodic image
+ * contributions are finite.  The sequence gate is supplied by the composed
+ * force executor so this leaf can preserve peer-local failure isolation. */
+cudaError_t add_gfn2_native_periodic_coordination_vjp_cuda(
+    const Gfn2NativePeriodicShortRangeDeviceBatch& batch,
+    const Gfn2NativePeriodicShortRangeDeviceWorkspace& workspace, const double* dE_dcn,
+    double* gradients, double* gradient_scratch, std::int64_t gradient_elements,
+    std::uint32_t* sequence_active, std::uint32_t* system_errors, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
 
 }  // namespace xtbloom::detail::cuda

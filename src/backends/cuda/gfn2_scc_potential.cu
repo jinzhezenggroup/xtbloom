@@ -1993,7 +1993,8 @@ cudaError_t gather_gfn2_scc_mixed_multipoles_cuda(
   }
   publish_mixed_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
                          stream>>>(batch, activity, topology, workspace, system_errors);
-  return cudaGetLastError();
+  status = cudaGetLastError();
+  return status;
 }
 
 cudaError_t reduce_gfn2_scc_mixed_atomic_charges_cuda(

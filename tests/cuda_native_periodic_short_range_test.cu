@@ -113,9 +113,13 @@ int test_periodic_short_range_parity_and_peer_isolation(cudaStream_t stream, int
   const std::vector<std::int64_t> atom_offsets{0, 3, 6};
   const std::vector<std::int32_t> valid_atomic_numbers{1, 8, 1, 1, 8, 1};
   const std::vector<std::int32_t> invalid_atomic_numbers{1, 8, 1, 0, 8, 1};
+  /* Keep this deliberately skewed cell and the out-of-cell coordinates below:
+   * the CPU/GPU parity checks are also the wrapping regression.  A Cartesian
+   * component-wise modulo would disagree with the full inverse/forward lattice
+   * transform for this fixture, even though an orthogonal cell would pass. */
   const std::vector<double> cells{
-      12.0, 0.0, 0.0, 0.0, 13.0, 0.0, 0.0, 0.0, 14.0,
-      12.0, 0.0, 0.0, 0.0, 13.0, 0.0, 0.0, 0.0, 14.0,
+      11.7, 0.0, 0.0, 1.1, 12.9, 0.0, -0.7, 0.8, 14.3,
+      11.7, 0.0, 0.0, 1.1, 12.9, 0.0, -0.7, 0.8, 14.3,
   };
   const std::vector<double> positions{
       12.10, 13.20, 14.30, -10.45, 0.20, 0.30, 0.10, 1.75, 0.30,

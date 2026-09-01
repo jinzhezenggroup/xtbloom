@@ -10,6 +10,7 @@
 
 #include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
+#include "backends/cuda/gfn2_native_periodic_integrals.cuh"
 
 namespace xtbloom::detail::cuda {
 
@@ -44,6 +45,10 @@ struct Gfn2H0ForceDeviceInput {
   const double* energy_weighted_density = nullptr;
   std::int64_t energy_weighted_density_elements = 0;
   std::uint64_t plan_token = 0u;
+  /* Native XYZ-periodic image metadata.  A zero token preserves the
+   * molecular central-cell reverse path; a nonzero token makes the H0 VJP
+   * traverse the same translation superset used by preprocessing. */
+  Gfn2NativePeriodicIntegralDeviceBatch native_periodic{};
 };
 
 /*
@@ -95,8 +100,12 @@ cudaError_t reset_gfn2_h0_force_device_errors_cuda(std::int64_t batch_size,
  *   dE/dCN += P : (dH0/dCN),
  *   dE/dR  += P : (direct dH0/dR at fixed S and CN).
  *
- * The overlap and coordination adjoints are intentionally left explicit for
- * the analytic integral/CN reverse passes. Publication is atomic per system.
+ * For native XYZ-periodic input, dH0/dS is an image-local term because the
+ * published H0 matrix is an image sum; that term is deliberately contracted
+ * by the periodic integral reverse beside each image's dS instead of being
+ * folded into the global overlap adjoint. The overlap and coordination
+ * adjoints are otherwise left explicit for the analytic integral/CN reverse
+ * passes. Publication is atomic per system.
  * The launcher allocates and synchronizes nothing, enqueues only on stream,
  * and is compatible with CUDA Graph capture and replay.
  */

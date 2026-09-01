@@ -45,6 +45,16 @@ class PeriodicEwaldPlan {
   [[nodiscard]] double alpha(std::int64_t system) const noexcept;
   [[nodiscard]] double direct_cutoff(std::int64_t system) const noexcept;
   [[nodiscard]] double reciprocal_cutoff(std::int64_t system) const noexcept;
+  /* Immutable metadata used by accelerator mirrors of the CPU Ewald plan.
+   * These views borrow the plan-owned storage and remain valid while this
+   * plan instance (or one of its copies) remains alive. */
+  [[nodiscard]] const std::vector<std::int64_t>& atom_shell_offsets() const noexcept;
+  [[nodiscard]] const std::vector<double>& shell_hardness() const noexcept;
+  [[nodiscard]] const std::vector<double>& alphas() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& direct_translation_offsets() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& reciprocal_translation_offsets() const noexcept;
+  [[nodiscard]] const std::vector<LatticeTranslation>& direct_translations() const noexcept;
+  [[nodiscard]] const std::vector<LatticeTranslation>& reciprocal_translations() const noexcept;
   [[nodiscard]] const PeriodicEwaldPlanData* identity() const noexcept { return data_.get(); }
   [[nodiscard]] bool overlaps_storage(const void* data, std::size_t bytes) const noexcept;
 

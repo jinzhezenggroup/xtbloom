@@ -6,8 +6,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -2347,8 +2345,6 @@ xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   const std::int64_t qat_base = layout.qat.system_offsets[system];
   const std::int64_t dipole_base = layout.dipole.system_offsets[system];
   const std::int64_t quadrupole_base = layout.quadrupole.system_offsets[system];
-  const bool debug_periodic_scc = std::getenv("XTBLOOM_DEBUG_PERIODIC_SCC") != nullptr &&
-                                  data.native_ewald.sealed() && layout.spin_channels[system] == 2;
 
   /* Component APIs consume topology-major arrays. Mulliken outputs retain the
    * wavefunction field packing, so flatten only this target system after the
@@ -2560,51 +2556,6 @@ xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
   workspace.explicit_point_charge_energies[system] = explicit_pc_energy;
   workspace.internal_energies[system] = internal_energy;
   workspace.free_energies[system] = free_energy;
-  if (debug_periodic_scc) {
-    std::fprintf(stderr,
-                 "periodic-scc system=%zu qsh=(%.17g,%.17g) qat=(%.17g,%.17g) "
-                 "core=%.17g es2=%.17g es3=%.17g aes2=%.17g spin=%.17g d4=%.17g "
-                 "internal=%.17g free=%.17g band=%.17g\\n",
-                 system, workspace.raw_qsh[static_cast<std::size_t>(qsh_base)],
-                 workspace.raw_qsh[static_cast<std::size_t>(qsh_base + shells)],
-                 workspace.raw_qat[static_cast<std::size_t>(qat_base)],
-                 workspace.raw_qat[static_cast<std::size_t>(qat_base + atoms)], core_energy,
-                 es2_energy, es3_energy, aes2_energy, spin_energy, d4_energy, internal_energy,
-                 free_energy, workspace.thermodynamics.band_energies[system]);
-    std::fprintf(stderr, "periodic-scc-detail system=%zu atoms=%lld\n", system,
-                 static_cast<long long>(atoms));
-    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
-      const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
-      std::fprintf(
-          stderr,
-          "  atom=%lld q=%.17g d=(%.17g,%.17g,%.17g) Q=(%.17g,%.17g,%.17g,%.17g,%.17g,%.17g)\n",
-          static_cast<long long>(local_atom), workspace.atomic_charges[atom],
-          workspace.atomic_dipoles[atom * 3u], workspace.atomic_dipoles[atom * 3u + 1u],
-          workspace.atomic_dipoles[atom * 3u + 2u], workspace.atomic_quadrupoles[atom * 6u],
-          workspace.atomic_quadrupoles[atom * 6u + 1u],
-          workspace.atomic_quadrupoles[atom * 6u + 2u],
-          workspace.atomic_quadrupoles[atom * 6u + 3u],
-          workspace.atomic_quadrupoles[atom * 6u + 4u],
-          workspace.atomic_quadrupoles[atom * 6u + 5u]);
-    }
-    for (std::int64_t local_atom = 0; local_atom < atoms; ++local_atom) {
-      const std::size_t atom = static_cast<std::size_t>(atom_begin + local_atom);
-      std::fprintf(stderr,
-                   "  potential atom=%lld vq=%.17g vd=(%.17g,%.17g,%.17g) "
-                   "vQ=(%.17g,%.17g,%.17g,%.17g,%.17g,%.17g)\n",
-                   static_cast<long long>(local_atom),
-                   geometry.native_multipole_charge_potentials[atom],
-                   geometry.native_multipole_dipole_potentials[atom * 3u],
-                   geometry.native_multipole_dipole_potentials[atom * 3u + 1u],
-                   geometry.native_multipole_dipole_potentials[atom * 3u + 2u],
-                   geometry.native_multipole_quadrupole_potentials[atom * 6u],
-                   geometry.native_multipole_quadrupole_potentials[atom * 6u + 1u],
-                   geometry.native_multipole_quadrupole_potentials[atom * 6u + 2u],
-                   geometry.native_multipole_quadrupole_potentials[atom * 6u + 3u],
-                   geometry.native_multipole_quadrupole_potentials[atom * 6u + 4u],
-                   geometry.native_multipole_quadrupole_potentials[atom * 6u + 5u]);
-    }
-  }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }

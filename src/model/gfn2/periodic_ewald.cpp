@@ -507,6 +507,42 @@ double PeriodicEwaldPlan::reciprocal_cutoff(std::int64_t system) const noexcept 
              : data_->reciprocal_cutoffs[static_cast<std::size_t>(system)];
 }
 
+const std::vector<std::int64_t>& PeriodicEwaldPlan::atom_shell_offsets() const noexcept {
+  static const std::vector<std::int64_t> empty;
+  return data_ == nullptr ? empty : data_->atom_shell_offsets;
+}
+
+const std::vector<double>& PeriodicEwaldPlan::shell_hardness() const noexcept {
+  static const std::vector<double> empty;
+  return data_ == nullptr ? empty : data_->shell_hardness;
+}
+
+const std::vector<double>& PeriodicEwaldPlan::alphas() const noexcept {
+  static const std::vector<double> empty;
+  return data_ == nullptr ? empty : data_->alphas;
+}
+
+const std::vector<std::int64_t>& PeriodicEwaldPlan::direct_translation_offsets() const noexcept {
+  static const std::vector<std::int64_t> empty;
+  return data_ == nullptr ? empty : data_->direct_translation_offsets;
+}
+
+const std::vector<std::int64_t>& PeriodicEwaldPlan::reciprocal_translation_offsets()
+    const noexcept {
+  static const std::vector<std::int64_t> empty;
+  return data_ == nullptr ? empty : data_->reciprocal_translation_offsets;
+}
+
+const std::vector<LatticeTranslation>& PeriodicEwaldPlan::direct_translations() const noexcept {
+  static const std::vector<LatticeTranslation> empty;
+  return data_ == nullptr ? empty : data_->direct_translations;
+}
+
+const std::vector<LatticeTranslation>& PeriodicEwaldPlan::reciprocal_translations() const noexcept {
+  static const std::vector<LatticeTranslation> empty;
+  return data_ == nullptr ? empty : data_->reciprocal_translations;
+}
+
 bool PeriodicEwaldPlan::overlaps_storage(const void* pointer, std::size_t bytes) const noexcept {
   if (pointer == nullptr && bytes != 0u) return true;
   const auto begin = reinterpret_cast<std::uintptr_t>(pointer);

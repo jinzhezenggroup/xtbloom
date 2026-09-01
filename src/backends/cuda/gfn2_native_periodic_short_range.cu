@@ -2,6 +2,7 @@
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cuda_runtime_api.h>
+#include <stdio.h>
 
 #include <array>
 #include <cmath>
@@ -12,6 +13,7 @@
 #include "backends/cuda/cuda_atomics.cuh"
 #include "backends/cuda/gfn2_native_periodic_short_range.cuh"
 #include "backends/cuda/gfn2_parameters.cuh"
+#include "backends/cuda/periodic_wrap.cuh"
 
 namespace xtbloom::detail::cuda {
 namespace {
@@ -101,44 +103,7 @@ __device__ bool is_origin(const Gfn2CudaPeriodicTranslation& translation) {
 
 __device__ bool wrap_position(const Gfn2CudaPeriodicTopologyView& topology, std::int64_t system,
                               const double* position, double* wrapped) {
-  if (topology.periodic_axes[system] == XTBLOOM_PERIODIC_AXES_NONE) {
-    wrapped[0] = position[0];
-    wrapped[1] = position[1];
-    wrapped[2] = position[2];
-    return isfinite(wrapped[0]) && isfinite(wrapped[1]) && isfinite(wrapped[2]);
-  }
-
-  const double* const h = topology.cell_matrices + system * 9;
-  const double determinant = h[0] * (h[4] * h[8] - h[5] * h[7]) -
-                             h[1] * (h[3] * h[8] - h[5] * h[6]) +
-                             h[2] * (h[3] * h[7] - h[4] * h[6]);
-  if (!(determinant > 0.0) || !isfinite(determinant)) return false;
-
-  /* The public cell stores lattice vectors as rows.  This is H^-1, so a
-   * Cartesian row vector maps to fractional coordinates as r * H^-1. */
-  const double inverse[9] = {
-      (h[4] * h[8] - h[5] * h[7]) / determinant, (h[2] * h[7] - h[1] * h[8]) / determinant,
-      (h[1] * h[5] - h[2] * h[4]) / determinant, (h[5] * h[6] - h[3] * h[8]) / determinant,
-      (h[0] * h[8] - h[2] * h[6]) / determinant, (h[3] * h[6] - h[0] * h[5]) / determinant,
-      (h[3] * h[7] - h[4] * h[6]) / determinant, (h[1] * h[6] - h[0] * h[7]) / determinant,
-      (h[0] * h[4] - h[1] * h[3]) / determinant,
-  };
-  double fractional[3]{};
-  for (int component = 0; component < 3; ++component) {
-    fractional[component] = position[0] * inverse[component] +
-                            position[1] * inverse[3 + component] +
-                            position[2] * inverse[6 + component];
-    if (!isfinite(fractional[component])) return false;
-    fractional[component] -= floor(fractional[component]);
-    /* Match the half-open host contract even when roundoff produces 1.0. */
-    if (fractional[component] >= 1.0) fractional[component] = 0.0;
-    if (fractional[component] == 0.0) fractional[component] = 0.0;
-  }
-  for (int component = 0; component < 3; ++component) {
-    wrapped[component] = fractional[0] * h[component] + fractional[1] * h[3 + component] +
-                         fractional[2] * h[6 + component];
-  }
-  return isfinite(wrapped[0]) && isfinite(wrapped[1]) && isfinite(wrapped[2]);
+  return wrap_periodic_position(topology, system, position, wrapped);
 }
 
 __device__ bool image_displacement(const double* center, const double* image,
@@ -172,6 +137,28 @@ __device__ double coordination_pair(double distance, double radius) {
   const double shifted_radius = radius + kSecondRadiusShiftBohr;
   const double second = logistic(kSecondSteepness * (shifted_radius * inverse_distance - 1.0));
   return first * second;
+}
+
+/* Return d f / d |r| divided by |r| for the two-logistic GFN2 CN
+ * contribution.  Keeping this expression beside coordination_pair() is
+ * important: the native periodic force path must differentiate exactly the
+ * image-aware function used to build the committed CN values, rather than
+ * silently falling back to the nonperiodic pair cache. */
+__device__ bool coordination_pair_derivative_over_distance(double distance, double radius,
+                                                           double& derivative_over_distance) {
+  if (!(distance > 0.0) || !isfinite(distance) || !isfinite(radius)) return false;
+  const double inverse_distance = 1.0 / distance;
+  const double shifted_radius = radius + kSecondRadiusShiftBohr;
+  const double first_argument = kFirstSteepness * (radius * inverse_distance - 1.0);
+  const double second_argument = kSecondSteepness * (shifted_radius * inverse_distance - 1.0);
+  const double first = logistic(first_argument);
+  const double second = logistic(second_argument);
+  const double radial_numerator =
+      kFirstSteepness * radius * first * (1.0 - first) * second +
+      kSecondSteepness * shifted_radius * second * (1.0 - second) * first;
+  derivative_over_distance =
+      -radial_numerator * inverse_distance * inverse_distance * inverse_distance;
+  return isfinite(derivative_over_distance);
 }
 
 __device__ bool repulsion_pair(const Gfn2NativePeriodicShortRangeDeviceBatch& batch,
@@ -258,7 +245,6 @@ __global__ void native_periodic_short_range_kernel(
   }
   __syncthreads();
   if (valid == 0) return;
-
   /* One thread owns one atom's CN sum.  This avoids atomics and therefore
    * keeps repeated launches deterministic while matching the ordered CPU
    * accumulation to ordinary binary64 roundoff. */
@@ -407,6 +393,141 @@ __global__ void native_periodic_short_range_kernel(
   }
 }
 
+/* Capture the sequence-wide topology status before the peer-local VJP starts.
+ * A later invalid peer belongs in system_errors; only a pre-existing device
+ * contract failure should suppress the complete composed force transaction. */
+__global__ void capture_native_coordination_sequence_kernel(const std::uint32_t* device_error,
+                                                            std::uint32_t* sequence_active) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *sequence_active = atomicAdd(const_cast<std::uint32_t*>(device_error), 0u) ==
+                               static_cast<std::uint32_t>(DeviceError::kSuccess)
+                           ? 1u
+                           : 0u;
+  }
+}
+
+/* The native forward CN uses wrapped central-cell coordinates and traverses
+ * every image translation.  This reverse leaf mirrors that exact traversal;
+ * wrapping is a piecewise translation, so its Cartesian Jacobian is the
+ * identity away from the already-rejected cell-boundary discontinuity. */
+__global__ void native_periodic_coordination_vjp_kernel(
+    Gfn2NativePeriodicShortRangeDeviceBatch batch,
+    Gfn2NativePeriodicShortRangeDeviceWorkspace workspace, const double* dE_dcn, double* gradients,
+    double* gradient_scratch, const std::uint32_t* sequence_active, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (system >= batch.topology.batch_size ||
+      atomicAdd(const_cast<std::uint32_t*>(sequence_active), 0u) != 1u) {
+    return;
+  }
+
+  if (batch.active_mask != nullptr) {
+    const std::uint8_t selected = batch.active_mask[system];
+    if (selected > 1u) {
+      record_system_error(system_errors, system, DeviceError::kInvalidOffsets);
+      record_device_error(device_error, DeviceError::kInvalidTopology);
+      return;
+    }
+    if (selected == 0u) return;
+  }
+
+  __shared__ std::int64_t atom_begin;
+  __shared__ std::int64_t atom_end;
+  __shared__ std::int64_t translation_begin;
+  __shared__ std::int64_t translation_end;
+  __shared__ int valid;
+  if (threadIdx.x == 0) {
+    atom_begin = batch.topology.atom_offsets[system];
+    atom_end = batch.topology.atom_offsets[system + 1];
+    translation_begin = batch.topology.translation_offsets[system];
+    translation_end = batch.topology.translation_offsets[system + 1];
+    valid = atom_begin >= 0 && atom_begin <= atom_end && atom_end <= batch.topology.total_atoms &&
+            translation_begin >= 0 && translation_begin < translation_end &&
+            translation_end <= batch.topology.total_translations;
+    if (!valid) {
+      record_system_error(system_errors, system, DeviceError::kInvalidOffsets);
+      record_device_error(device_error, DeviceError::kInvalidTopology);
+    }
+  }
+  __syncthreads();
+  if (valid == 0) return;
+
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    const double* const position = workspace.wrapped_positions + atom * 3;
+    if (!isfinite(position[0]) || !isfinite(position[1]) || !isfinite(position[2]) ||
+        !isfinite(batch.covalent_radii[atom]) || !(batch.covalent_radii[atom] > 0.0) ||
+        !isfinite(dE_dcn[atom]) || !isfinite(gradients[atom * 3]) ||
+        !isfinite(gradients[atom * 3 + 1]) || !isfinite(gradients[atom * 3 + 2])) {
+      record_system_error(system_errors, system, DeviceError::kNonfiniteArithmetic);
+      atomicExch(&valid, 0);
+    }
+  }
+  __syncthreads();
+  if (valid == 0 || !system_is_valid(system_errors, system)) return;
+
+  for (std::int64_t target = atom_begin + threadIdx.x; target < atom_end; target += blockDim.x) {
+    double contribution[3] = {gradients[target * 3], gradients[target * 3 + 1],
+                              gradients[target * 3 + 2]};
+    for (std::int64_t center_atom = atom_begin; center_atom < atom_end; ++center_atom) {
+      const double center_radius = batch.covalent_radii[center_atom];
+      const double center_weight = dE_dcn[center_atom];
+      const double* const center = workspace.wrapped_positions + center_atom * 3;
+      for (std::int64_t image_atom = atom_begin; image_atom < atom_end; ++image_atom) {
+        /* A self-image CN term depends on the cell but not on the Cartesian
+         * position of that atom: center and image move together, so the two
+         * Cartesian derivatives cancel exactly. */
+        if (center_atom == image_atom) continue;
+        const double* const image = workspace.wrapped_positions + image_atom * 3;
+        const double pair_radius = center_radius + batch.covalent_radii[image_atom];
+        for (std::int64_t translation_index = translation_begin;
+             translation_index < translation_end; ++translation_index) {
+          const auto& translation = batch.topology.translations[translation_index];
+          double displacement[3]{};
+          double distance_squared = 0.0;
+          if (!image_displacement(center, image, translation, displacement, distance_squared)) {
+            continue;
+          }
+          if (distance_squared < kMinimumDistanceSquared) {
+            record_system_error(system_errors, system, DeviceError::kCoincidentImage);
+            atomicExch(&valid, 0);
+            continue;
+          }
+          double derivative_over_distance = 0.0;
+          if (!coordination_pair_derivative_over_distance(sqrt(distance_squared), pair_radius,
+                                                          derivative_over_distance)) {
+            record_system_error(system_errors, system, DeviceError::kNonfiniteArithmetic);
+            atomicExch(&valid, 0);
+            continue;
+          }
+          const double weighted_scale = center_weight * derivative_over_distance;
+          const double sign = target == center_atom ? -1.0 : (target == image_atom ? 1.0 : 0.0);
+          if (sign == 0.0) continue;
+          for (int axis = 0; axis < 3; ++axis) {
+            contribution[axis] += sign * weighted_scale * displacement[axis];
+            if (!isfinite(contribution[axis])) atomicExch(&valid, 0);
+          }
+        }
+      }
+    }
+    if (valid != 0 && isfinite(contribution[0]) && isfinite(contribution[1]) &&
+        isfinite(contribution[2])) {
+      gradient_scratch[target * 3] = contribution[0];
+      gradient_scratch[target * 3 + 1] = contribution[1];
+      gradient_scratch[target * 3 + 2] = contribution[2];
+    } else {
+      record_system_error(system_errors, system, DeviceError::kNonfiniteArithmetic);
+      atomicExch(&valid, 0);
+    }
+  }
+  __syncthreads();
+  if (valid == 0 || !system_is_valid(system_errors, system)) return;
+  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+    gradients[atom * 3] = gradient_scratch[atom * 3];
+    gradients[atom * 3 + 1] = gradient_scratch[atom * 3 + 1];
+    gradients[atom * 3 + 2] = gradient_scratch[atom * 3 + 2];
+  }
+}
+
 }  // namespace
 
 cudaError_t reset_gfn2_native_periodic_short_range_errors_cuda(std::int64_t batch_size,
@@ -464,23 +585,25 @@ cudaError_t evaluate_gfn2_native_periodic_short_range_cuda(
 
   std::array<AddressRange, 16> ranges{};
   ranges[0] = {};
-  if (!make_range(topology.atom_offsets, topology.atom_offset_count, &ranges[0]) ||
-      !make_range(topology.cell_matrices, topology.cell_elements, &ranges[1]) ||
-      !make_range(topology.periodic_axes, topology.periodic_axes_elements, &ranges[2]) ||
-      !make_range(topology.translation_offsets, topology.translation_offset_count, &ranges[3]) ||
-      !make_range(topology.translations, topology.total_translations, &ranges[4]) ||
-      !make_range(batch.atomic_numbers, batch.atomic_number_elements, &ranges[5]) ||
-      !make_range(batch.positions, batch.position_elements, &ranges[6]) ||
-      !make_range(batch.covalent_radii, batch.covalent_radius_elements, &ranges[7]) ||
-      !make_range(workspace.wrapped_positions, workspace.wrapped_position_elements, &ranges[8]) ||
-      !make_range(workspace.coordination, workspace.coordination_elements, &ranges[9]) ||
-      !make_range(workspace.repulsion_energies, workspace.repulsion_energy_elements, &ranges[10]) ||
-      !make_range(workspace.repulsion_gradients, workspace.repulsion_gradient_elements,
-                  &ranges[11]) ||
-      !make_range(workspace.repulsion_strain, workspace.repulsion_strain_elements, &ranges[12]) ||
-      !make_range(coordination_numbers, topology.total_atoms, &ranges[13]) ||
-      !make_range(repulsion_energies, topology.batch_size, &ranges[14]) ||
-      !make_range(repulsion_gradients, atom_coordinate_elements, &ranges[15])) {
+  const bool ranges_ok =
+      make_range(topology.atom_offsets, topology.atom_offset_count, &ranges[0]) &&
+      make_range(topology.cell_matrices, topology.cell_elements, &ranges[1]) &&
+      make_range(topology.periodic_axes, topology.periodic_axes_elements, &ranges[2]) &&
+      make_range(topology.translation_offsets, topology.translation_offset_count, &ranges[3]) &&
+      make_range(topology.translations, topology.total_translations, &ranges[4]) &&
+      make_range(batch.atomic_numbers, batch.atomic_number_elements, &ranges[5]) &&
+      make_range(batch.positions, batch.position_elements, &ranges[6]) &&
+      make_range(batch.covalent_radii, batch.covalent_radius_elements, &ranges[7]) &&
+      make_range(workspace.wrapped_positions, workspace.wrapped_position_elements, &ranges[8]) &&
+      make_range(workspace.coordination, workspace.coordination_elements, &ranges[9]) &&
+      make_range(workspace.repulsion_energies, workspace.repulsion_energy_elements, &ranges[10]) &&
+      make_range(workspace.repulsion_gradients, workspace.repulsion_gradient_elements,
+                 &ranges[11]) &&
+      make_range(workspace.repulsion_strain, workspace.repulsion_strain_elements, &ranges[12]) &&
+      make_range(coordination_numbers, topology.total_atoms, &ranges[13]) &&
+      make_range(repulsion_energies, topology.batch_size, &ranges[14]) &&
+      make_range(repulsion_gradients, atom_coordinate_elements, &ranges[15]);
+  if (!ranges_ok) {
     return cudaErrorInvalidValue;
   }
   AddressRange strain_range{};
@@ -490,24 +613,55 @@ cudaError_t evaluate_gfn2_native_periodic_short_range_cuda(
       !make_range(system_errors, topology.batch_size, &errors_range) ||
       !make_range(device_error, 1, &device_error_range) ||
       overlaps(errors_range, device_error_range) || overlaps(strain_range, errors_range) ||
-      overlaps(strain_range, device_error_range) || !all_disjoint(ranges)) {
+      overlaps(strain_range, device_error_range)) {
     return cudaErrorInvalidValue;
   }
-  const std::array<AddressRange, 8> writes{ranges[8],  ranges[9],  ranges[10], ranges[11],
-                                           ranges[12], ranges[13], ranges[14], ranges[15]};
-  for (const auto& write : writes) {
-    if (overlaps(write, strain_range) || overlaps(write, errors_range) ||
+  /* The evaluator normally writes distinct output arrays, but the production
+   * preprocessing transaction intentionally reuses the native workspace as
+   * the repulsion outlet.  Permit only those exact workspace/output aliases;
+   * all other read/write and output/output overlaps remain rejected. */
+  const std::array<AddressRange, 5> scratch_writes{ranges[8], ranges[9], ranges[10], ranges[11],
+                                                   ranges[12]};
+  for (const auto& write : scratch_writes) {
+    const bool exact_strain_alias =
+        write.begin == strain_range.begin && write.end == strain_range.end;
+    if ((!exact_strain_alias && overlaps(write, strain_range)) || overlaps(write, errors_range) ||
         overlaps(write, device_error_range)) {
       return cudaErrorInvalidValue;
     }
   }
   for (std::size_t read = 0u; read < 8u; ++read) {
-    for (const auto& write : writes) {
-      if (overlaps(ranges[read], write)) return cudaErrorInvalidValue;
+    for (const auto& write : scratch_writes) {
+      if (overlaps(ranges[read], write)) {
+        return cudaErrorInvalidValue;
+      }
     }
     if (overlaps(ranges[read], strain_range) || overlaps(ranges[read], errors_range) ||
         overlaps(ranges[read], device_error_range)) {
       return cudaErrorInvalidValue;
+    }
+  }
+  const std::array<AddressRange, 3> outputs{ranges[13], ranges[14], ranges[15]};
+  const std::array<AddressRange, 3> aliases{ranges[9], ranges[10], ranges[11]};
+  for (std::size_t output = 0u; output < outputs.size(); ++output) {
+    if (overlaps(outputs[output], strain_range) || overlaps(outputs[output], errors_range) ||
+        overlaps(outputs[output], device_error_range)) {
+      return cudaErrorInvalidValue;
+    }
+    for (std::size_t read = 0u; read < 8u; ++read) {
+      if (overlaps(outputs[output], ranges[read])) {
+        return cudaErrorInvalidValue;
+      }
+    }
+    for (std::size_t other = output + 1u; other < outputs.size(); ++other) {
+      if (overlaps(outputs[output], outputs[other])) {
+        return cudaErrorInvalidValue;
+      }
+    }
+    for (std::size_t scratch = 0u; scratch < aliases.size(); ++scratch) {
+      if (overlaps(outputs[output], aliases[scratch]) && output != scratch) {
+        return cudaErrorInvalidValue;
+      }
     }
   }
 
@@ -515,6 +669,81 @@ cudaError_t evaluate_gfn2_native_periodic_short_range_cuda(
                                        kThreadsPerBlock, 0, stream>>>(
       batch, workspace, coordination_numbers, repulsion_energies, repulsion_gradients,
       repulsion_strain, system_errors, device_error);
+  return cudaGetLastError();
+}
+
+cudaError_t add_gfn2_native_periodic_coordination_vjp_cuda(
+    const Gfn2NativePeriodicShortRangeDeviceBatch& batch,
+    const Gfn2NativePeriodicShortRangeDeviceWorkspace& workspace, const double* dE_dcn,
+    double* gradients, double* gradient_scratch, std::int64_t gradient_elements,
+    std::uint32_t* sequence_active, std::uint32_t* system_errors, std::uint32_t* device_error,
+    cudaStream_t stream) noexcept {
+  const auto& topology = batch.topology;
+  std::int64_t coordinate_elements = 0;
+  if (topology.batch_size <= 0 || topology.total_atoms < 0 || topology.total_translations <= 0 ||
+      topology.batch_size > std::numeric_limits<unsigned int>::max() ||
+      topology.atom_offset_count != topology.batch_size + 1 ||
+      topology.translation_offset_count != topology.batch_size + 1 ||
+      topology.cell_elements != topology.batch_size * 9 ||
+      topology.periodic_axes_elements != topology.batch_size || topology.plan_token == 0u ||
+      topology.atom_offsets == nullptr || topology.cell_matrices == nullptr ||
+      topology.periodic_axes == nullptr || topology.translation_offsets == nullptr ||
+      topology.translations == nullptr || batch.position_elements < 0 ||
+      batch.covalent_radius_elements != topology.total_atoms ||
+      workspace.plan_token != topology.plan_token ||
+      workspace.wrapped_position_elements != topology.total_atoms * 3 ||
+      gradient_elements != topology.total_atoms * 3 || dE_dcn == nullptr || gradients == nullptr ||
+      gradient_scratch == nullptr || sequence_active == nullptr || system_errors == nullptr ||
+      device_error == nullptr || !checked_multiply(topology.total_atoms, 3, &coordinate_elements) ||
+      batch.position_elements != coordinate_elements ||
+      (batch.active_mask == nullptr ? batch.active_mask_elements != 0
+                                    : batch.active_mask_elements != topology.batch_size)) {
+    return cudaErrorInvalidValue;
+  }
+
+  std::array<AddressRange, 11> ranges{};
+  if (!make_range(batch.topology.atom_offsets, batch.topology.atom_offset_count, &ranges[0]) ||
+      !make_range(batch.topology.cell_matrices, batch.topology.cell_elements, &ranges[1]) ||
+      !make_range(batch.topology.periodic_axes, batch.topology.periodic_axes_elements,
+                  &ranges[2]) ||
+      !make_range(batch.topology.translation_offsets, batch.topology.translation_offset_count,
+                  &ranges[3]) ||
+      !make_range(batch.topology.translations, batch.topology.total_translations, &ranges[4]) ||
+      !make_range(batch.positions, batch.position_elements, &ranges[5]) ||
+      !make_range(batch.covalent_radii, batch.covalent_radius_elements, &ranges[6]) ||
+      !make_range(batch.active_mask, batch.active_mask_elements, &ranges[7]) ||
+      !make_range(workspace.wrapped_positions, workspace.wrapped_position_elements, &ranges[8]) ||
+      !make_range(dE_dcn, topology.total_atoms, &ranges[9]) ||
+      !make_range(gradients, gradient_elements, &ranges[10])) {
+    return cudaErrorInvalidValue;
+  }
+  AddressRange scratch_range{}, sequence_range{}, errors_range{}, device_error_range{};
+  if (!make_range(gradient_scratch, gradient_elements, &scratch_range) ||
+      !make_range(sequence_active, 1, &sequence_range) ||
+      !make_range(system_errors, topology.batch_size, &errors_range) ||
+      !make_range(device_error, 1, &device_error_range)) {
+    return cudaErrorInvalidValue;
+  }
+  for (std::size_t read = 0u; read < ranges.size(); ++read) {
+    if (overlaps(ranges[read], scratch_range) || overlaps(ranges[read], sequence_range) ||
+        overlaps(ranges[read], errors_range) || overlaps(ranges[read], device_error_range)) {
+      return cudaErrorInvalidValue;
+    }
+  }
+  if (overlaps(gradients == nullptr ? AddressRange{} : ranges[10], scratch_range) ||
+      overlaps(errors_range, device_error_range) || overlaps(sequence_range, errors_range) ||
+      overlaps(sequence_range, device_error_range) || overlaps(scratch_range, errors_range) ||
+      overlaps(scratch_range, device_error_range)) {
+    return cudaErrorInvalidValue;
+  }
+
+  capture_native_coordination_sequence_kernel<<<1, 1, 0, stream>>>(device_error, sequence_active);
+  cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) return status;
+  native_periodic_coordination_vjp_kernel<<<static_cast<unsigned int>(topology.batch_size),
+                                            kThreadsPerBlock, 0, stream>>>(
+      batch, workspace, dE_dcn, gradients, gradient_scratch, sequence_active, system_errors,
+      device_error);
   return cudaGetLastError();
 }
 

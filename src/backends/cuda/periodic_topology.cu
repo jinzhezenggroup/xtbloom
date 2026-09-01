@@ -436,7 +436,6 @@ Gfn2CudaPeriodicTopologyDiagnostic Gfn2CudaPeriodicTopology::create(
     }
     cuda_status = upload_array(candidate.device_translations_, candidate.translations_, stream);
     if (cuda_status != cudaSuccess) return cuda_failure(DeviceField::kTranslations, cuda_status);
-
     output = std::move(candidate);
     return {};
   } catch (const std::bad_alloc&) {

@@ -48,6 +48,12 @@ class PeriodicMultipolePlan {
   [[nodiscard]] const std::vector<double>& quadrupole_kernel() const noexcept;
   [[nodiscard]] const std::vector<double>& multipole_radius() const noexcept;
   [[nodiscard]] const std::vector<double>& multipole_valence_cn() const noexcept;
+  /* Accelerator mirrors borrow these immutable translation tables.  The
+   * returned views remain valid while this plan (or one of its copies) lives. */
+  [[nodiscard]] const std::vector<std::int64_t>& direct_translation_offsets() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& reciprocal_translation_offsets() const noexcept;
+  [[nodiscard]] const std::vector<LatticeTranslation>& direct_translations() const noexcept;
+  [[nodiscard]] const std::vector<LatticeTranslation>& reciprocal_translations() const noexcept;
   [[nodiscard]] const PeriodicMultipolePlanData* identity() const noexcept { return data_.get(); }
   [[nodiscard]] bool overlaps_storage(const void* data, std::size_t bytes) const noexcept;
 
