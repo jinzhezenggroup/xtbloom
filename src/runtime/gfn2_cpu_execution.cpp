@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -28,6 +29,7 @@
 #include <malloc.h>
 #endif
 
+#include "model/common/projection_basis.hpp"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/coordination.hpp"
@@ -740,6 +742,10 @@ struct SystemExecution {
   std::vector<std::int32_t> spin_channels;
 
   BasisPlan basis;
+  /* Auxiliary projection basis. It is constructed during topology setup and
+   * its numerical cross overlaps are materialized only when an external-energy
+   * callback is active. */
+  BasisPlan projection_basis;
   IntegralPlan integrals;
   CoordinationPlan coordination;
   RepulsionPlan repulsion;
@@ -777,6 +783,12 @@ struct SystemExecution {
   SccParallelExecutor parallel_executor;
 
   std::vector<double> positions;
+  /* Full [atom, xyz, AO, AO] overlap derivative used by the local external energy
+   * projection-force callback. Stock xTBloom only needs overlap itself and
+   * therefore pays no extra cost when the callback is disabled. */
+  std::vector<double> overlap_gradients;
+  std::vector<double> projection_overlap;
+  std::vector<double> projection_overlap_gradients;
   std::vector<double> point_positions;
   std::vector<double> point_charges;
   std::vector<double> point_hardnesses;
@@ -828,6 +840,12 @@ struct SystemExecution {
   AlignedBuffer driver_workspace_storage;
   SccDriverWorkspace driver_workspace;
   SccDriverGeometryView geometry;
+
+  /* The SCC geometry view is rebuilt for every inference. Keep the private
+   * callback separately so refresh_geometry() can zero/rebind the view
+   * without accidentally dropping the installed external energy evaluator. */
+  ExternalEnergyCallback external_energy_callback = nullptr;
+  void* external_energy_opaque = nullptr;
 
   std::vector<double> component_shell_potential;
   std::vector<double> scalar_shell_potential;
@@ -930,9 +948,16 @@ struct SystemExecution {
     field = value;
   }
 
+  void set_external_energy_callback(ExternalEnergyCallback callback, void* opaque) noexcept {
+    external_energy_callback = callback;
+    external_energy_opaque = opaque;
+    geometry.external_energy_callback = callback;
+    geometry.external_energy_opaque = opaque;
+  }
+
  private:
   xtbloom_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
-                                    std::string& error);
+                                    bool need_force_derivatives, std::string& error);
   xtbloom_status_t run_scc(const CpuLinearAlgebraBackend& backend, std::string& error);
   xtbloom_status_t restore_warm_checkpoint(std::string& error);
   xtbloom_status_t refresh_stationary_potentials(std::string& error);
@@ -958,6 +983,8 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
 
   xtbloom_status_t status =
       make_basis_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(), basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = make_external_projection_basis(atoms, projection_basis, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_integral_plan(basis, integrals, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -1030,6 +1057,12 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   periodic_response.assign(atom_count * atom_count, 0.0);
   coordination_numbers.resize(atom_count);
   overlap.resize(matrix);
+  /* The full AO-overlap derivative is a private external energy export. Allocate it
+   * lazily in refresh_geometry only while a callback is installed so stock
+   * xTBloom requests retain their original memory and arithmetic footprint. */
+  overlap_gradients.clear();
+  /* Projection matrices are sized lazily in refresh_geometry once a callback
+   * is known to be active; stock xTBloom pays no O(nao*nproj) allocation. */
   dipole_integrals.resize(3u * matrix);
   quadrupole_integrals.resize(6u * matrix);
   core_hamiltonian.resize(matrix);
@@ -1241,7 +1274,8 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
                                     vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
                                     vector_bytes(unpaired_electrons) + vector_bytes(spin_channels) +
                                     vector_bytes(periodic_status);
-  const std::size_t basis_plan_vectors = common::basis_plan_resident_bytes(basis);
+  const std::size_t basis_plan_vectors = common::basis_plan_resident_bytes(basis) +
+                                         common::basis_plan_resident_bytes(projection_basis);
   const std::size_t direct_plan_vectors =
       basis_plan_vectors + vector_bytes(integrals.matrix_offsets) +
       vector_bytes(coordination.atom_offsets) + vector_bytes(coordination.covalent_radius) +
@@ -1294,6 +1328,9 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       &periodic_response,
       &coordination_numbers,
       &overlap,
+      &overlap_gradients,
+      &projection_overlap,
+      &projection_overlap_gradients,
       &dipole_integrals,
       &quadrupole_integrals,
       &core_hamiltonian,
@@ -1366,7 +1403,8 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
 }
 
 xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend& backend,
-                                                   bool warm_start, std::string& error) {
+                                                   bool warm_start, bool need_force_derivatives,
+                                                   std::string& error) {
   ++geometry_generation;
   if (geometry_generation == 0u) {
     geometry_generation = 1u;
@@ -1419,6 +1457,73 @@ xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend
                              overlap.data(), core_hamiltonian.data(), error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
+  /* Projection data are independent of whether the baseline integrals were
+   * assembled by the molecular or native-periodic path above. */
+  if (external_energy_callback != nullptr) {
+    const std::size_t atom_count = static_cast<std::size_t>(basis.total_atoms);
+    const std::size_t native_orbitals = static_cast<std::size_t>(basis.total_orbitals);
+    const std::size_t projection_orbitals =
+        static_cast<std::size_t>(projection_basis.total_orbitals);
+    if (native_orbitals > std::numeric_limits<std::size_t>::max() / projection_orbitals) {
+      error = "external energy projection-overlap dimensions exceed host limits";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const std::size_t projection_matrix = native_orbitals * projection_orbitals;
+    try {
+      projection_overlap.resize(projection_matrix);
+    } catch (const std::bad_alloc&) {
+      error = "failed to allocate external energy projection overlap storage";
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    } catch (const std::length_error&) {
+      error = "external energy projection overlap storage exceeds host container limits";
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    status = evaluate_cross_overlap_system_cpu(
+        basis, projection_basis, positions.data(), positions.data(), projection_overlap.data(),
+        integral_workspace.data(), integral_workspace.size(), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+    if (need_force_derivatives) {
+      const std::size_t matrix_elements = static_cast<std::size_t>(integrals.total_matrix_elements);
+      if (atom_count > std::numeric_limits<std::size_t>::max() / 3u ||
+          matrix_elements > std::numeric_limits<std::size_t>::max() / (3u * atom_count) ||
+          projection_matrix > std::numeric_limits<std::size_t>::max() / (3u * atom_count)) {
+        error = "external energy overlap-gradient dimensions exceed host limits";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      try {
+        overlap_gradients.resize(3u * atom_count * matrix_elements);
+        projection_overlap_gradients.resize(3u * atom_count * projection_matrix);
+      } catch (const std::bad_alloc&) {
+        error = "failed to allocate external energy overlap derivative storage";
+        return XTBLOOM_STATUS_ALLOCATION_FAILED;
+      } catch (const std::length_error&) {
+        error = "external energy overlap derivative storage exceeds host container limits";
+        return XTBLOOM_STATUS_ALLOCATION_FAILED;
+      }
+      status = evaluate_overlap_gradient_system_cpu(
+          basis, integrals, positions.data(), overlap_gradients.data(), integral_workspace.data(),
+          integral_workspace.size(), error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      status = evaluate_cross_overlap_gradient_system_cpu(
+          basis, projection_basis, positions.data(), positions.data(),
+          projection_overlap_gradients.data(), integral_workspace.data(), integral_workspace.size(),
+          error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    } else {
+      /* Do not expose derivatives from a previous force request. clear()
+       * preserves capacity for a later force call while keeping this refresh
+       * allocation-free and its callback view explicitly empty. */
+      overlap_gradients.clear();
+      projection_overlap_gradients.clear();
+    }
+  } else {
+    /* Keep any previously reserved capacity but expose empty callback data
+     * when the evaluator is disabled. */
+    overlap_gradients.clear();
+    projection_overlap_gradients.clear();
+    projection_overlap.clear();
+  }
   status =
       update_es2_geometry_cache_cpu(es2, positions.data(), geometry_generation, es2_matrix.data(),
                                     es2_matrix.size(), es2_workspace, es2_cache, error);
@@ -1458,6 +1563,26 @@ xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend
   geometry.h0_elements = integrals.total_matrix_elements;
   geometry.integrals = {overlap.data(), dipole_integrals.data(), quadrupole_integrals.data(),
                         integrals.total_matrix_elements, mulliken.identity()};
+  geometry.positions = positions.data();
+  geometry.positions_elements = static_cast<std::int64_t>(positions.size());
+  geometry.external_energy_force_derivatives =
+      external_energy_callback != nullptr && need_force_derivatives;
+  if (external_energy_callback != nullptr) {
+    /* The auxiliary basis and cross-overlap feed every callback phase;
+     * only their coordinate Jacobian is force-specific. */
+    geometry.projection_basis = &projection_basis;
+    geometry.projection_overlap = projection_overlap.data();
+    geometry.projection_overlap_elements = static_cast<std::int64_t>(projection_overlap.size());
+  }
+  if (geometry.external_energy_force_derivatives) {
+    geometry.overlap_gradient = overlap_gradients.data();
+    geometry.overlap_gradient_elements = static_cast<std::int64_t>(overlap_gradients.size());
+    geometry.projection_overlap_gradient = projection_overlap_gradients.data();
+    geometry.projection_overlap_gradient_elements =
+        static_cast<std::int64_t>(projection_overlap_gradients.size());
+  }
+  geometry.external_energy_callback = external_energy_callback;
+  geometry.external_energy_opaque = external_energy_opaque;
   geometry.es2_cache = es2_cache;
   geometry.aes2_cache = aes2_cache;
   if (d4_enabled) {
@@ -1765,7 +1890,8 @@ xtbloom_status_t SystemExecution::infer(
     }
   }
 
-  xtbloom_status_t status = refresh_geometry(backend, warm_start, error);
+  const bool need_force_derivatives = (compute_flags & XTBLOOM_COMPUTE_FORCES) != 0u;
+  xtbloom_status_t status = refresh_geometry(backend, warm_start, need_force_derivatives, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = run_scc(backend, error);
   output.iterations = static_cast<std::int32_t>(std::min<std::uint64_t>(
@@ -1931,6 +2057,19 @@ xtbloom_status_t SystemExecution::infer(
       }
     }
   }
+  if (need_qm_forces && geometry.external_energy_callback != nullptr) {
+    /* The callback writes only the additive external force. Keep the native
+     * stationary force intact in output.forces and compose the contribution
+     * through the preallocated scratch vector. */
+    std::fill(force_scratch.begin(), force_scratch.end(), 0.0);
+    status = invoke_external_energy_force_callback(
+        wavefunction_layout, mulliken, geometry, wavefunction, 0, force_scratch.data(),
+        static_cast<std::int64_t>(force_scratch.size()), error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    for (std::size_t element = 0; element < output.forces.size(); ++element) {
+      output.forces[element] += force_scratch[element];
+    }
+  }
   if (compose_qm_forces && field_attached) {
     /* The stationary composer already carries the response of the converged
      * density and atomic multipoles through the injected field potentials.
@@ -1992,6 +2131,11 @@ struct Gfn2CpuExecutionCache::Impl {
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> system_statuses;
+
+  /* Callback state is copied into newly-built SystemExecution objects and
+   * propagated to already-built ones by the cache setter. */
+  ExternalEnergyCallback external_energy_callback = nullptr;
+  void* external_energy_opaque = nullptr;
 
   const MullikenKernelTable mulliken_kernels;
   const std::size_t cpu_threads;
@@ -2073,6 +2217,7 @@ struct Gfn2CpuExecutionCache::Impl {
       if (status != XTBLOOM_STATUS_SUCCESS) {
         return status;
       }
+      system->set_external_energy_callback(external_energy_callback, external_energy_opaque);
       candidate.push_back(std::move(system));
     }
     systems = std::move(candidate);
@@ -2275,6 +2420,16 @@ xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& 
 Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa)
     : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa)) {}
 Gfn2CpuExecutionCache::~Gfn2CpuExecutionCache() = default;
+
+void Gfn2CpuExecutionCache::set_external_energy_callback(ExternalEnergyCallback callback,
+                                                         void* opaque) noexcept {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  impl_->external_energy_callback = callback;
+  impl_->external_energy_opaque = opaque;
+  for (const std::unique_ptr<SystemExecution>& system : impl_->systems) {
+    system->set_external_energy_callback(callback, opaque);
+  }
+}
 
 xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
                                              const xtbloom_batch_t& batch,

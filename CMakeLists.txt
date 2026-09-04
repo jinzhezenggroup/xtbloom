@@ -200,6 +200,8 @@ else()
   message(STATUS "xtbloom PyTorch extension disabled: XTBLOOM_ENABLE_TORCH_EXT=OFF")
 endif()
 option(XTBLOOM_BUILD_TESTS "Build xtbloom tests" ${PROJECT_IS_TOP_LEVEL})
+option(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE
+  "Build the isolated external energy SCC callback smoke test (research only)" OFF)
 option(XTBLOOM_BUILD_WEB_DEMO
   "Build the GitHub Pages WebAssembly demo assets (requires the Emscripten toolchain)"
   OFF)
@@ -1114,6 +1116,7 @@ endif()
 add_library(xtbloom_model_common_cpu_objects OBJECT
   src/model/common/sto.cpp
   src/model/common/integrals.cpp
+  src/model/common/projection_basis.cpp
   src/model/common/scc_mixer.cpp
   # The generalized eigensolver and fixed periodic charge-response algebra
   # are model-neutral even though their established internal namespace is
@@ -1713,6 +1716,7 @@ if(XTBLOOM_HAS_CUDA)
 
   add_library(xtbloom_cuda_backend OBJECT
     ${XTBLOOM_CUDA_DYNLOADER_SOURCES}
+    src/backends/cuda/external_energy_device_evaluator.cu
     src/backends/cuda/cuda_runtime.cu
     src/runtime/cuda_descriptor_validation.cu
     src/runtime/gfn2_cuda_topology_staging.cu
@@ -4925,7 +4929,11 @@ if(XTBLOOM_BUILD_TESTS)
 endif()
 
 install(TARGETS xtbloom EXPORT xtbloomTargets)
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# Keep the experimental external energy callback header out of any local install
+# artifact as well as out of the released xTBloom ABI. It remains available to
+# research-only targets from the source tree.
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  PATTERN "xtbloom_external_energy.h" EXCLUDE)
 install(FILES ${XTBLOOM_GENERATED_INCLUDE_DIR}/xtbloom/version.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xtbloom
 )
@@ -5001,4 +5009,48 @@ message(STATUS "xtbloom CUDA backend: ${XTBLOOM_HAS_CUDA}")
 
 if(XTBLOOM_BUILD_WEB_DEMO)
   add_subdirectory(web)
+endif()
+
+if(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE)
+  add_executable(xtbloom_external_energy_callback_smoke tools/external_energy_callback_smoke.cpp)
+  target_include_directories(xtbloom_external_energy_callback_smoke PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(xtbloom_external_energy_callback_smoke PRIVATE xtbloom)
+
+  add_executable(xtbloom_external_energy_projection_basis_smoke
+    tools/external_energy_projection_basis_smoke.cpp)
+  target_include_directories(xtbloom_external_energy_projection_basis_smoke PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+    xtbloom
+    xtbloom_cpu_dispatch_objects
+    xtbloom_model_common_cpu_objects
+    xtbloom_integrals_baseline_objects
+    xtbloom_gfn2_cpu_objects
+    xtbloom_gfn2_mulliken_baseline_objects)
+  if(TARGET xtbloom_integrals_avx2_objects)
+    target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+      xtbloom_integrals_avx2_objects)
+  endif()
+  if(TARGET xtbloom_gfn2_mulliken_avx2_objects)
+    target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+      xtbloom_gfn2_mulliken_avx2_objects)
+  endif()
+
+  # Register the focused executables only in test-enabled source builds. They
+  # are never installed, but exercising them in coverage builds validates the
+  # extension through the same shared-library boundary used by consumers.
+  if(XTBLOOM_BUILD_TESTS)
+    add_test(
+      NAME xtbloom.external_energy.callback_smoke
+      COMMAND xtbloom_external_energy_callback_smoke)
+    add_test(
+      NAME xtbloom.external_energy.projection_basis_smoke
+      COMMAND xtbloom_external_energy_projection_basis_smoke)
+    set_tests_properties(
+      xtbloom.external_energy.callback_smoke
+      xtbloom.external_energy.projection_basis_smoke
+      PROPERTIES LABELS "external-energy;public-api")
+  endif()
 endif()

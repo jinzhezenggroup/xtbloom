@@ -151,4 +151,19 @@ xtbloom_status_t ensure_gfn2_cpu_execution_cache(Context& context, std::string& 
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+xtbloom_status_t set_external_energy_callback(Context& context,
+                                              gfn2::ExternalEnergyCallback callback, void* opaque,
+                                              std::string& error) {
+  /* The callback remains the compatibility route for CPU and host-staged
+   * evaluation. A separately installed native device model takes precedence
+   * on CUDA contexts and bypasses this callback inside the SCC graph. */
+  const xtbloom_status_t status = ensure_gfn2_cpu_execution_cache(context, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  context.gfn2_cpu_execution_cache->set_external_energy_callback(callback, opaque);
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
 }  // namespace xtbloom::detail

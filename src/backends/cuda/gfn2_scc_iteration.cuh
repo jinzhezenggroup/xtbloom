@@ -11,6 +11,7 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/common/xtb_model.hpp"
+#include "backends/cuda/external_energy_device_evaluator.cuh"
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_density.cuh"
@@ -330,6 +331,10 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2SccFreeEnergyDeviceBatch free_energy_batch{};
   Gfn2SccPublicationDevicePlan publication_plan{};
 
+  /* Optional native external energy evaluator.  A zero plan_token disables the
+   * device-side correction and preserves stock xTBloom SCC byte-for-byte. */
+  ExternalEnergyDeviceModel external_energy_model{};
+
   /* Immutable stage-to-diagnostic mapping; storage remains caller-owned. */
   Gfn2SccStageDeviceReport reports[kGfn2SccIterationStageReportCapacity]{};
   std::int64_t report_count = 0;
@@ -364,6 +369,7 @@ struct Gfn2SccIterationDeviceInput {
   Gfn2SccDeviceConstMultipoles raw_multipoles{};
   const double* complete_free_energies = nullptr;
   std::int64_t complete_free_energy_elements = 0;
+  ExternalEnergyDeviceInput external_energy{};
   std::uint64_t plan_token = 0u;
 };
 
@@ -453,6 +459,7 @@ struct Gfn2SccIterationDeviceWorkspace {
   std::uint32_t* mixer_device_error = nullptr;
   std::int64_t mixer_device_error_elements = 0;
   Gfn2SccPublicationDeviceWorkspace publication_workspace{};
+  ExternalEnergyDeviceOutput external_energy{};
 
   std::uint64_t plan_token = 0u;
 };

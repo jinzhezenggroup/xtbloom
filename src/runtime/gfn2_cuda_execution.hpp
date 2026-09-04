@@ -10,6 +10,7 @@
 
 #include "runtime/request.hpp"
 #include "xtbloom/xtbloom.h"
+#include "xtbloom/xtbloom_external_energy.h"
 
 namespace xtbloom::detail {
 
@@ -375,6 +376,12 @@ class Gfn2CudaExecutionCache : public RequestCompletion {
                                                          std::string& error);
 
   [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] bool external_energy_device_model_enabled() const noexcept;
+  [[nodiscard]] xtbloom_status_t set_external_energy_device_model(
+      const xtbloom_external_energy_device_model_t* model, std::string& error);
+  [[nodiscard]] xtbloom_status_t copy_external_energy_device_gradients(double* destination,
+                                                                       std::int64_t elements,
+                                                                       std::string& error);
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
   /* White-box staging entry points used to isolate allocation and teardown

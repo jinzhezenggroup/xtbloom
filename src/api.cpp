@@ -10,7 +10,9 @@
 #include <new>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "model/common/basis.hpp"
 #include "runtime/backend.hpp"
 #include "runtime/gfn1_cpu_execution.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
@@ -79,6 +81,237 @@ xtbloom_status_t initialize_structure(T* value, std::size_t caller_size, std::si
   value->struct_size = static_cast<std::uint32_t>(caller_size);
   value->api_version = XTBLOOM_API_VERSION;
   last_error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+/* Callback dimensions arrive through an internal C++ seam but ultimately
+ * become pointer arithmetic in the C trampoline. Keep every multiplication
+ * checked before converting to size_t or adding an offset, so malformed local
+ * evaluator state cannot wrap an extent and expose unrelated memory. */
+bool checked_product_i64(std::int64_t first, std::int64_t second, std::int64_t& result) noexcept {
+  if (first < 0 || second < 0 ||
+      (first != 0 && second > std::numeric_limits<std::int64_t>::max() / first)) {
+    return false;
+  }
+  result = first * second;
+  return true;
+}
+
+bool checked_sum_i64(std::int64_t first, std::int64_t second, std::int64_t& result) noexcept {
+  if (first < 0 || second < 0 || first > std::numeric_limits<std::int64_t>::max() - second) {
+    return false;
+  }
+  result = first + second;
+  return true;
+}
+
+bool checked_product_size(std::size_t first, std::size_t second, std::size_t& result) noexcept {
+  if (first != 0u && second > std::numeric_limits<std::size_t>::max() / first) {
+    return false;
+  }
+  result = first * second;
+  return true;
+}
+
+template <typename T>
+bool vector_has_size(const std::vector<T>& values, std::int64_t expected) noexcept {
+  return expected >= 0 && static_cast<std::uint64_t>(expected) == values.size();
+}
+
+bool valid_projection_basis(const xtbloom::detail::common::BasisPlan& basis,
+                            std::int64_t atom_count, std::int64_t& orbitals,
+                            std::int64_t& shells) noexcept {
+  std::int64_t expected_shells = 0;
+  std::int64_t expected_orbitals = 0;
+  if (basis.batch_size != 1 || atom_count <= 0 || basis.total_atoms != atom_count ||
+      !checked_product_i64(atom_count, 36, expected_shells) ||
+      !checked_product_i64(atom_count, 108, expected_orbitals) ||
+      basis.total_shells != expected_shells || basis.total_orbitals != expected_orbitals ||
+      basis.total_shells <= 0 || basis.total_orbitals <= 0) {
+    return false;
+  }
+  shells = basis.total_shells;
+  orbitals = basis.total_orbitals;
+  std::int64_t atom_offset_elements = 0;
+  std::int64_t shell_offset_elements = 0;
+  if (!checked_sum_i64(atom_count, 1, atom_offset_elements) ||
+      !checked_sum_i64(shells, 1, shell_offset_elements) ||
+      !vector_has_size(basis.atom_offsets, 2) ||
+      !vector_has_size(basis.atom_shell_offsets, atom_offset_elements) ||
+      !vector_has_size(basis.atom_orbital_offsets, atom_offset_elements) ||
+      !vector_has_size(basis.shell_orbital_offsets, shell_offset_elements) ||
+      !vector_has_size(basis.shell_to_atom, shells) ||
+      !vector_has_size(basis.angular_momenta, shells)) {
+    return false;
+  }
+  if (basis.atom_offsets.front() != 0 || basis.atom_offsets.back() != atom_count ||
+      basis.shell_orbital_offsets.front() != 0 || basis.shell_orbital_offsets.back() != orbitals) {
+    return false;
+  }
+  for (std::int64_t shell = 0; shell < shells; ++shell) {
+    const auto index = static_cast<std::size_t>(shell);
+    const std::int64_t begin = basis.shell_orbital_offsets[index];
+    const std::int64_t end = basis.shell_orbital_offsets[index + 1u];
+    if (begin < 0 || end <= begin || end > orbitals || basis.shell_to_atom[index] < 0 ||
+        basis.shell_to_atom[index] >= atom_count || basis.angular_momenta[index] > 2u) {
+      return false;
+    }
+  }
+  return true;
+}
+
+xtbloom_status_t external_energy_callback_trampoline(
+    void* opaque, const xtbloom::detail::gfn2::ExternalEnergyInput& input,
+    xtbloom::detail::gfn2::ExternalEnergyOutput& output, std::string& error) {
+  auto* context = static_cast<xtbloom::detail::Context*>(opaque);
+  if (context == nullptr || context->external_energy_callback == nullptr ||
+      input.wavefunction_layout == nullptr || input.wavefunction == nullptr ||
+      input.integrals == nullptr || input.system < 0 ||
+      input.system >= input.wavefunction_layout->batch_size) {
+    error = "external energy callback context or SCC input is invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  const auto& layout = *input.wavefunction_layout;
+  const auto& wavefunction = *input.wavefunction;
+  const auto& integrals = *input.integrals;
+  const std::size_t system = static_cast<std::size_t>(input.system);
+  if (system + 1u >= layout.atom_offsets.size() ||
+      system + 1u >= layout.batch_orbital_offsets.size() ||
+      system + 1u >= layout.batch_shell_offsets.size() || system >= layout.spin_channels.size() ||
+      system + 1u >= layout.density.system_offsets.size()) {
+    error = "external energy callback wavefunction partitions are incomplete";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::int64_t atom_begin = layout.atom_offsets[system];
+  const std::int64_t atom_end = layout.atom_offsets[system + 1u];
+  const std::int64_t orbital_begin = layout.batch_orbital_offsets[system];
+  const std::int64_t orbital_end = layout.batch_orbital_offsets[system + 1u];
+  const std::int64_t atom_count = atom_end - atom_begin;
+  const std::int64_t nao = orbital_end - orbital_begin;
+  const std::int64_t shell_begin = layout.batch_shell_offsets[system];
+  const std::int64_t shell_end = layout.batch_shell_offsets[system + 1u];
+  const std::int64_t shell_count = shell_end - shell_begin;
+  const std::int32_t spin_channels = layout.spin_channels[system];
+  const auto* projection_basis = input.projection_basis;
+  std::int64_t projection_orbitals = 0;
+  std::int64_t projection_shell_count = 0;
+  const bool projection_valid = projection_basis != nullptr &&
+                                valid_projection_basis(*projection_basis, atom_count,
+                                                       projection_orbitals, projection_shell_count);
+  std::int64_t positions_elements = 0;
+  std::int64_t shell_offset_elements = 0;
+  std::int64_t matrix_elements_i64 = 0;
+  std::int64_t density_elements_i64 = 0;
+  std::int64_t projection_matrix_elements = 0;
+  std::int64_t projection_gradient_elements = 0;
+  std::int64_t overlap_gradient_elements = 0;
+  const bool dimensions_valid =
+      checked_product_i64(3, atom_count, positions_elements) &&
+      checked_sum_i64(shell_count, 1, shell_offset_elements) &&
+      checked_product_i64(nao, nao, matrix_elements_i64) &&
+      checked_product_i64(matrix_elements_i64, spin_channels, density_elements_i64) &&
+      checked_product_i64(positions_elements, matrix_elements_i64, overlap_gradient_elements) &&
+      projection_valid &&
+      checked_product_i64(nao, projection_orbitals, projection_matrix_elements) &&
+      checked_product_i64(3, atom_count, projection_gradient_elements) &&
+      checked_product_i64(projection_gradient_elements, projection_matrix_elements,
+                          projection_gradient_elements);
+  if (atom_count <= 0 || nao <= 0 || (spin_channels != 1 && spin_channels != 2) ||
+      wavefunction.density == nullptr || input.atomic_numbers == nullptr ||
+      input.atomic_number_elements != atom_count || !dimensions_valid ||
+      input.positions == nullptr || input.position_elements != positions_elements ||
+      input.orbital_to_atom == nullptr || input.orbital_to_atom_elements != nao ||
+      input.shell_orbital_offsets == nullptr ||
+      input.shell_orbital_offset_elements != shell_offset_elements ||
+      input.shell_to_atom == nullptr || input.shell_to_atom_elements != shell_count ||
+      input.principal_quantum_numbers == nullptr ||
+      input.principal_quantum_number_elements != shell_count || input.angular_momenta == nullptr ||
+      input.angular_momentum_elements != shell_count || input.shell_index_begin != shell_begin ||
+      input.shell_orbital_index_begin != orbital_begin || !projection_valid ||
+      projection_shell_count <= 0 || input.projection_overlap == nullptr ||
+      input.projection_overlap_elements != projection_matrix_elements ||
+      (input.projection_overlap_gradient_elements != 0 &&
+       input.projection_overlap_gradient == nullptr) ||
+      (input.projection_overlap_gradient != nullptr &&
+       input.projection_overlap_gradient_elements != projection_gradient_elements) ||
+      input.mulliken == nullptr) {
+    error = "external energy callback encountered an invalid wavefunction layout";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  std::size_t matrix_offset = 0u;
+  for (std::size_t previous = 0u; previous < system; ++previous) {
+    const std::int64_t previous_nao =
+        layout.batch_orbital_offsets[previous + 1u] - layout.batch_orbital_offsets[previous];
+    std::size_t previous_matrix_elements = 0u;
+    if (previous_nao <= 0 ||
+        !checked_product_size(static_cast<std::size_t>(previous_nao),
+                              static_cast<std::size_t>(previous_nao), previous_matrix_elements) ||
+        matrix_offset > std::numeric_limits<std::size_t>::max() - previous_matrix_elements) {
+      error = "external energy callback matrix offset overflowed";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    matrix_offset += previous_matrix_elements;
+  }
+  const std::size_t matrix_elements = static_cast<std::size_t>(matrix_elements_i64);
+  if (matrix_offset > std::numeric_limits<std::size_t>::max() - matrix_elements) {
+    error = "external energy callback matrix extent overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  const std::int64_t density_begin_i64 = layout.density.system_offsets[system];
+  const std::int64_t density_end_i64 = layout.density.system_offsets[system + 1u];
+  if (density_begin_i64 < 0 || density_end_i64 < density_begin_i64 ||
+      static_cast<std::uint64_t>(density_end_i64) > std::numeric_limits<std::size_t>::max()) {
+    error = "external energy callback density offsets are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t density_begin = static_cast<std::size_t>(density_begin_i64);
+  const std::size_t density_end = static_cast<std::size_t>(density_end_i64);
+  const std::size_t density_elements = density_end - density_begin;
+  std::size_t expected_density_elements = 0u;
+  std::int64_t matrix_end_i64 = 0;
+  if (matrix_offset > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) ||
+      matrix_elements > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) ||
+      !checked_sum_i64(static_cast<std::int64_t>(matrix_offset),
+                       static_cast<std::int64_t>(matrix_elements), matrix_end_i64) ||
+      !checked_product_size(matrix_elements, static_cast<std::size_t>(spin_channels),
+                            expected_density_elements) ||
+      density_elements != expected_density_elements || integrals.overlap == nullptr ||
+      integrals.matrix_elements < matrix_end_i64 ||
+      (input.overlap_gradient_elements != 0 && input.overlap_gradient == nullptr) ||
+      (input.overlap_gradient != nullptr &&
+       input.overlap_gradient_elements != overlap_gradient_elements)) {
+    error = "external energy callback density or overlap layout is inconsistent";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  double callback_energy = 0.0;
+  const xtbloom_status_t status = context->external_energy_callback(
+      context->external_energy_opaque, input.system,
+      static_cast<xtbloom_external_energy_phase_t>(input.phase), spin_channels, atom_count, nao,
+      input.atomic_numbers, input.atomic_number_elements, input.positions, input.position_elements,
+      input.orbital_to_atom, input.orbital_to_atom_elements, input.atom_index_begin, shell_count,
+      input.shell_orbital_offsets, input.shell_orbital_offset_elements, input.shell_to_atom,
+      input.shell_to_atom_elements, input.principal_quantum_numbers,
+      input.principal_quantum_number_elements, input.angular_momenta,
+      input.angular_momentum_elements, input.shell_index_begin, input.shell_orbital_index_begin,
+      input.molecular_charge, input.unpaired_electrons, wavefunction.density + density_begin,
+      static_cast<std::int64_t>(density_elements), integrals.overlap + matrix_offset,
+      static_cast<std::int64_t>(matrix_elements), input.overlap_gradient,
+      input.overlap_gradient_elements, projection_orbitals, projection_shell_count,
+      projection_basis->shell_orbital_offsets.data(), projection_shell_count + 1,
+      projection_basis->shell_to_atom.data(), projection_shell_count,
+      projection_basis->angular_momenta.data(), projection_shell_count, input.projection_overlap,
+      input.projection_overlap_elements, input.projection_overlap_gradient,
+      input.projection_overlap_gradient_elements, output.hamiltonian, output.hamiltonian_elements,
+      output.force, output.force_elements, &callback_energy);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    error = "external-energy callback returned a failure status";
+    return status;
+  }
+  output.energy = callback_energy;
+  error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
 
@@ -254,6 +487,110 @@ int32_t xtbloom_context_get_device_id(const xtbloom_context_t* context) {
   return context->implementation->device_id;
 }
 
+xtbloom_status_t xtbloom_context_set_external_energy_callback(
+    xtbloom_context_t* context, xtbloom_external_energy_callback_t callback, void* opaque) {
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+  try {
+    /* Serialize callback installation with CPU compute transactions. The
+     * native SCC workers retain the callback through an entire synchronous
+     * call, so changing it concurrently would otherwise race the evaluator's
+     * opaque state and violate the callback lifetime contract. */
+    std::lock_guard<std::mutex> transaction_lock(context->implementation->cpu_transaction_mutex);
+    const auto previous_callback = context->implementation->external_energy_callback;
+    void* const previous_opaque = context->implementation->external_energy_opaque;
+    context->implementation->external_energy_callback = callback;
+    context->implementation->external_energy_opaque = opaque;
+    std::string error;
+    const xtbloom_status_t status = xtbloom::detail::set_external_energy_callback(
+        *context->implementation,
+        callback == nullptr ? nullptr : &external_energy_callback_trampoline,
+        callback == nullptr ? nullptr : context->implementation, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      context->implementation->external_energy_callback = previous_callback;
+      context->implementation->external_energy_opaque = previous_opaque;
+      return fail(status, std::move(error));
+    }
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::exception& exception) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while configuring external energy callback");
+  }
+}
+
+xtbloom_status_t xtbloom_context_set_external_energy_device_model(
+    xtbloom_context_t* context, const xtbloom_external_energy_device_model_t* model) {
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+#if !defined(XTBLOOM_HAS_CUDA)
+  (void)model;
+  return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+              "external energy native device evaluator requires a CUDA build");
+#else
+  if (context->implementation->backend != XTBLOOM_BACKEND_CUDA ||
+      context->implementation->gfn2_cuda_execution_cache == nullptr) {
+    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                "external energy native device evaluator requires a CUDA GFN2 context");
+  }
+  try {
+    std::string error;
+    const xtbloom_status_t status =
+        context->implementation->gfn2_cuda_execution_cache->set_external_energy_device_model(model,
+                                                                                             error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return fail(status, std::move(error));
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
+                "failed to allocate the external energy native device model");
+  } catch (const std::exception& exception) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while configuring the external energy native device model");
+  }
+#endif
+}
+
+xtbloom_status_t xtbloom_context_copy_external_energy_device_gradients(xtbloom_context_t* context,
+                                                                       double* destination,
+                                                                       int64_t elements) {
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+#if !defined(XTBLOOM_HAS_CUDA)
+  (void)destination;
+  (void)elements;
+  return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+              "external energy native device gradients require a CUDA build");
+#else
+  if (context->implementation->backend != XTBLOOM_BACKEND_CUDA ||
+      context->implementation->gfn2_cuda_execution_cache == nullptr) {
+    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                "external energy native device gradients require a CUDA GFN2 context");
+  }
+  try {
+    std::string error;
+    const xtbloom_status_t status =
+        context->implementation->gfn2_cuda_execution_cache->copy_external_energy_device_gradients(
+            destination, elements, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return fail(status, std::move(error));
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::exception& exception) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while copying external energy device gradients");
+  }
+#endif
+}
+
 xtbloom_status_t xtbloom_request_create(xtbloom_context_t* context, xtbloom_request_t** request) {
   if (request == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request output pointer is NULL");
@@ -400,6 +737,18 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
                 "asynchronous compute enqueue is not supported by the CPU backend");
   }
+  if (context->implementation->external_energy_callback != nullptr &&
+      (context->implementation->gfn2_cuda_execution_cache == nullptr ||
+       !context->implementation->gfn2_cuda_execution_cache
+            ->external_energy_device_model_enabled())) {
+    /* Host-staged external energy CUDA contexts intentionally use the synchronous CPU
+     * SCC cache.  Borrowed callback state cannot safely cross the existing
+     * CUDA request graph lifetime, so reject enqueue without inspecting any
+     * descriptors or mutating request/result state. */
+    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                "asynchronous CUDA enqueue is not supported with the host-staged external energy "
+                "correction callback");
+  }
 
   if (batch == nullptr || options == nullptr || result == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
@@ -489,9 +838,26 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
   if (context == nullptr || context->implementation == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
+  /* A private callback on a CUDA context selects the compatibility
+   * host-staged path unless a native device model is installed.  The latter
+   * keeps the normal CUDA graph route and executes the external evaluator in the
+   * SCC device tail, so no callback or host staging is involved. */
+#if defined(XTBLOOM_HAS_CUDA)
+  const bool external_energy_device =
+      context->implementation->backend == XTBLOOM_BACKEND_CUDA &&
+      context->implementation->gfn2_cuda_execution_cache != nullptr &&
+      context->implementation->gfn2_cuda_execution_cache->external_energy_device_model_enabled();
+#else
+  const bool external_energy_device = false;
+#endif
+  const bool external_energy_host_staged =
+      context->implementation->backend == XTBLOOM_BACKEND_CUDA &&
+      context->implementation->external_energy_callback != nullptr && !external_energy_device;
+  const bool cuda_backend =
+      context->implementation->backend == XTBLOOM_BACKEND_CUDA && !external_energy_host_staged;
   std::unique_lock<std::mutex> cpu_transaction;
   try {
-    if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
+    if (context->implementation->backend == XTBLOOM_BACKEND_CPU || external_energy_host_staged) {
       /* Validation, model dispatch, cache mutation, and publication are one
        * context transaction even when concurrent callers select different
        * model caches. Keep acquisition inside the C ABI exception boundary:
@@ -499,12 +865,11 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
       cpu_transaction =
           std::unique_lock<std::mutex>(context->implementation->cpu_transaction_mutex);
     }
-    const bool cuda_backend = context->implementation->backend == XTBLOOM_BACKEND_CUDA;
     xtbloom::detail::DescriptorValidationResult validation =
         cuda_backend ? xtbloom::detail::validate_compute_descriptor_structure_for_dispatch(
                            context->implementation->backend, batch, options, result)
                      : xtbloom::detail::validate_compute_descriptors_for_dispatch(
-                           context->implementation->backend, batch, options, result);
+                           XTBLOOM_BACKEND_CPU, batch, options, result);
     if (!validation.ok()) {
       return fail(validation.status, std::move(validation.error));
     }
@@ -518,7 +883,8 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
     xtbloom::detail::ModelBackendRoute model_route =
         xtbloom::detail::ModelBackendRoute::kUnavailable;
     const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
-        options->model, context->implementation->backend, route_error, &model_route);
+        options->model, cuda_backend ? context->implementation->backend : XTBLOOM_BACKEND_CPU,
+        route_error, &model_route);
     if (model_status != XTBLOOM_STATUS_SUCCESS) {
       return fail(model_status, std::move(route_error));
     }
@@ -527,9 +893,15 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
       return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
                   "the registered model route has no synchronous executor");
     }
+    if (external_energy_host_staged && options->model != XTBLOOM_MODEL_GFN2_XTB) {
+      return fail(
+          XTBLOOM_STATUS_NOT_SUPPORTED,
+          "the external energy host-staged callback is available only for CUDA GFN2 requests");
+    }
     const xtbloom::detail::DescriptorValidationResult availability =
-        xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
-                                                                 *batch, *options);
+        xtbloom::detail::validate_compute_execution_availability(
+            cuda_backend ? context->implementation->backend : XTBLOOM_BACKEND_CPU, *batch,
+            *options);
     if (!availability.ok()) {
       return fail(availability.status, std::move(availability.error));
     }
@@ -551,7 +923,7 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
                 "unknown exception while validating or dispatching a compute request");
   }
 
-  if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
+  if (!cuda_backend) {
     try {
       if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
         std::string error;

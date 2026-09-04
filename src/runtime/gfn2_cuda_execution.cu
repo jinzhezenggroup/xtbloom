@@ -4044,6 +4044,20 @@ class RequestExecutionGraphOwner {
   cudaGraphConditionalHandle start_mode_condition_ = 0u;
 };
 
+/* Context-owned immutable external energy parameter arena.  The CUDA SCC binding only
+ * borrows the POD view; this owner keeps the uploaded weights alive until all
+ * prepared graphs have been destroyed. */
+struct ExternalEnergyDeviceModelState {
+  ~ExternalEnergyDeviceModelState() {
+    if (parameters != nullptr) (void)cudaFree(parameters);
+    if (parameter_gradient != nullptr) (void)cudaFree(parameter_gradient);
+  }
+  ExternalEnergyDeviceModel view{};
+  double* parameters = nullptr;
+  double* parameter_gradient = nullptr;
+  std::int64_t parameter_gradient_elements = 0;
+};
+
 }  // namespace
 
 struct Gfn2CudaExecutionCache::Impl {
@@ -4125,6 +4139,7 @@ struct Gfn2CudaExecutionCache::Impl {
     Gfn2SccSetupEigensolverBinding eigensolver_binding{};
     Gfn2SccIterationInitializationReady ready{};
     Gfn2SccIterationBinding scc_binding{};
+    std::shared_ptr<ExternalEnergyDeviceModelState> external_energy_model;
     /* Built once after setup validation and replayed by fresh/warm inference.
      * The owner retains a bounded fallback when conditional capture is not
      * supported by the selected CUDA/provider stack. */
@@ -6464,6 +6479,7 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t classical_force = 0u;
       std::size_t explicit_qm_force = 0u;
       std::size_t explicit_point_force = 0u;
+      std::size_t external_energy_geometry_gradient = 0u;
 
       std::size_t post_es2_shell_scratch = 0u;
       std::size_t post_aes2_potential_scratch = 0u;
@@ -6573,6 +6589,7 @@ struct Gfn2CudaExecutionCache::Impl {
           execution_layout.append<double>(explicit_points ? coordinates : 0);
       execution.explicit_point_force =
           execution_layout.append<double>(explicit_points ? point_coordinates : 0);
+      execution.external_energy_geometry_gradient = execution_layout.append<double>(coordinates);
 
       execution.post_es2_shell_scratch = execution_layout.append<double>(shells);
       execution.post_aes2_potential_scratch = execution_layout.append<double>(
@@ -7238,6 +7255,13 @@ struct Gfn2CudaExecutionCache::Impl {
       binding.intermediates.explicit_point_force_elements = explicit_points ? point_coordinates : 0;
       binding.intermediates.forces = {staged_qm_force, coordinates, staged_point_force,
                                       point_coordinates, token};
+      binding.intermediates.external_energy = {};
+      binding.intermediates.external_energy.overlap_adjoint = overlap_adjoint;
+      binding.intermediates.external_energy.overlap_adjoint_elements = matrices;
+      binding.intermediates.external_energy.geometry_gradient =
+          arena_pointer<double>(execution_arena, execution.external_energy_geometry_gradient);
+      binding.intermediates.external_energy.geometry_gradient_elements = coordinates;
+      binding.intermediates.external_energy.plan_token = token;
 
       auto& post_workspace = binding.workspace.post_scc_potential;
       post_workspace.es2.shell_scratch =
@@ -8483,6 +8507,7 @@ struct Gfn2CudaExecutionCache::Impl {
       std::vector<double>&& periodic_shifts, std::vector<double>&& periodic_response,
       std::unique_ptr<Prepared>& output, std::string& error, bool build_request_graph = false) {
     auto candidate = std::make_unique<Prepared>(stream);
+    candidate->external_energy_model = external_energy_model;
     const std::uint64_t fingerprint = key.fingerprint();
     std::uint64_t token = hash_mix(fingerprint ^ next_plan_token++ ^ 0x112112112ULL);
     if (token == 0u) token = next_plan_token++;
@@ -8778,6 +8803,59 @@ struct Gfn2CudaExecutionCache::Impl {
         candidate->inference.warm_checkpoint_field_vectors;
     status = build_public_result_state(*candidate, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    if (candidate->external_energy_model != nullptr) {
+      candidate->plan_seed.external_energy_model = candidate->external_energy_model->view;
+      candidate->plan_seed.external_energy_model.plan_token = token;
+      auto& external_input = candidate->scc_binding.input.external_energy;
+      external_input.batch_size = candidate->host.basis.batch_size;
+      external_input.total_atoms = candidate->host.basis.total_atoms;
+      external_input.total_orbitals = candidate->host.basis.total_orbitals;
+      external_input.total_matrix_elements = candidate->host.integrals.total_matrix_elements;
+      external_input.total_spin_matrix_elements =
+          candidate->device_wavefunction.total_spin_matrix_elements;
+      external_input.plan_token = token;
+      external_input.atom_offsets = candidate->device_topology.atom_offsets;
+      external_input.batch_orbital_offsets = candidate->device_topology.batch_orbital_offsets;
+      external_input.matrix_offsets = candidate->device_topology.matrix_offsets;
+      external_input.orbital_to_atom = candidate->device_topology.orbital_to_atom;
+      external_input.atomic_numbers =
+          candidate->plan_seed.element_identity_projection.atomic_numbers;
+      external_input.positions = candidate->numerical.device.committed_positions;
+      external_input.overlap = candidate->scc_binding.input.hamiltonian.overlap;
+      external_input.current_density = candidate->scc_binding.state.density.density;
+      external_input.staged_density = candidate->scc_binding.workspace.staged_density.density;
+      external_input.wavefunction_layout = candidate->device_wavefunction;
+      auto bind_external_energy_inputs = [&](ExternalEnergyDeviceInput& input) {
+        input.molecular_charges = candidate->public_result.expected_molecular_charges;
+        input.unpaired_electrons = candidate->public_result.expected_unpaired_electrons;
+        input.spin_channels = candidate->public_result.expected_spin_channels;
+      };
+      bind_external_energy_inputs(external_input);
+      candidate->scc_binding.plan.external_energy_model =
+          candidate->plan_seed.external_energy_model;
+      candidate->scc_binding.workspace.external_energy = {
+          candidate->scc_binding.workspace.hamiltonian.matrix,
+          candidate->scc_binding.workspace.hamiltonian.elements,
+          /* The native evaluator only needs the accumulator below.  Keeping
+           * the canonical electronic-free-energy output untouched preserves
+           * the public diagnostic produced by the baseline energy kernel. */
+          nullptr, 0, candidate->scc_binding.workspace.components.core_energy,
+          candidate->scc_binding.workspace.components.core_energy_elements,
+          candidate->external_energy_model->parameter_gradient,
+          candidate->external_energy_model->parameter_gradient_elements, token};
+      /* The terminal force graph borrows the same device-side descriptors as
+       * SCC.  Its evaluator writes the already allocated overlap-adjoint seed
+       * and a separate explicit geometry-gradient buffer before the ordinary
+       * H0/integral reverse chain runs. */
+      candidate->energy_force.plan.external_energy_model =
+          candidate->plan_seed.external_energy_model;
+      candidate->energy_force.input.external_energy = external_input;
+      candidate->energy_force.intermediates.external_energy.overlap_adjoint =
+          candidate->energy_force.intermediates.h0.overlap_adjoint;
+      candidate->energy_force.intermediates.external_energy.overlap_adjoint_elements =
+          candidate->energy_force.intermediates.h0.overlap_adjoint_elements;
+      candidate->energy_force.intermediates.external_energy.plan_token = token;
+    }
     candidate->numerical.device.request_error = candidate->public_result.request_topology_error;
     candidate->numerical.preprocessing.admission = {candidate->public_result.request_topology_error,
                                                     1, candidate->host.plan_token};
@@ -11547,6 +11625,7 @@ struct Gfn2CudaExecutionCache::Impl {
   bool native_lattice_staging_poisoned = false;
   ActiveRequest active_request;
   std::unique_ptr<Prepared> prepared;
+  std::shared_ptr<ExternalEnergyDeviceModelState> external_energy_model;
   mutable std::mutex mutex;
 };
 
@@ -11554,6 +11633,129 @@ Gfn2CudaExecutionCache::Gfn2CudaExecutionCache(std::int32_t device_id, void* str
     : impl_(std::make_unique<Impl>(device_id, stream)) {}
 
 Gfn2CudaExecutionCache::~Gfn2CudaExecutionCache() = default;
+
+bool Gfn2CudaExecutionCache::external_energy_device_model_enabled() const noexcept {
+  return impl_ != nullptr && impl_->external_energy_model != nullptr;
+}
+
+xtbloom_status_t Gfn2CudaExecutionCache::set_external_energy_device_model(
+    const xtbloom_external_energy_device_model_t* specification, std::string& error) {
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  auto& implementation = *impl_;
+  std::lock_guard<std::mutex> lock(implementation.mutex);
+  if (implementation.active_request.id != 0u) {
+    error = "cannot replace the external energy device model while a CUDA request is active";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (specification == nullptr) {
+    implementation.prepared.reset();
+    implementation.external_energy_model.reset();
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (specification->struct_size < sizeof(xtbloom_external_energy_device_model_t) ||
+      specification->api_version != XTBLOOM_API_VERSION || specification->reserved != 0u ||
+      specification->parameters.data == nullptr || specification->parameters.size_bytes == 0u ||
+      specification->parameters.memory_space != XTBLOOM_MEMORY_HOST ||
+      specification->parameters.reserved != 0u ||
+      specification->parameters.size_bytes % sizeof(double) != 0u ||
+      specification->parameters.size_bytes / sizeof(double) >
+          static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    error = "malformed external energy device model specification";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::uint32_t supported_flags = XTBLOOM_EXTERNAL_ENERGY_DEVICE_NATIVE_SHELL |
+                                        XTBLOOM_EXTERNAL_ENERGY_DEVICE_DIAGONAL_PROJECTION |
+                                        XTBLOOM_EXTERNAL_ENERGY_DEVICE_TRAINING_GRADIENT;
+  if (((specification->flags & (XTBLOOM_EXTERNAL_ENERGY_DEVICE_NATIVE_SHELL |
+                                XTBLOOM_EXTERNAL_ENERGY_DEVICE_DIAGONAL_PROJECTION)) !=
+       (XTBLOOM_EXTERNAL_ENERGY_DEVICE_NATIVE_SHELL |
+        XTBLOOM_EXTERNAL_ENERGY_DEVICE_DIAGONAL_PROJECTION)) ||
+      ((specification->flags & ~supported_flags) != 0u)) {
+    error = "external energy device model must select native-shell diagonal projection";
+    return XTBLOOM_STATUS_NOT_SUPPORTED;
+  }
+  ScopedCudaDevice device(implementation.device_id, error);
+  if (!device.ok()) return device.status();
+  auto candidate = std::make_shared<ExternalEnergyDeviceModelState>();
+  candidate->view.geometry_dim = specification->geometry_dim;
+  candidate->view.electronic_dim = specification->electronic_dim;
+  candidate->view.hidden_dim = specification->hidden_dim;
+  candidate->view.max_atomic_number = specification->max_atomic_number;
+  candidate->view.projection_width = specification->projection_width;
+  candidate->view.radial_count = specification->radial_count;
+  candidate->view.output_scale = specification->output_scale;
+  candidate->view.parameter_elements =
+      static_cast<std::int64_t>(specification->parameters.size_bytes / sizeof(double));
+  candidate->view.parameters = static_cast<const double*>(specification->parameters.data);
+  candidate->view.flags = specification->flags;
+  if (!validate_external_energy_device_model(candidate->view)) {
+    error = "external energy device model dimensions or flat parameter count are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  cudaError_t status = cudaMalloc(reinterpret_cast<void**>(&candidate->parameters),
+                                  specification->parameters.size_bytes);
+  if (status != cudaSuccess) {
+    error = cuda_error_message("external energy device model parameter allocation", status);
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  }
+  status = cudaMemcpy(candidate->parameters, specification->parameters.data,
+                      specification->parameters.size_bytes, cudaMemcpyHostToDevice);
+  if (status != cudaSuccess) {
+    error = cuda_error_message("external energy device model parameter upload", status);
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  candidate->view.parameters = candidate->parameters;
+  implementation.prepared.reset();
+  if ((specification->flags & XTBLOOM_EXTERNAL_ENERGY_DEVICE_TRAINING_GRADIENT) != 0u) {
+    status = cudaMalloc(reinterpret_cast<void**>(&candidate->parameter_gradient),
+                        specification->parameters.size_bytes);
+    if (status != cudaSuccess) {
+      error = cuda_error_message("external energy device gradient allocation", status);
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    candidate->parameter_gradient_elements = candidate->view.parameter_elements;
+  }
+  candidate->view.flags = specification->flags;
+  implementation.external_energy_model = std::move(candidate);
+  error.clear();
+  return device.restore(error);
+}
+
+xtbloom_status_t Gfn2CudaExecutionCache::copy_external_energy_device_gradients(
+    double* destination, std::int64_t elements, std::string& error) {
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  auto& implementation = *impl_;
+  std::lock_guard<std::mutex> lock(implementation.mutex);
+  if (implementation.external_energy_model == nullptr ||
+      implementation.external_energy_model->parameter_gradient == nullptr) {
+    error = "external energy device model was not installed with training gradients enabled";
+    return XTBLOOM_STATUS_NOT_SUPPORTED;
+  }
+  if (destination == nullptr ||
+      elements != implementation.external_energy_model->parameter_gradient_elements) {
+    error = "external energy device gradient destination has the wrong extent";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  ScopedCudaDevice device(implementation.device_id, error);
+  if (!device.ok()) return device.status();
+  const cudaError_t status =
+      cudaMemcpy(destination, implementation.external_energy_model->parameter_gradient,
+                 static_cast<std::size_t>(elements) * sizeof(double), cudaMemcpyDeviceToHost);
+  if (status != cudaSuccess) {
+    error = cuda_error_message("external energy device gradient download", status);
+    const xtbloom_status_t restore_status = device.restore(error);
+    return restore_status == XTBLOOM_STATUS_SUCCESS ? XTBLOOM_STATUS_INTERNAL_ERROR
+                                                    : restore_status;
+  }
+  return device.restore(error);
+}
 
 xtbloom_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
                                                    const xtbloom_batch_t& batch,

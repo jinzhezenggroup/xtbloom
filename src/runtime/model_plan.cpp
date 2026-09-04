@@ -9,6 +9,9 @@
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_plan.hpp"
 #include "runtime/validation.hpp"
+#if defined(XTBLOOM_HAS_CUDA)
+#include "runtime/gfn2_cuda_execution.hpp"
+#endif
 
 namespace xtbloom::detail {
 namespace {
@@ -30,6 +33,23 @@ xtbloom_status_t ModelPlan::create(Context& context, const xtbloom_batch_t& batc
   if (context_ != nullptr) {
     error = "plan has already been created";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const bool host_staged_external_energy_callback =
+      context.external_energy_callback != nullptr &&
+#if defined(XTBLOOM_HAS_CUDA)
+      !(context.gfn2_cuda_execution_cache != nullptr &&
+        context.gfn2_cuda_execution_cache->external_energy_device_model_enabled());
+#else
+      true;
+#endif
+  if (context.backend == XTBLOOM_BACKEND_CUDA && host_staged_external_energy_callback) {
+    /* The host-staged callback path is synchronous and owns its CPU SCC cache
+     * at the context boundary. A fixed-topology CUDA plan would otherwise
+     * capture the device SCC graph and silently bypass the installed hook. */
+    error =
+        "CUDA plans are not supported with the host-staged external-energy callback; "
+        "use synchronous xtbloom_compute";
+    return XTBLOOM_STATUS_NOT_SUPPORTED;
   }
   std::unique_lock<std::mutex> cpu_transaction;
   if (context.backend == XTBLOOM_BACKEND_CPU) {
