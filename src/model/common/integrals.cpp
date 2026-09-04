@@ -648,6 +648,111 @@ void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size
   }
 }
 
+/*
+ * Cross-basis counterpart of compute_shell_pair.  Keeping this private
+ * routine beside the reviewed recurrence guarantees that projection overlaps
+ * use exactly the same Gaussian, Cartesian, and spherical conventions as the
+ * native xTBloom overlap.  Only overlap and its ket-center derivative are
+ * required, so the larger multipole scratch arrays remain untouched.
+ */
+template <int BraAngularMomentum = -1, int KetAngularMomentum = -1>
+void compute_cross_shell_pair(const BasisPlan& bra_basis, std::size_t bra_shell,
+                              const BasisPlan& ket_basis, std::size_t ket_shell,
+                              const double vector[3], double integral_cutoff, bool with_gradient,
+                              IntegralWorkspace& workspace) {
+  static_assert(BraAngularMomentum >= -1 && BraAngularMomentum <= 2);
+  static_assert(KetAngularMomentum >= -1 && KetAngularMomentum <= 2);
+  const std::uint8_t bra_l = BraAngularMomentum < 0 ? bra_basis.angular_momenta[bra_shell]
+                                                    : static_cast<std::uint8_t>(BraAngularMomentum);
+  const std::uint8_t ket_l = KetAngularMomentum < 0 ? ket_basis.angular_momenta[ket_shell]
+                                                    : static_cast<std::uint8_t>(KetAngularMomentum);
+  const std::size_t bra_cartesian_count = cartesian_count(bra_l);
+  const std::size_t ket_cartesian_count = cartesian_count(ket_l);
+  const std::size_t cartesian_block_size = bra_cartesian_count * ket_cartesian_count;
+  std::fill_n(workspace.cartesian.data(), cartesian_block_size, 0.0);
+  if (with_gradient) {
+    std::fill_n(workspace.cartesian_gradient.data(), 3u * cartesian_block_size, 0.0);
+  }
+
+  const CartesianExponent* bra_exponents = cartesian_exponents(bra_l);
+  const CartesianExponent* ket_exponents = cartesian_exponents(ket_l);
+  const std::int64_t bra_primitive_begin = bra_basis.shell_primitive_offsets[bra_shell];
+  const std::int64_t bra_primitive_end = bra_basis.shell_primitive_offsets[bra_shell + 1u];
+  const std::int64_t ket_primitive_begin = ket_basis.shell_primitive_offsets[ket_shell];
+  const std::int64_t ket_primitive_end = ket_basis.shell_primitive_offsets[ket_shell + 1u];
+  const double distance_squared =
+      vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+
+  for (std::int64_t ket_primitive = ket_primitive_begin; ket_primitive < ket_primitive_end;
+       ++ket_primitive) {
+    const std::size_t ket_index = static_cast<std::size_t>(ket_primitive);
+    const double ket_alpha = ket_basis.primitive_exponents[ket_index];
+    for (std::int64_t bra_primitive = bra_primitive_begin; bra_primitive < bra_primitive_end;
+         ++bra_primitive) {
+      const std::size_t bra_index = static_cast<std::size_t>(bra_primitive);
+      const double bra_alpha = bra_basis.primitive_exponents[bra_index];
+      const double alpha_sum = ket_alpha + bra_alpha;
+      const double inverse_sum = 1.0 / alpha_sum;
+      const double product_exponent = ket_alpha * bra_alpha * distance_squared * inverse_sum;
+      if (product_exponent > integral_cutoff) continue;
+
+      const double sqrt_inverse_sum = std::sqrt(inverse_sum);
+      const double primitive_prefactor = std::exp(-product_exponent) * kSqrtPiCubed *
+                                         sqrt_inverse_sum * sqrt_inverse_sum * sqrt_inverse_sum *
+                                         ket_basis.primitive_coefficients[ket_index] *
+                                         bra_basis.primitive_coefficients[bra_index];
+      const double inverse_twice_sum = 0.5 * inverse_sum;
+      double axis[3][6][3];
+      for (std::size_t coordinate = 0; coordinate < 3u; ++coordinate) {
+        const double product_minus_i = -vector[coordinate] * bra_alpha * inverse_sum;
+        const double product_minus_j = +vector[coordinate] * ket_alpha * inverse_sum;
+        make_axis_overlap(product_minus_i, product_minus_j, inverse_twice_sum,
+                          static_cast<std::size_t>(ket_l) + (with_gradient ? 1u : 0u), bra_l,
+                          axis[coordinate]);
+      }
+
+      for (std::size_t bra_cartesian = 0; bra_cartesian < bra_cartesian_count; ++bra_cartesian) {
+        const CartesianExponent bra = bra_exponents[bra_cartesian];
+        for (std::size_t ket_cartesian = 0; ket_cartesian < ket_cartesian_count; ++ket_cartesian) {
+          const CartesianExponent ket = ket_exponents[ket_cartesian];
+          const double x = axis[0][ket.x][bra.x];
+          const double y = axis[1][ket.y][bra.y];
+          const double z = axis[2][ket.z][bra.z];
+          const std::size_t cartesian_index = bra_cartesian * ket_cartesian_count + ket_cartesian;
+          workspace.cartesian[cartesian_index] += primitive_prefactor * x * y * z;
+          if (with_gradient) {
+            const std::array<double, 3> other_axis_product{y * z, x * z, x * y};
+            for (std::size_t coordinate = 0; coordinate < 3u; ++coordinate) {
+              const std::size_t a = coordinate == 0u ? ket.x : coordinate == 1u ? ket.y : ket.z;
+              const std::size_t b = coordinate == 0u ? bra.x : coordinate == 1u ? bra.y : bra.z;
+              double derivative_1d = 2.0 * ket_alpha * axis[coordinate][a + 1u][b];
+              if (a > 0u) {
+                derivative_1d -= static_cast<double>(a) * axis[coordinate][a - 1u][b];
+              }
+              workspace.cartesian_gradient[coordinate * cartesian_block_size + cartesian_index] +=
+                  primitive_prefactor * derivative_1d * other_axis_product[coordinate];
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const SphericalTransform& bra_transform = *spherical_transform(bra_l);
+  const SphericalTransform& ket_transform = *spherical_transform(ket_l);
+  transform_shell_pair(bra_transform, ket_transform, workspace.cartesian.data(),
+                       workspace.spherical.data());
+  if (with_gradient) {
+    for (std::size_t coordinate = 0; coordinate < 3u; ++coordinate) {
+      transform_shell_pair(bra_transform, ket_transform,
+                           workspace.cartesian_gradient.data() + coordinate * cartesian_block_size,
+                           workspace.spherical_gradient.data() + coordinate *
+                                                                     bra_transform.spherical_count *
+                                                                     ket_transform.spherical_count);
+    }
+  }
+}
+
 }  // namespace
 
 #if !defined(XTBLOOM_INTEGRALS_KERNEL_VARIANT)
@@ -883,6 +988,279 @@ xtbloom_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan
     }
   }
 
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+namespace {
+
+xtbloom_status_t validate_cross_evaluation(const BasisPlan& bra_basis, const BasisPlan& ket_basis,
+                                           const double* bra_positions, const double* ket_positions,
+                                           const void* workspace, std::size_t workspace_size,
+                                           std::string& error) {
+  xtbloom_status_t status = validate_basis(bra_basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = validate_basis(ket_basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (bra_basis.batch_size != 1 || ket_basis.batch_size != 1 ||
+      bra_basis.total_atoms != ket_basis.total_atoms || bra_positions == nullptr ||
+      ket_positions == nullptr || workspace == nullptr ||
+      workspace_size < sizeof(IntegralWorkspace)) {
+    error = "cross-overlap evaluation requires two one-system compatible bases";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t atoms = static_cast<std::size_t>(bra_basis.total_atoms);
+  if (atoms > std::numeric_limits<std::size_t>::max() / 3u ||
+      reinterpret_cast<std::uintptr_t>(workspace) % alignof(double) != 0u) {
+    error = "cross-overlap geometry dimensions or workspace alignment are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const double maximum_coordinate = 0.25 * std::sqrt(std::numeric_limits<double>::max());
+  for (std::size_t coordinate = 0; coordinate < atoms * 3u; ++coordinate) {
+    if (!std::isfinite(bra_positions[coordinate]) || !std::isfinite(ket_positions[coordinate]) ||
+        std::abs(bra_positions[coordinate]) > maximum_coordinate ||
+        std::abs(ket_positions[coordinate]) > maximum_coordinate) {
+      error = "cross-overlap positions contain invalid or oversized coordinates";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+}  // namespace
+
+xtbloom_status_t evaluate_cross_overlap_system_cpu(const BasisPlan& bra_basis,
+                                                   const BasisPlan& ket_basis,
+                                                   const double* bra_positions,
+                                                   const double* ket_positions, double* overlap,
+                                                   void* workspace, std::size_t workspace_size,
+                                                   std::string& error) {
+  const xtbloom_status_t status = validate_cross_evaluation(
+      bra_basis, ket_basis, bra_positions, ket_positions, workspace, workspace_size, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (overlap == nullptr) {
+    error = "cross-overlap output must not be NULL";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t bra_orbitals = static_cast<std::size_t>(bra_basis.total_orbitals);
+  const std::size_t ket_orbitals = static_cast<std::size_t>(ket_basis.total_orbitals);
+  if (bra_orbitals > std::numeric_limits<std::size_t>::max() / ket_orbitals) {
+    error = "cross-overlap output dimensions exceed host limits";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t matrix_elements = bra_orbitals * ket_orbitals;
+  std::fill_n(overlap, matrix_elements, 0.0);
+  auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
+  const std::size_t atom_count = static_cast<std::size_t>(bra_basis.total_atoms);
+  for (std::size_t ket_atom = 0; ket_atom < atom_count; ++ket_atom) {
+    const std::int64_t ket_shell_begin = ket_basis.atom_shell_offsets[ket_atom];
+    const std::int64_t ket_shell_end = ket_basis.atom_shell_offsets[ket_atom + 1u];
+    for (std::size_t bra_atom = 0; bra_atom < atom_count; ++bra_atom) {
+      const std::int64_t bra_shell_begin = bra_basis.atom_shell_offsets[bra_atom];
+      const std::int64_t bra_shell_end = bra_basis.atom_shell_offsets[bra_atom + 1u];
+      const double vector[3]{ket_positions[3u * ket_atom] - bra_positions[3u * bra_atom],
+                             ket_positions[3u * ket_atom + 1u] - bra_positions[3u * bra_atom + 1u],
+                             ket_positions[3u * ket_atom + 2u] - bra_positions[3u * bra_atom + 2u]};
+      for (std::int64_t ket_shell = ket_shell_begin; ket_shell < ket_shell_end; ++ket_shell) {
+        for (std::int64_t bra_shell = bra_shell_begin; bra_shell < bra_shell_end; ++bra_shell) {
+          const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
+          const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
+          compute_cross_shell_pair<>(bra_basis, bra_shell_index, ket_basis, ket_shell_index, vector,
+                                     kDefaultIntegralCutoff, false, scratch);
+          const std::size_t bra_count = spherical_count(bra_basis.angular_momenta[bra_shell_index]);
+          const std::size_t ket_count = spherical_count(ket_basis.angular_momenta[ket_shell_index]);
+          const std::size_t bra_orbital =
+              static_cast<std::size_t>(bra_basis.shell_orbital_offsets[bra_shell_index]);
+          const std::size_t ket_orbital =
+              static_cast<std::size_t>(ket_basis.shell_orbital_offsets[ket_shell_index]);
+          for (std::size_t bra_ao = 0; bra_ao < bra_count; ++bra_ao) {
+            for (std::size_t ket_ao = 0; ket_ao < ket_count; ++ket_ao) {
+              overlap[(bra_orbital + bra_ao) * ket_orbitals + ket_orbital + ket_ao] =
+                  scratch.spherical[bra_ao * ket_count + ket_ao];
+            }
+          }
+        }
+      }
+    }
+  }
+  for (std::size_t element = 0; element < matrix_elements; ++element) {
+    if (!std::isfinite(overlap[element])) {
+      error = "cross-overlap evaluation produced NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t evaluate_cross_overlap_gradient_system_cpu(
+    const BasisPlan& bra_basis, const BasisPlan& ket_basis, const double* bra_positions,
+    const double* ket_positions, double* overlap_gradient, void* workspace,
+    std::size_t workspace_size, std::string& error) {
+  const xtbloom_status_t status = validate_cross_evaluation(
+      bra_basis, ket_basis, bra_positions, ket_positions, workspace, workspace_size, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (overlap_gradient == nullptr) {
+    error = "cross-overlap gradient output must not be NULL";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t bra_orbitals = static_cast<std::size_t>(bra_basis.total_orbitals);
+  const std::size_t ket_orbitals = static_cast<std::size_t>(ket_basis.total_orbitals);
+  if (bra_orbitals > std::numeric_limits<std::size_t>::max() / ket_orbitals) {
+    error = "cross-overlap gradient matrix dimensions exceed host limits";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t matrix_elements = bra_orbitals * ket_orbitals;
+  const std::size_t atom_count = static_cast<std::size_t>(bra_basis.total_atoms);
+  if (atom_count > std::numeric_limits<std::size_t>::max() / 3u ||
+      matrix_elements > std::numeric_limits<std::size_t>::max() / (3u * atom_count)) {
+    error = "cross-overlap gradient dimensions exceed host limits";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t gradient_elements = 3u * atom_count * matrix_elements;
+  std::fill_n(overlap_gradient, gradient_elements, 0.0);
+  auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
+  for (std::size_t ket_atom = 0; ket_atom < atom_count; ++ket_atom) {
+    const std::int64_t ket_shell_begin = ket_basis.atom_shell_offsets[ket_atom];
+    const std::int64_t ket_shell_end = ket_basis.atom_shell_offsets[ket_atom + 1u];
+    for (std::size_t bra_atom = 0; bra_atom < atom_count; ++bra_atom) {
+      if (bra_atom == ket_atom) continue;
+      const std::int64_t bra_shell_begin = bra_basis.atom_shell_offsets[bra_atom];
+      const std::int64_t bra_shell_end = bra_basis.atom_shell_offsets[bra_atom + 1u];
+      const double vector[3]{ket_positions[3u * ket_atom] - bra_positions[3u * bra_atom],
+                             ket_positions[3u * ket_atom + 1u] - bra_positions[3u * bra_atom + 1u],
+                             ket_positions[3u * ket_atom + 2u] - bra_positions[3u * bra_atom + 2u]};
+      for (std::int64_t ket_shell = ket_shell_begin; ket_shell < ket_shell_end; ++ket_shell) {
+        for (std::int64_t bra_shell = bra_shell_begin; bra_shell < bra_shell_end; ++bra_shell) {
+          const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
+          const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
+          compute_cross_shell_pair<>(bra_basis, bra_shell_index, ket_basis, ket_shell_index, vector,
+                                     kDefaultIntegralCutoff, true, scratch);
+          const std::size_t bra_count = spherical_count(bra_basis.angular_momenta[bra_shell_index]);
+          const std::size_t ket_count = spherical_count(ket_basis.angular_momenta[ket_shell_index]);
+          const std::size_t block_size = bra_count * ket_count;
+          const std::size_t bra_orbital =
+              static_cast<std::size_t>(bra_basis.shell_orbital_offsets[bra_shell_index]);
+          const std::size_t ket_orbital =
+              static_cast<std::size_t>(ket_basis.shell_orbital_offsets[ket_shell_index]);
+          for (std::size_t bra_ao = 0; bra_ao < bra_count; ++bra_ao) {
+            for (std::size_t ket_ao = 0; ket_ao < ket_count; ++ket_ao) {
+              const std::size_t block_index = bra_ao * ket_count + ket_ao;
+              const std::size_t matrix_index =
+                  (bra_orbital + bra_ao) * ket_orbitals + ket_orbital + ket_ao;
+              for (std::size_t axis = 0; axis < 3u; ++axis) {
+                const double derivative =
+                    scratch.spherical_gradient[axis * block_size + block_index];
+                overlap_gradient[(3u * ket_atom + axis) * matrix_elements + matrix_index] +=
+                    derivative;
+                overlap_gradient[(3u * bra_atom + axis) * matrix_elements + matrix_index] -=
+                    derivative;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  for (std::size_t element = 0; element < gradient_elements; ++element) {
+    if (!std::isfinite(overlap_gradient[element])) {
+      error = "cross-overlap gradient evaluation produced NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t evaluate_overlap_gradient_system_cpu(
+    const BasisPlan& basis, const IntegralPlan& plan, const double* positions,
+    double* overlap_gradient, void* workspace, std::size_t workspace_size, std::string& error) {
+  xtbloom_status_t status =
+      validate_evaluation(basis, plan, positions, workspace, workspace_size, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  if (basis.batch_size != 1 || plan.batch_size != 1 || overlap_gradient == nullptr) {
+    error = "overlap-gradient export requires one system and a non-NULL output";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t atom_count = static_cast<std::size_t>(basis.total_atoms);
+  const std::size_t matrix_elements = static_cast<std::size_t>(plan.total_matrix_elements);
+  if (atom_count > std::numeric_limits<std::size_t>::max() / 3u ||
+      atom_count * 3u > std::numeric_limits<std::size_t>::max() / matrix_elements) {
+    error = "overlap-gradient dimensions exceed host limits";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t gradient_elements = atom_count * 3u * matrix_elements;
+  std::fill_n(overlap_gradient, gradient_elements, 0.0);
+
+  const std::int64_t atom_begin = basis.atom_offsets[0];
+  const std::int64_t atom_end = basis.atom_offsets[1];
+  const std::int64_t orbital_begin = basis.batch_orbital_offsets[0];
+  const std::size_t orbital_count =
+      static_cast<std::size_t>(basis.batch_orbital_offsets[1] - orbital_begin);
+  auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
+
+  for (std::int64_t ket_atom = atom_begin; ket_atom < atom_end; ++ket_atom) {
+    const std::size_t ket_atom_index = static_cast<std::size_t>(ket_atom);
+    for (std::int64_t bra_atom = atom_begin; bra_atom <= ket_atom; ++bra_atom) {
+      const std::size_t bra_atom_index = static_cast<std::size_t>(bra_atom);
+      if (bra_atom == ket_atom) {
+        /* Every AO on this center translates together; onsite overlap is
+         * invariant and therefore has no explicit nuclear derivative. */
+        continue;
+      }
+      const double vector[3]{
+          positions[ket_atom_index * 3u] - positions[bra_atom_index * 3u],
+          positions[ket_atom_index * 3u + 1u] - positions[bra_atom_index * 3u + 1u],
+          positions[ket_atom_index * 3u + 2u] - positions[bra_atom_index * 3u + 2u]};
+      const std::int64_t ket_shell_begin = basis.atom_shell_offsets[ket_atom_index];
+      const std::int64_t ket_shell_end = basis.atom_shell_offsets[ket_atom_index + 1u];
+      const std::int64_t bra_shell_begin = basis.atom_shell_offsets[bra_atom_index];
+      const std::int64_t bra_shell_end = basis.atom_shell_offsets[bra_atom_index + 1u];
+      for (std::int64_t ket_shell = ket_shell_begin; ket_shell < ket_shell_end; ++ket_shell) {
+        for (std::int64_t bra_shell = bra_shell_begin; bra_shell < bra_shell_end; ++bra_shell) {
+          const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
+          const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
+          compute_shell_pair<>(basis, bra_shell_index, ket_shell_index, vector,
+                               plan.integral_cutoff, true, false, scratch);
+          const std::size_t bra_count = spherical_count(basis.angular_momenta[bra_shell_index]);
+          const std::size_t ket_count = spherical_count(basis.angular_momenta[ket_shell_index]);
+          const std::size_t block_size = bra_count * ket_count;
+          const std::size_t bra_orbital = static_cast<std::size_t>(
+              basis.shell_orbital_offsets[bra_shell_index] - orbital_begin);
+          const std::size_t ket_orbital = static_cast<std::size_t>(
+              basis.shell_orbital_offsets[ket_shell_index] - orbital_begin);
+          for (std::size_t bra_ao = 0; bra_ao < bra_count; ++bra_ao) {
+            for (std::size_t ket_ao = 0; ket_ao < ket_count; ++ket_ao) {
+              const std::size_t block_index = bra_ao * ket_count + ket_ao;
+              const std::size_t forward =
+                  (bra_orbital + bra_ao) * orbital_count + ket_orbital + ket_ao;
+              const std::size_t reverse =
+                  (ket_orbital + ket_ao) * orbital_count + bra_orbital + bra_ao;
+              for (std::size_t axis = 0; axis < 3u; ++axis) {
+                const double derivative =
+                    scratch.spherical_gradient[axis * block_size + block_index];
+                const std::size_t ket_base = (ket_atom_index * 3u + axis) * matrix_elements;
+                const std::size_t bra_base = (bra_atom_index * 3u + axis) * matrix_elements;
+                overlap_gradient[ket_base + forward] += derivative;
+                overlap_gradient[bra_base + forward] -= derivative;
+                overlap_gradient[ket_base + reverse] += derivative;
+                overlap_gradient[bra_base + reverse] -= derivative;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  for (std::size_t element = 0; element < gradient_elements; ++element) {
+    if (!std::isfinite(overlap_gradient[element])) {
+      error = "overlap-gradient evaluation produced NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }

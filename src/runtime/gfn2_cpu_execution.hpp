@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "cpu_dispatch/features.hpp"
+#include "model/gfn2/scc_driver.hpp"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail {
@@ -38,6 +39,11 @@ class Gfn2CpuExecutionCache {
 
   Gfn2CpuExecutionCache(const Gfn2CpuExecutionCache&) = delete;
   Gfn2CpuExecutionCache& operator=(const Gfn2CpuExecutionCache&) = delete;
+
+  /* Install the private external energy SCC callback for subsequently built systems.
+   * This hook is intentionally absent from the released C ABI; local
+   * research bindings can configure it before issuing a compute call. */
+  void set_external_energy_callback(gfn2::ExternalEnergyCallback callback, void* opaque) noexcept;
 
  private:
   struct Impl;

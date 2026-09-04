@@ -101,6 +101,38 @@ xtbloom_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan
                                       const double* positions, double* overlap, void* workspace,
                                       std::size_t workspace_size, std::string& error);
 
+/*
+ * Evaluate cross overlap between two one-system Gaussian bases.  The matrix
+ * is row-major [bra_orbital, ket_orbital] and is intentionally not assumed to
+ * be symmetric.  This private research primitive is used for the native GFN2
+ * AO basis (bra) and the auxiliary projection basis (ket).
+ */
+xtbloom_status_t evaluate_cross_overlap_system_cpu(const BasisPlan& bra_basis,
+                                                   const BasisPlan& ket_basis,
+                                                   const double* bra_positions,
+                                                   const double* ket_positions, double* overlap,
+                                                   void* workspace, std::size_t workspace_size,
+                                                   std::string& error);
+
+/*
+ * Evaluate d(cross-overlap)/dR for co-moving atom centers.  The output is
+ * [derivative_atom, xyz, bra_orbital, ket_orbital].  For a pair of distinct
+ * centers the ket-center derivative is added to the ket atom and its negative
+ * to the bra atom; same-center terms cancel under rigid translation.
+ */
+xtbloom_status_t evaluate_cross_overlap_gradient_system_cpu(
+    const BasisPlan& bra_basis, const BasisPlan& ket_basis, const double* bra_positions,
+    const double* ket_positions, double* overlap_gradient, void* workspace,
+    std::size_t workspace_size, std::string& error);
+
+/* Evaluate the full AO-overlap Cartesian derivative for one cached system.
+ * The output layout is [atom, xyz, nao, nao] in row-major AO order. This
+ * research-only export reuses the same shell-pair recurrence as the reviewed
+ * force path and is consumed by the external energy projection/Pulay callback. */
+xtbloom_status_t evaluate_overlap_gradient_system_cpu(
+    const BasisPlan& basis, const IntegralPlan& plan, const double* positions,
+    double* overlap_gradient, void* workspace, std::size_t workspace_size, std::string& error);
+
 xtbloom_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPlan& plan,
                                         const double* positions, double* dipole, double* quadrupole,
                                         void* workspace, std::size_t workspace_size,

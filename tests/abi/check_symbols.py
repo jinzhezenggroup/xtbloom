@@ -12,11 +12,18 @@ EXPECTED_SYMBOLS = {
     "xtbloom_compute",
     "xtbloom_compute_enqueue",
     "xtbloom_compute_options_init",
+    # Source builds deliberately export the opt-in external-energy extension
+    # even though its separate research header is excluded from installations.
+    # Listing the symbols here prevents accidental export drift without
+    # representing them as members of the installed stable-header contract.
+    "xtbloom_context_copy_external_energy_device_gradients",
     "xtbloom_context_create",
     "xtbloom_context_destroy",
     "xtbloom_context_get_backend",
     "xtbloom_context_get_device_id",
     "xtbloom_context_options_init",
+    "xtbloom_context_set_external_energy_callback",
+    "xtbloom_context_set_external_energy_device_model",
     "xtbloom_get_last_error",
     "xtbloom_plan_compute",
     "xtbloom_plan_compute_enqueue",

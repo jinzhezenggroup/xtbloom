@@ -175,6 +175,8 @@ sdist.exclude = [
   "AGENTS.md",
   "noxfile.py",
   "src/backends/cuda/gfn2_energy_force_execution_test.cuh",
+  "tools/external_energy_callback_smoke.cpp",
+  "tools/external_energy_projection_basis_smoke.cpp",
   "uv.lock",
   "build*/**",
   ".cache/**",

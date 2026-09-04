@@ -3346,6 +3346,40 @@ Gfn2SccIterationBindingDiagnostic validate_gfn2_scc_iteration_binding_cuda(
       !validator.aliases_valid()) {
     return validator.diagnostic();
   }
+  if (plan.external_energy_model.plan_token != 0u) {
+    const bool training_gradient =
+        (plan.external_energy_model.flags & kExternalEnergyDeviceModelTrainingGradient) != 0u;
+    const bool gradient_mismatch =
+        training_gradient ? workspace.external_energy.parameter_gradient == nullptr ||
+                                workspace.external_energy.parameter_gradient_elements !=
+                                    plan.external_energy_model.parameter_elements
+                          : workspace.external_energy.parameter_gradient != nullptr ||
+                                workspace.external_energy.parameter_gradient_elements != 0;
+    if (!validate_external_energy_device_model(plan.external_energy_model) ||
+        plan.external_energy_model.plan_token != plan.plan_token ||
+        input.external_energy.plan_token != plan.plan_token ||
+        input.external_energy.batch_size != plan.topology.batch_size ||
+        input.external_energy.atom_offsets != plan.topology.atom_offsets ||
+        input.external_energy.batch_orbital_offsets != plan.topology.batch_orbital_offsets ||
+        input.external_energy.matrix_offsets != plan.topology.matrix_offsets ||
+        input.external_energy.atomic_numbers != plan.element_identity_projection.atomic_numbers ||
+        input.external_energy.positions == nullptr ||
+        input.external_energy.molecular_charges == nullptr ||
+        input.external_energy.unpaired_electrons == nullptr ||
+        input.external_energy.spin_channels == nullptr ||
+        input.external_energy.overlap == nullptr ||
+        input.external_energy.current_density == nullptr ||
+        input.external_energy.staged_density == nullptr ||
+        workspace.external_energy.plan_token != plan.plan_token ||
+        workspace.external_energy.hamiltonian != workspace.hamiltonian.matrix ||
+        workspace.external_energy.energy != nullptr ||
+        workspace.external_energy.energy_elements != 0 ||
+        workspace.external_energy.energy_accumulator != workspace.components.core_energy ||
+        gradient_mismatch) {
+      validator.fail(BindingError::kInvalidZeroCopyView, BindingField::kWorkspace, 90);
+      return validator.diagnostic();
+    }
+  }
   return {};
 }
 
@@ -3764,6 +3798,14 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     if (!check_cuda(stage_report->stage, hamiltonian_status) || !finish_stage(*stage_report)) {
       return failure;
     }
+    if (plan.external_energy_model.plan_token != 0u) {
+      if (!check_cuda(Gfn2SccStageId::kHamiltonian,
+                      evaluate_external_energy_device_potential_cuda(
+                          plan.external_energy_model, input.external_energy,
+                          workspace.external_energy, workspace.activity.active_mask, stream))) {
+        return failure;
+      }
+    }
     if (segment == Gfn2SccIterationBodySegment::kPreEigensolver) {
       return {};
     }
@@ -4128,6 +4170,19 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                       mutable_device_error(*stage_report), stream)) ||
       !finish_stage(*stage_report)) {
     return failure;
+  }
+  /* The electronic-energy kernel publishes the baseline core energy first.
+   * The external model must add its density-dependent contribution afterwards; placing the
+   * evaluator before that stage would be silently overwritten by the baseline
+   * publication. The contribution is therefore injected on the same stream,
+   * immediately before free-energy composition. */
+  if (plan.external_energy_model.plan_token != 0u) {
+    if (!check_cuda(Gfn2SccStageId::kElectronicEnergy,
+                    evaluate_external_energy_device_energy_cuda(
+                        plan.external_energy_model, input.external_energy,
+                        workspace.external_energy, workspace.activity.active_mask, stream))) {
+      return failure;
+    }
   }
 
   stage_report = report(Gfn2SccStageId::kFreeEnergy);

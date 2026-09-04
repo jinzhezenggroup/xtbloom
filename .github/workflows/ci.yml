@@ -386,6 +386,7 @@ jobs:
           test -f "${openblas}"
           cmake -S . -B build-public -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE=ON \
             -DXTBLOOM_CPU_LINALG_LIBRARY="${openblas}" \
             -DPython3_EXECUTABLE="${PWD}/.venv/bin/python" \
             -DBUILD_SHARED_LIBS=ON \

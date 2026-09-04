@@ -128,6 +128,23 @@ bool checked_multiply_size(std::size_t first, std::size_t second, std::size_t& r
   return true;
 }
 
+bool checked_product_i64(std::int64_t first, std::int64_t second, std::int64_t& result) noexcept {
+  if (first < 0 || second < 0 ||
+      (first != 0 && second > std::numeric_limits<std::int64_t>::max() / first)) {
+    return false;
+  }
+  result = first * second;
+  return true;
+}
+
+bool checked_sum_i64(std::int64_t first, std::int64_t second, std::int64_t& result) noexcept {
+  if (first < 0 || second < 0 || first > std::numeric_limits<std::int64_t>::max() - second) {
+    return false;
+  }
+  result = first + second;
+  return true;
+}
+
 bool align_up(std::size_t value, std::size_t alignment, std::size_t& result) {
   if (alignment == 0u || (alignment & (alignment - 1u)) != 0u) {
     return false;
@@ -2103,6 +2120,65 @@ xtbloom_status_t validate_iteration_bindings(
    * prove the caller's byte extents without touching the pointed-to storage
    * here (the SCC loop reads them through the validated geometry ranges). */
   const std::int64_t total_atoms = data.wavefunction.total_atoms;
+  const std::int64_t total_orbitals = data.wavefunction.total_orbitals;
+  const std::int64_t native_matrix_elements = data.mulliken.matrix_elements();
+  std::int64_t positions_elements = 0;
+  std::int64_t field_dipole_elements = 0;
+  std::int64_t overlap_gradient_elements = 0;
+  if (!checked_product_i64(3, total_atoms, positions_elements) ||
+      !checked_product_i64(3, total_atoms, field_dipole_elements) ||
+      !checked_product_i64(positions_elements, native_matrix_elements, overlap_gradient_elements)) {
+    error = "SCC driver external energy geometry dimensions overflow the supported index range";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const bool positions_invalid = geometry.positions == nullptr ||
+                                 geometry.positions_elements != positions_elements ||
+                                 !aligned(geometry.positions, alignof(double));
+  const bool overlap_gradient_invalid =
+      geometry.external_energy_force_derivatives &&
+      (geometry.overlap_gradient == nullptr ||
+       geometry.overlap_gradient_elements != overlap_gradient_elements ||
+       !aligned(geometry.overlap_gradient, alignof(double)));
+  if (geometry.external_energy_callback != nullptr &&
+      (positions_invalid || overlap_gradient_invalid)) {
+    error = "SCC driver positions are missing or have an invalid extent";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const bool projection_present = geometry.projection_basis != nullptr ||
+                                  geometry.projection_overlap != nullptr ||
+                                  geometry.projection_overlap_elements != 0 ||
+                                  geometry.projection_overlap_gradient != nullptr ||
+                                  geometry.projection_overlap_gradient_elements != 0;
+  if (geometry.external_energy_callback != nullptr) {
+    std::int64_t projection_matrix_elements = 0;
+    std::int64_t projection_gradient_elements = 0;
+    const auto* projection_basis = geometry.projection_basis;
+    const bool projection_dimensions_valid =
+        projection_basis != nullptr &&
+        checked_product_i64(total_orbitals, projection_basis->total_orbitals,
+                            projection_matrix_elements) &&
+        checked_product_i64(positions_elements, projection_matrix_elements,
+                            projection_gradient_elements);
+    if (geometry.projection_basis == nullptr || geometry.projection_basis->batch_size != 1 ||
+        geometry.projection_basis->total_atoms != total_atoms ||
+        geometry.projection_basis->total_orbitals <= 0 || !projection_dimensions_valid ||
+        geometry.projection_overlap == nullptr || geometry.projection_overlap_elements <= 0 ||
+        geometry.projection_overlap_elements != projection_matrix_elements ||
+        (geometry.external_energy_force_derivatives &&
+         (geometry.projection_overlap_gradient == nullptr ||
+          geometry.projection_overlap_gradient_elements <= 0)) ||
+        (geometry.external_energy_force_derivatives &&
+         geometry.projection_overlap_gradient_elements != projection_gradient_elements) ||
+        !aligned(geometry.projection_overlap, alignof(double)) ||
+        (geometry.external_energy_force_derivatives &&
+         !aligned(geometry.projection_overlap_gradient, alignof(double)))) {
+      error = "SCC driver external energy projection cache is missing or malformed";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  } else if (projection_present) {
+    error = "SCC driver geometry supplies external energy projection data without a callback";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   const bool field_atomic_present =
       geometry.field_atomic_potential != nullptr || geometry.field_atomic_potential_elements != 0;
   const bool field_dipole_present =
@@ -2112,7 +2188,7 @@ xtbloom_status_t validate_iteration_bindings(
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (field_atomic_present && (geometry.field_atomic_potential_elements != total_atoms ||
-                               geometry.field_dipole_potential_elements != 3 * total_atoms ||
+                               geometry.field_dipole_potential_elements != field_dipole_elements ||
                                !aligned(geometry.field_atomic_potential, alignof(double)) ||
                                !aligned(geometry.field_dipole_potential, alignof(double)))) {
     error = "SCC driver field potentials have invalid extents or alignment";
@@ -2192,6 +2268,10 @@ xtbloom_status_t validate_iteration_bindings(
   std::size_t native_multipole_gradient_bytes = 0u;
   std::size_t native_multipole_strain_bytes = 0u;
   std::size_t native_multipole_coordination_bytes = 0u;
+  std::size_t positions_bytes = 0u;
+  std::size_t overlap_gradient_bytes = 0u;
+  std::size_t projection_overlap_bytes = 0u;
+  std::size_t projection_overlap_gradient_bytes = 0u;
   if (!bytes_for(data.mulliken.matrix_elements(), sizeof(double), matrix_bytes) ||
       !checked_multiply_size(matrix_bytes, 3u, dipole_integral_bytes) ||
       !checked_multiply_size(matrix_bytes, 6u, quadrupole_integral_bytes) ||
@@ -2241,11 +2321,16 @@ xtbloom_status_t validate_iteration_bindings(
       !bytes_for(geometry.native_multipole_strain_elements, sizeof(double),
                  native_multipole_strain_bytes) ||
       !bytes_for(geometry.native_multipole_coordination_elements, sizeof(double),
-                 native_multipole_coordination_bytes)) {
+                 native_multipole_coordination_bytes) ||
+      !bytes_for(geometry.positions_elements, sizeof(double), positions_bytes) ||
+      !bytes_for(geometry.overlap_gradient_elements, sizeof(double), overlap_gradient_bytes) ||
+      !bytes_for(geometry.projection_overlap_elements, sizeof(double), projection_overlap_bytes) ||
+      !bytes_for(geometry.projection_overlap_gradient_elements, sizeof(double),
+                 projection_overlap_gradient_bytes)) {
     error = "SCC driver geometry storage extents are not representable";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  std::array<AddressRange, 31> geometry_ranges{};
+  std::array<AddressRange, 35> geometry_ranges{};
   if (!make_range(geometry.h0, matrix_bytes, geometry_ranges[0]) ||
       !make_range(geometry.integrals.overlap, matrix_bytes, geometry_ranges[1]) ||
       !make_range(geometry.integrals.dipole, dipole_integral_bytes, geometry_ranges[2]) ||
@@ -2296,7 +2381,12 @@ xtbloom_status_t validate_iteration_bindings(
       !make_range(geometry.native_multipole_strain_derivatives, native_multipole_strain_bytes,
                   geometry_ranges[29]) ||
       !make_range(geometry.native_multipole_coordination_adjoint,
-                  native_multipole_coordination_bytes, geometry_ranges[30])) {
+                  native_multipole_coordination_bytes, geometry_ranges[30]) ||
+      !make_range(geometry.positions, positions_bytes, geometry_ranges[31]) ||
+      !make_range(geometry.overlap_gradient, overlap_gradient_bytes, geometry_ranges[32]) ||
+      !make_range(geometry.projection_overlap, projection_overlap_bytes, geometry_ranges[33]) ||
+      !make_range(geometry.projection_overlap_gradient, projection_overlap_gradient_bytes,
+                  geometry_ranges[34])) {
     error = "SCC driver geometry buffers have invalid address ranges";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -2328,6 +2418,212 @@ bool add_finite(double contribution, double& target) {
   }
   target = updated;
   return true;
+}
+
+xtbloom_status_t invoke_external_energy(const SccDriverPlanData& data,
+                                        const SccDriverGeometryView& geometry, std::size_t system,
+                                        const SccDriverWorkspace& workspace,
+                                        ExternalEnergyPhase phase, double* hamiltonian,
+                                        std::int64_t hamiltonian_elements, double& energy,
+                                        std::string& error) {
+  if (geometry.external_energy_callback == nullptr) {
+    energy = 0.0;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  ExternalEnergyInput input;
+  input.system = static_cast<std::int64_t>(system);
+  input.phase = phase;
+  const WavefunctionLayout& layout = data.wavefunction;
+  const std::int64_t atom_begin = layout.atom_offsets[system];
+  const std::int64_t atom_end = layout.atom_offsets[system + 1u];
+  const std::int64_t orbital_begin = layout.batch_orbital_offsets[system];
+  const std::int64_t orbital_end = layout.batch_orbital_offsets[system + 1u];
+  const auto& orbital_to_atom = data.mulliken.orbital_to_atom();
+  const auto& shell_offsets = data.mulliken.shell_orbital_offsets();
+  const auto& shell_to_atom = data.mulliken.shell_to_atom();
+  const auto& principal_quantum_numbers = data.mulliken.principal_quantum_numbers();
+  const auto& angular_momenta = data.mulliken.angular_momenta();
+  const std::int64_t shell_begin = data.mulliken.batch_shell_offsets()[system];
+  const std::int64_t shell_end = data.mulliken.batch_shell_offsets()[system + 1u];
+  if (atom_begin < 0 || atom_end < atom_begin || orbital_begin < 0 || orbital_end < orbital_begin ||
+      static_cast<std::size_t>(orbital_end) > orbital_to_atom.size() || shell_begin < 0 ||
+      shell_end < shell_begin || static_cast<std::size_t>(shell_end) >= shell_offsets.size() ||
+      static_cast<std::size_t>(shell_end) > shell_to_atom.size() ||
+      static_cast<std::size_t>(shell_end) > principal_quantum_numbers.size() ||
+      static_cast<std::size_t>(shell_end) > angular_momenta.size() ||
+      geometry.positions == nullptr || geometry.positions_elements != 3 * layout.total_atoms) {
+    error = "external energy SCC callback metadata is unavailable or malformed";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  input.atomic_numbers = layout.atomic_numbers.data() + atom_begin;
+  input.atomic_number_elements = atom_end - atom_begin;
+  input.positions = geometry.positions + 3 * atom_begin;
+  input.position_elements = 3 * (atom_end - atom_begin);
+  input.orbital_to_atom = orbital_to_atom.data() + orbital_begin;
+  input.orbital_to_atom_elements = orbital_end - orbital_begin;
+  input.atom_index_begin = atom_begin;
+  input.overlap_gradient = geometry.overlap_gradient;
+  input.overlap_gradient_elements = geometry.overlap_gradient_elements;
+  input.projection_basis = geometry.projection_basis;
+  input.projection_overlap = geometry.projection_overlap;
+  input.projection_overlap_elements = geometry.projection_overlap_elements;
+  input.projection_overlap_gradient = geometry.projection_overlap_gradient;
+  input.projection_overlap_gradient_elements = geometry.projection_overlap_gradient_elements;
+  input.shell_orbital_offsets = shell_offsets.data() + shell_begin;
+  input.shell_orbital_offset_elements = shell_end - shell_begin + 1;
+  input.shell_to_atom = shell_to_atom.data() + shell_begin;
+  input.shell_to_atom_elements = shell_end - shell_begin;
+  input.principal_quantum_numbers = principal_quantum_numbers.data() + shell_begin;
+  input.principal_quantum_number_elements = shell_end - shell_begin;
+  input.angular_momenta = angular_momenta.data() + shell_begin;
+  input.angular_momentum_elements = shell_end - shell_begin;
+  input.shell_index_begin = shell_begin;
+  input.shell_orbital_index_begin = orbital_begin;
+  input.molecular_charge = layout.molecular_charges[system];
+  input.unpaired_electrons = layout.unpaired_electrons[system];
+  input.wavefunction_layout = &data.wavefunction;
+  input.wavefunction = &workspace.staged_wavefunction;
+  input.integrals = &geometry.integrals;
+  input.mulliken = &data.mulliken;
+  ExternalEnergyOutput output;
+  output.hamiltonian = hamiltonian;
+  output.hamiltonian_elements = hamiltonian_elements;
+  output.energy = 0.0;
+  const xtbloom_status_t status =
+      geometry.external_energy_callback(geometry.external_energy_opaque, input, output, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  if (!std::isfinite(output.energy)) {
+    error = "external-energy callback returned a non-finite energy";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  energy = output.energy;
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t invoke_external_energy_force_callback_impl(
+    const WavefunctionLayout& layout, const MullikenPlan& mulliken,
+    const SccDriverGeometryView& geometry, const WavefunctionView& wavefunction, std::size_t system,
+    double* force, std::int64_t force_elements, std::string& error) {
+  if (geometry.external_energy_callback == nullptr) {
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (system >= static_cast<std::size_t>(layout.batch_size) || force == nullptr) {
+    error = "external energy force callback received an invalid system or force sink";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!geometry.external_energy_force_derivatives || geometry.overlap_gradient == nullptr ||
+      geometry.projection_overlap_gradient == nullptr) {
+    error = "external energy force callback requires geometry/projection derivative exports";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (system + 1u >= layout.atom_offsets.size() ||
+      system + 1u >= layout.batch_orbital_offsets.size() ||
+      system + 1u >= layout.batch_shell_offsets.size() || system >= layout.spin_channels.size() ||
+      system + 1u >= layout.density.system_offsets.size() ||
+      system + 1u >= mulliken.batch_shell_offsets().size()) {
+    error = "external energy force callback partitions are incomplete";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::int64_t atom_begin = layout.atom_offsets[system];
+  const std::int64_t atom_end = layout.atom_offsets[system + 1u];
+  const std::int64_t orbital_begin = layout.batch_orbital_offsets[system];
+  const std::int64_t orbital_end = layout.batch_orbital_offsets[system + 1u];
+  const std::int64_t shell_begin = mulliken.batch_shell_offsets()[system];
+  const std::int64_t shell_end = mulliken.batch_shell_offsets()[system + 1u];
+  const std::int64_t atom_count = atom_end - atom_begin;
+  const std::int64_t nao = orbital_end - orbital_begin;
+  const std::int64_t shell_count = shell_end - shell_begin;
+  std::int64_t force_extent = 0;
+  std::int64_t positions_extent = 0;
+  std::int64_t matrix_extent = 0;
+  std::int64_t density_extent = 0;
+  if (!checked_product_i64(3, atom_count, force_extent) ||
+      !checked_product_i64(3, layout.total_atoms, positions_extent) ||
+      !checked_product_i64(nao, nao, matrix_extent) ||
+      !checked_product_i64(matrix_extent, layout.spin_channels[system], density_extent) ||
+      atom_count <= 0 || nao <= 0 || shell_count <= 0 || force_elements != force_extent ||
+      geometry.positions == nullptr || geometry.positions_elements != positions_extent ||
+      wavefunction.density == nullptr) {
+    error = "external energy force callback metadata is unavailable or malformed";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  const auto& orbital_to_atom = mulliken.orbital_to_atom();
+  const auto& shell_offsets = mulliken.shell_orbital_offsets();
+  const auto& shell_to_atom = mulliken.shell_to_atom();
+  const auto& principal_quantum_numbers = mulliken.principal_quantum_numbers();
+  const auto& angular_momenta = mulliken.angular_momenta();
+  const auto& matrix_offsets = mulliken.matrix_offsets();
+  const auto& density_offsets = layout.density.system_offsets;
+  if (static_cast<std::size_t>(orbital_end) > orbital_to_atom.size() ||
+      static_cast<std::size_t>(shell_end) >= shell_offsets.size() ||
+      static_cast<std::size_t>(shell_end) > shell_to_atom.size() ||
+      static_cast<std::size_t>(shell_end) > principal_quantum_numbers.size() ||
+      static_cast<std::size_t>(shell_end) > angular_momenta.size() ||
+      system + 1u >= matrix_offsets.size() || system + 1u >= density_offsets.size()) {
+    error = "external energy force callback plan metadata is inconsistent";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::int64_t matrix_elements = matrix_offsets[system + 1u] - matrix_offsets[system];
+  const std::int64_t density_elements = density_offsets[system + 1u] - density_offsets[system];
+  if (matrix_elements != matrix_extent || density_elements != density_extent) {
+    error = "external energy force callback density or matrix extent is inconsistent";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  ExternalEnergyInput input;
+  input.system = static_cast<std::int64_t>(system);
+  input.phase = ExternalEnergyPhase::kForce;
+  input.atomic_numbers = layout.atomic_numbers.data() + atom_begin;
+  input.atomic_number_elements = atom_count;
+  input.positions = geometry.positions + 3 * atom_begin;
+  input.position_elements = 3 * atom_count;
+  input.orbital_to_atom = orbital_to_atom.data() + orbital_begin;
+  input.orbital_to_atom_elements = nao;
+  input.atom_index_begin = atom_begin;
+  input.overlap_gradient = geometry.overlap_gradient;
+  input.overlap_gradient_elements = geometry.overlap_gradient_elements;
+  input.projection_basis = geometry.projection_basis;
+  input.projection_overlap = geometry.projection_overlap;
+  input.projection_overlap_elements = geometry.projection_overlap_elements;
+  input.projection_overlap_gradient = geometry.projection_overlap_gradient;
+  input.projection_overlap_gradient_elements = geometry.projection_overlap_gradient_elements;
+  input.shell_orbital_offsets = shell_offsets.data() + shell_begin;
+  input.shell_orbital_offset_elements = shell_count + 1;
+  input.shell_to_atom = shell_to_atom.data() + shell_begin;
+  input.shell_to_atom_elements = shell_count;
+  input.principal_quantum_numbers = principal_quantum_numbers.data() + shell_begin;
+  input.principal_quantum_number_elements = shell_count;
+  input.angular_momenta = angular_momenta.data() + shell_begin;
+  input.angular_momentum_elements = shell_count;
+  input.shell_index_begin = shell_begin;
+  input.shell_orbital_index_begin = orbital_begin;
+  input.molecular_charge = layout.molecular_charges[system];
+  input.unpaired_electrons = layout.unpaired_electrons[system];
+  input.wavefunction_layout = &layout;
+  input.wavefunction = &wavefunction;
+  input.integrals = &geometry.integrals;
+  input.mulliken = &mulliken;
+
+  ExternalEnergyOutput output;
+  output.force = force;
+  output.force_elements = force_elements;
+  const xtbloom_status_t status =
+      geometry.external_energy_callback(geometry.external_energy_opaque, input, output, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  for (std::int64_t element = 0; element < force_elements; ++element) {
+    if (!std::isfinite(force[element])) {
+      error = "external energy force callback returned a non-finite force";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
@@ -2530,11 +2826,19 @@ xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
     periodic_energy = workspace.periodic_embedding_energies[system];
   }
 
+  double external_energy_energy = 0.0;
+  status = invoke_external_energy(data, geometry, system, workspace, ExternalEnergyPhase::kEnergy,
+                                  nullptr, 0, external_energy_energy, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+
   double internal_energy = core_energy;
   if (!add_finite(es2_energy, internal_energy) || !add_finite(es3_energy, internal_energy) ||
       !add_finite(aes2_energy, internal_energy) || !add_finite(spin_energy, internal_energy) ||
       !add_finite(d4_energy, internal_energy) || !add_finite(explicit_pc_energy, internal_energy) ||
-      !add_finite(field_energy, internal_energy) || !add_finite(periodic_energy, internal_energy)) {
+      !add_finite(field_energy, internal_energy) || !add_finite(periodic_energy, internal_energy) ||
+      !add_finite(external_energy_energy, internal_energy)) {
     error = "SCC driver complete internal energy overflowed";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
@@ -2955,6 +3259,22 @@ xtbloom_status_t prepare_system_potentials_and_hamiltonian(
       }
     }
   }
+
+  /* The external-energy callback receives the staged density and the complete
+   * baseline Hamiltonian only after all native xTBloom potentials have been
+   * assembled. It adds channel-specific AO potentials in place; stock builds
+   * leave the hook null and therefore retain byte-for-byte SCC behavior. */
+  if (geometry.external_energy_callback != nullptr) {
+    const std::int64_t contribution_elements =
+        matrix_elements * static_cast<std::int64_t>(layout.spin_channels[system]);
+    double unused_energy = 0.0;
+    status = invoke_external_energy(
+        data, geometry, system, workspace, ExternalEnergyPhase::kPotential,
+        workspace.hamiltonian + hamiltonian_base, contribution_elements, unused_energy, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -3035,5 +3355,13 @@ xtbloom_status_t rebuild_mixed_atomic_charges(const SccDriverPlanData& data, std
 }
 
 }  // namespace
+
+xtbloom_status_t invoke_external_energy_force_callback(
+    const WavefunctionLayout& layout, const MullikenPlan& mulliken,
+    const SccDriverGeometryView& geometry, const WavefunctionView& wavefunction, std::size_t system,
+    double* force, std::int64_t force_elements, std::string& error) {
+  return invoke_external_energy_force_callback_impl(layout, mulliken, geometry, wavefunction,
+                                                    system, force, force_elements, error);
+}
 
 }  // namespace xtbloom::detail::gfn2

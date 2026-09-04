@@ -61,6 +61,8 @@ class MullikenPlan {
   [[nodiscard]] const std::vector<std::int64_t>& matrix_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& shell_orbital_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& shell_to_atom() const noexcept;
+  [[nodiscard]] const std::vector<std::uint8_t>& principal_quantum_numbers() const noexcept;
+  [[nodiscard]] const std::vector<std::uint8_t>& angular_momenta() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& orbital_to_shell() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& orbital_to_atom() const noexcept;
   [[nodiscard]] const std::vector<std::int32_t>& spin_channels() const noexcept;
