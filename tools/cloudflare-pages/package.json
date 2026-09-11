@@ -7,6 +7,6 @@
   "dependencies": {
     "@cloudflare/workerd-linux-64": "1.20260811.1",
     "@esbuild/linux-x64": "0.28.1",
-    "wrangler": "4.123.0"
+    "wrangler": "4.131.0"
   }
 }
