@@ -37,9 +37,8 @@ enum TopologyValidationRequirement : std::uint32_t {
   kCellMatricesNeedStaging = 1u << 10,
   kPeriodicAxesNeedStaging = 1u << 11,
   kTopologyMetadataStagingMask = kAtomOffsetsNeedStaging | kAtomicNumbersNeedStaging |
-                                 kMolecularChargesNeedStaging | kUnpairedElectronsNeedStaging |
-                                 kPointChargeOffsetsNeedStaging |
-                                 kChargeResponseOffsetsNeedStaging | kSpinChannelsNeedStaging,
+      kMolecularChargesNeedStaging | kUnpairedElectronsNeedStaging |
+      kPointChargeOffsetsNeedStaging | kChargeResponseOffsetsNeedStaging | kSpinChannelsNeedStaging,
   kAllTopologyValidationPending = kTopologyMetadataStagingMask | kChargeResponseShapeNeedsStaging,
 };
 
