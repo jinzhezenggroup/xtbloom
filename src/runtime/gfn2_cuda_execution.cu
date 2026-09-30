@@ -2066,6 +2066,19 @@ __device__ bool fixed_topology_value_differs(const T* actual, const T* expected,
   return actual != nullptr && index < elements && actual[index] != expected[index];
 }
 
+__device__ bool fixed_spin_channel_differs(const std::int32_t* actual,
+                                           const std::int32_t* expected,
+                                           const std::int32_t* expected_unpaired,
+                                           std::int64_t index,
+                                           std::int64_t elements) noexcept {
+  if (actual == nullptr || index >= elements) return false;
+  std::int32_t channels = actual[index];
+  if (channels == 0) {
+    channels = expected_unpaired[index] == 0 ? 1 : 2;
+  }
+  return channels != expected[index];
+}
+
 __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBinding binding) {
   const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const std::int64_t stride = static_cast<std::int64_t>(gridDim.x) * blockDim.x;
@@ -2087,8 +2100,9 @@ __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBindi
         fixed_topology_value_differs(binding.unpaired_electrons,
                                      binding.expected_unpaired_electrons, element,
                                      binding.batch_elements) ||
-        fixed_topology_value_differs(binding.spin_channels, binding.expected_spin_channels, element,
-                                     binding.batch_elements) ||
+        fixed_spin_channel_differs(binding.spin_channels, binding.expected_spin_channels,
+                                   binding.expected_unpaired_electrons, element,
+                                   binding.batch_elements) ||
         fixed_topology_value_differs(binding.point_offsets, binding.expected_point_offsets, element,
                                      binding.point_offset_elements) ||
         fixed_topology_value_differs(binding.response_offsets, binding.expected_response_offsets,
@@ -9411,9 +9425,14 @@ struct Gfn2CudaExecutionCache::Impl {
         batch.struct_size >= XTBLOOM_BATCH_V2_SIZE &&
         (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
     if (spin_supplied) {
-      if (!validate_or_bind_fixed_topology_field("spin_channels", batch.spin_channels,
-                                                 key.spin_channels, state.expected_spin_channels,
-                                                 binding.spin_channels, error)) {
+      if (batch.spin_channels.memory_space == XTBLOOM_MEMORY_HOST) {
+        if (!spin_channel_buffer_equals(batch, key.spin_channels, key.unpaired_electrons)) {
+          error = "spin_channels does not match the fixed CUDA plan topology";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+      } else if (!validate_or_bind_fixed_topology_field(
+                     "spin_channels", batch.spin_channels, key.spin_channels,
+                     state.expected_spin_channels, binding.spin_channels, error)) {
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     } else if (!std::all_of(key.spin_channels.begin(), key.spin_channels.end(),
