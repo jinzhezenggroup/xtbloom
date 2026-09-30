@@ -156,14 +156,15 @@ def test_unrestricted_system_with_spin_channels() -> None:
     assert result.energies == pytest.approx([reference.energy], rel=1.0e-12)
 
 
-def test_default_spin_channels_is_restricted() -> None:
-    """Without spin_channels, the batch defaults to restricted orbitals."""
-    water = _water()
-    packed = _pack_single([water])
+def test_default_spin_channels_follow_unpaired_electrons() -> None:
+    """Omitted spin channels select restricted/unrestricted per system."""
+    structures = [_structure("ketene"), _structure("oh_radical")]
+    packed = _pack_single(structures)
     del packed["spin_channels"]
     result = ArrayBatch(**packed, backend="cpu").compute()
-    reference = water.singlepoint()
-    assert result.energies == pytest.approx([reference.energy], rel=1.0e-12)
+    reference = BatchCalculator(structures, backend="cpu").compute()
+    assert result.energies == pytest.approx(reference.energies, rel=1.0e-12)
+    assert result.forces == pytest.approx(reference.forces, abs=1.0e-11)
 
 
 def test_periodic_cell_and_strain_outlet() -> None:
