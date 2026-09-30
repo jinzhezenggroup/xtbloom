@@ -227,8 +227,9 @@ for the full contract.
 ## Charge, spin, and embedding
 
 Use either `multiplicity` or `uhf = multiplicity - 1` for open-shell
-calculations. Open-shell Python calculations default to two unrestricted spin
-channels; `spin_channels=1` requests the restricted open-shell form.
+calculations. All Python entry points default open-shell systems to two
+unrestricted spin channels and closed-shell systems to one restricted channel;
+`spin_channels=1` explicitly requests the restricted open-shell form.
 
 `PointCharge` inputs participate in every SCC iteration, and xTBloom can
 return forces on both QM atoms and point charges. `ChargeResponse(shifts=b,
