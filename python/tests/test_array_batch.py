@@ -156,13 +156,14 @@ def test_unrestricted_system_with_spin_channels() -> None:
     assert result.energies == pytest.approx([reference.energy], rel=1.0e-12)
 
 
-def test_default_spin_channels_follow_unpaired_electrons() -> None:
+@pytest.mark.parametrize("method", ["GFN1-xTB", "GFN2-xTB"])
+def test_default_spin_channels_follow_unpaired_electrons(method: str) -> None:
     """Omitted spin channels select restricted/unrestricted per system."""
     structures = [_structure("ketene"), _structure("oh_radical")]
     packed = _pack_single(structures)
     del packed["spin_channels"]
-    result = ArrayBatch(**packed, backend="cpu").compute()
-    reference = BatchCalculator(structures, backend="cpu").compute()
+    result = ArrayBatch(**packed, method=method, backend="cpu").compute()
+    reference = BatchCalculator(structures, method=method, backend="cpu").compute()
     assert result.energies == pytest.approx(reference.energies, rel=1.0e-12)
     assert result.forces == pytest.approx(reference.forces, abs=1.0e-11)
 
