@@ -58,8 +58,9 @@ For `batch_size = B` and `total_atoms = N`:
 - `positions`: `3N` `double` entries.
 - `molecular_charges`: `B` `double` entries.
 - `unpaired_electrons`: `B` `int32_t` entries.
-- optional `spin_channels`: `B` `int32_t` entries, each one for restricted or
-  two for unrestricted; absence preserves the restricted default.
+- optional `spin_channels`: `B` `int32_t` entries: zero requests automatic
+  selection from the matching `unpaired_electrons` value, one is restricted,
+  and two is unrestricted. Absence preserves the historical restricted default.
 
 Optional point-charge, charge-response, and interaction fields have additional
 all-or-nothing and shape rules. Use the dedicated QM/MM skill for those fields.
