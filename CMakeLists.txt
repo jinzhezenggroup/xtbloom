@@ -3674,6 +3674,15 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.scc_iteration_deterministic_debug
       COMMAND xtbloom_cuda_scc_iteration_production_test --deterministic-debug
     )
+    if(XTBLOOM_CPU_LINALG_RUNTIME)
+      add_test(NAME xtbloom.cuda.scc_spin_frozen_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-frozen-replay
+      )
+      set_tests_properties(xtbloom.cuda.scc_spin_frozen_replay PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1;MKL_NUM_THREADS=1"
+        SKIP_RETURN_CODE 77
+      )
+    endif()
 
     # Focused #130 benchmark. It reuses the production SCC fixture but runs a
     # one-remaining-iteration state so the conditional WHILE body count and

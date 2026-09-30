@@ -874,7 +874,8 @@ struct ProductionFixture {
               bool mixed_spin_batch = false, const std::vector<SmallSystemKind>& systems = {},
               double electronic_temperature = 0.0, CouplingSelection coupling = {},
               std::uint64_t maximum_iterations = 8u, double residual_tolerance = 1.0e-10,
-              double energy_tolerance = 1.0e-8, bool deterministic_debug = false) {
+              double energy_tolerance = 1.0e-8, bool deterministic_debug = false,
+              const HostSccCaseOptions* custom_options = nullptr) {
     if (batch_size <= 0) {
       return false;
     }
@@ -926,6 +927,9 @@ struct ProductionFixture {
     options.enable_d4 = optional_components || coupling.d4;
     options.enable_explicit_point_charges = optional_components || coupling.point_charges;
     options.enable_periodic_embedding = optional_components || coupling.periodic;
+    if (custom_options != nullptr) {
+      options = *custom_options;
+    }
 
     std::string error;
     if (HostSccCase::create(options, host, error) != XTBLOOM_STATUS_SUCCESS) {
@@ -1082,7 +1086,8 @@ struct ProductionFixture {
     plan_seed.overlap_cache = eigensolver_binding.cache;
     plan_seed.eigensolver_options = eigensolver_binding.options;
 
-    const bool spin_aware_initialization = unrestricted_spin || mixed_spin_batch;
+    const bool spin_aware_initialization =
+        topology_owner.host_wavefunction_layout().total_spin_channels != host.batch_size();
     const Gfn2SccIterationHostInitialization host_initialization =
         spin_aware_initialization
             ? fresh_initialization(topology_owner.host_wavefunction_layout(),
@@ -3858,16 +3863,237 @@ int test_loop_rejects_inconsistent_plan() {
 
 }  // namespace
 
+/* Keep the model, temperature, spin excess, and convergence gates fixed in
+ * every diagnostic. Only the initial seed or the replayed numerical state
+ * changes; none of these paths is part of production inference. */
+HostSccCaseOptions spin_branch_options() {
+  HostSccCaseOptions options;
+  options.systems = {SmallSystemKind::kYttriumSpinComplex};
+  options.molecular_charges = {3.0};
+  options.unpaired_electrons = {1};
+  options.spin_channels = {2};
+  options.mixer_history = 8;
+  options.maximum_iterations = 500;
+  options.residual_tolerance = 1e-8;
+  options.energy_tolerance = 1e-10;
+  options.electronic_temperature = 300.0 * 3.166808578545117e-6;
+  options.enable_d4 = true;
+  options.geometry_generation = kGeometryGeneration;
+  options.use_production_linalg = true;
+  return options;
+}
+
+/* Replay the CPU pre-iteration state, not just its shell charges. Copying only
+ * population or mixer.current_inputs would leave an independently evolved
+ * Broyden history and terminal mask, and would not isolate one SCC transition.
+ * These host transfers intentionally live in test-only diagnostics. */
+int upload_spin_replay_state(const ProductionFixture& fixture) {
+  const auto& host = fixture.host;
+  const auto& layout = host.wavefunction_layout();
+  const auto& state = fixture.binding.state;
+  const auto& mixer = host.mixer_state();
+  const auto& driver = host.driver_state();
+  const auto stream = fixture.handles.stream();
+  const auto upload = [stream](auto* destination, const auto* source, std::int64_t count) {
+    return cudaMemcpyAsync(destination, source, static_cast<std::size_t>(count) * sizeof(*source),
+                           cudaMemcpyHostToDevice, stream) == cudaSuccess;
+  };
+  CHECK(upload(state.scc.current_inputs.shell_charges, host.wavefunction().qsh,
+               layout.qsh.element_count));
+  CHECK(upload(state.scc.current_inputs.atomic_dipoles, host.wavefunction().dipole,
+               layout.dipole.element_count));
+  CHECK(upload(state.scc.current_inputs.atomic_quadrupoles, host.wavefunction().quadrupole,
+               layout.quadrupole.element_count));
+  const auto vector_elements = state.mixer.total_vector_elements;
+  CHECK(upload(state.mixer.current_inputs, mixer.current_inputs, vector_elements));
+  CHECK(upload(state.mixer.previous_inputs, mixer.previous_inputs, vector_elements));
+  CHECK(upload(state.mixer.previous_residuals, mixer.previous_residuals, vector_elements));
+  CHECK(upload(state.mixer.df_history, mixer.df_history, state.mixer.history_elements));
+  CHECK(upload(state.mixer.u_history, mixer.u_history, state.mixer.history_elements));
+  CHECK(upload(state.mixer.omega, mixer.omega, state.mixer.omega_elements));
+  CHECK(upload(state.mixer.residual_rms, mixer.residual_rms, 1));
+  CHECK(upload(state.mixer.residual_maximum, mixer.residual_maximum, 1));
+  CHECK(upload(state.mixer.iterations, mixer.iterations, 1));
+  CHECK(upload(state.mixer.restart_counts, mixer.restart_counts, 1));
+  CHECK(upload(state.mixer.system_statuses, mixer.system_statuses, 1));
+  CHECK(upload(state.mixer.initialized, mixer.initialized, 1));
+  CHECK(upload(state.mixer.residual_converged, mixer.converged, 1));
+  CHECK(upload(state.scc.free_energies, driver.free_energies, 1));
+  CHECK(upload(state.scc.previous_free_energies, driver.previous_free_energies, 1));
+  CHECK(upload(state.scc.free_energy_changes, driver.free_energy_changes, 1));
+  CHECK(upload(state.scc.residual_rms, mixer.residual_rms, 1));
+  CHECK(upload(state.scc.iterations, driver.iterations, 1));
+  CHECK(upload(state.scc.system_statuses, driver.system_statuses, 1));
+  CHECK(upload(state.scc.converged, driver.converged, 1));
+  return 0;
+}
+
+/* Independent trajectories report branch sensitivity; frozen replay asserts
+ * fixed-state arithmetic parity. A replay pass is deliberately not a claim
+ * that the two cold starts reach the same stationary spin solution. */
+int spin_diagnostic_probe(bool frozen) {
+  const auto options = spin_branch_options();
+  ProductionFixture fixture;
+  CHECK(fixture.create(false, 1, true, false, {}, 0.0, {}, 8u, 1e-10, 1e-8, false, &options));
+  std::string error;
+  const auto& state = fixture.binding.state;
+  const auto stream = fixture.handles.stream();
+  constexpr std::array<const char*, 12> kFields{"H",
+                                                "eval",
+                                                "occ",
+                                                "raw_q",
+                                                "mixed",
+                                                "energy",
+                                                "spin_energy",
+                                                "raw_dipole",
+                                                "raw_quadrupole",
+                                                "density",
+                                                "weighted_density",
+                                                "raw_atomic_charge"};
+  constexpr std::array<double, 12> kTolerances{1e-12, 1e-12, 1e-10, 1e-10, 3e-9,  1e-10,
+                                               1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10};
+  std::array<double, 12> maximum_differences{};
+  const auto compare = [&](std::size_t field, const double* gpu, const double* cpu,
+                           std::int64_t count) {
+    std::vector<double> values;
+    if (!download(gpu, count, values, stream) || cudaStreamSynchronize(stream) != cudaSuccess) {
+      return false;
+    }
+    double difference = 0.0;
+    std::int64_t worst = 0;
+    for (std::int64_t index = 0; index < count; ++index) {
+      const auto offset = static_cast<std::size_t>(index);
+      if (!std::isfinite(values[offset]) || !std::isfinite(cpu[offset])) return false;
+      if (std::abs(values[offset] - cpu[offset]) > difference) {
+        difference = std::abs(values[offset] - cpu[offset]);
+        worst = index;
+      }
+    }
+    maximum_differences[field] = std::max(maximum_differences[field], difference);
+    if (!frozen || difference > kTolerances[field]) {
+      std::printf(" %s=%.17g[%lld](%.17g,%.17g)", kFields[field], difference,
+                  static_cast<long long>(worst), values[static_cast<std::size_t>(worst)],
+                  cpu[worst]);
+    }
+    return !frozen || difference <= kTolerances[field];
+  };
+  std::vector<std::uint8_t> cuda_converged;
+  std::vector<std::uint64_t> cuda_iterations;
+  std::vector<xtbloom_status_t> cuda_statuses;
+  for (std::uint64_t iteration = 0; iteration < options.maximum_iterations; ++iteration) {
+    if (frozen) CHECK(upload_spin_replay_state(fixture) == 0);
+    CHECK(launch_gfn2_scc_iteration_cuda(fixture.binding, stream).success());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    const auto status = fixture.host.run_one_iteration(error);
+    CHECK(status == XTBLOOM_STATUS_SUCCESS || status == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
+    if (!frozen) {
+      std::printf("ITER %llu cpu_energy=%.17g", static_cast<unsigned long long>(iteration + 1),
+                  fixture.host.driver_state().free_energies[0]);
+    }
+    CHECK(compare(0, fixture.binding.workspace.hamiltonian.matrix,
+                  fixture.host.driver_workspace().hamiltonian,
+                  fixture.host.wavefunction_layout().density.element_count));
+    CHECK(compare(1, state.eigenpairs.eigenvalues, fixture.host.wavefunction().eigenvalues,
+                  state.eigenpairs.eigenvalue_elements));
+    CHECK(compare(2, state.occupations.occupations, fixture.host.wavefunction().occupations,
+                  state.occupations.occupation_elements));
+    CHECK(compare(3, fixture.binding.workspace.staged_raw_population.qsh,
+                  fixture.host.driver_workspace().raw_qsh, state.raw_population.qsh_elements));
+    CHECK(compare(4, state.mixer.current_inputs, fixture.host.mixer_state().current_inputs,
+                  state.mixer.total_vector_elements));
+    CHECK(compare(5, state.free_energy.free_energy, fixture.host.driver_state().free_energies, 1));
+    CHECK(compare(6, state.spin_energies, fixture.host.driver_state().spin_energies, 1));
+    CHECK(compare(7, fixture.binding.workspace.staged_raw_population.dipole,
+                  fixture.host.driver_workspace().raw_dipoles,
+                  state.raw_population.dipole_elements));
+    CHECK(compare(8, fixture.binding.workspace.staged_raw_population.quadrupole,
+                  fixture.host.driver_workspace().raw_quadrupoles,
+                  state.raw_population.quadrupole_elements));
+    CHECK(compare(9, state.density.density, fixture.host.wavefunction().density,
+                  state.density.density_elements));
+    CHECK(compare(10, state.density.energy_weighted_density,
+                  fixture.host.wavefunction().energy_weighted_density,
+                  state.density.weighted_density_elements));
+    CHECK(compare(11, fixture.binding.workspace.staged_raw_population.qat,
+                  fixture.host.driver_workspace().raw_qat, state.raw_population.qat_elements));
+    CHECK(download(state.scc.converged, 1, cuda_converged, stream));
+    CHECK(download(state.scc.iterations, 1, cuda_iterations, stream));
+    CHECK(download(state.scc.system_statuses, 1, cuda_statuses, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    if (frozen) {
+      CHECK(cuda_iterations[0] == fixture.host.driver_state().iterations[0]);
+      CHECK(cuda_statuses[0] == fixture.host.driver_state().system_statuses[0]);
+      CHECK(cuda_converged[0] == fixture.host.driver_state().converged[0]);
+    } else {
+      std::puts("");
+      std::fflush(stdout);
+    }
+    if (fixture.host.driver_state().converged[0] && cuda_converged[0]) break;
+  }
+  std::printf("%s cpu_iterations=%llu cpu_converged=%d cuda_iterations=%llu cuda_converged=%d",
+              frozen ? "FROZEN_REPLAY" : "INDEPENDENT",
+              static_cast<unsigned long long>(fixture.host.driver_state().iterations[0]),
+              static_cast<int>(fixture.host.driver_state().converged[0]),
+              static_cast<unsigned long long>(cuda_iterations[0]),
+              static_cast<int>(cuda_converged[0]));
+  for (std::size_t field = 0; field < kFields.size(); ++field) {
+    std::printf(" max_%s=%.17g", kFields[field], maximum_differences[field]);
+  }
+  std::puts("");
+  if (frozen) CHECK(fixture.host.driver_state().converged[0] == 1u);
+  return 0;
+}
+
+int spin_cpu_sensitivity_probe() {
+  for (double perturbation : {0.0, 1e-14, -1e-14, 1e-12, -1e-12}) {
+    const auto options = spin_branch_options();
+    HostSccCase host;
+    std::string error;
+    CHECK(HostSccCase::create(options, host, error) == XTBLOOM_STATUS_SUCCESS);
+    const auto shells = host.wavefunction_layout().total_shells;
+    /* Perturb only magnetization, using opposite shell increments so the
+     * prescribed total charge and spin excess do not change. */
+    host.wavefunction().qsh[shells] += perturbation;
+    host.wavefunction().qsh[shells + 1] -= perturbation;
+    CHECK(gfn2::initialize_scc_driver_state_cpu(host.driver_plan(), host.wavefunction(),
+                                                host.mixer_state(), host.driver_state(),
+                                                error) == XTBLOOM_STATUS_SUCCESS);
+    for (std::uint64_t iteration = 0; iteration < options.maximum_iterations; ++iteration) {
+      auto status = host.run_one_iteration(error);
+      CHECK(status == XTBLOOM_STATUS_SUCCESS || status == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
+      if (host.driver_state().converged[0]) break;
+    }
+    std::printf("CPU perturbation=%.17g energy=%.17g iterations=%llu converged=%d\n", perturbation,
+                host.driver_state().free_energies[0],
+                static_cast<unsigned long long>(host.driver_state().iterations[0]),
+                static_cast<int>(host.driver_state().converged[0]));
+    std::fflush(stdout);
+    /* Non-convergence is evidence, not a successful spin solution. Do not
+     * require a particular branch, energy, or iteration count across providers. */
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
+  if (argc == 2 && std::strcmp(argv[1], "--spin-cpu-sensitivity") == 0)
+    return spin_cpu_sensitivity_probe();
+  const bool spin_gpu_probe = argc == 2 && (std::strcmp(argv[1], "--spin-branch-probe") == 0 ||
+                                            std::strcmp(argv[1], "--spin-frozen-replay") == 0);
   int device_count = 0;
   const cudaError_t count_status = cudaGetDeviceCount(&device_count);
   if (count_status == cudaErrorNoDevice || count_status == cudaErrorInsufficientDriver ||
       device_count == 0) {
     (void)cudaGetLastError();
-    return 0;
+    /* The new evidence gate must not report arithmetic parity when it has
+     * never run. Preserve the older smoke modes' no-driver behavior. */
+    return spin_gpu_probe ? 77 : 0;
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
+  if (argc == 2 && std::strcmp(argv[1], "--spin-branch-probe") == 0)
+    return spin_diagnostic_probe(false);
+  if (argc == 2 && std::strcmp(argv[1], "--spin-frozen-replay") == 0)
+    return spin_diagnostic_probe(true);
 #ifdef XTBLOOM_SCC_LOOP_BENCHMARK_ONLY
   if (argc == 1) {
     return benchmark_conditional_graph_vs_bounded_fallback();
