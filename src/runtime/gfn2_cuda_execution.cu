@@ -2066,11 +2066,9 @@ __device__ bool fixed_topology_value_differs(const T* actual, const T* expected,
   return actual != nullptr && index < elements && actual[index] != expected[index];
 }
 
-__device__ bool fixed_spin_channel_differs(const std::int32_t* actual,
-                                           const std::int32_t* expected,
+__device__ bool fixed_spin_channel_differs(const std::int32_t* actual, const std::int32_t* expected,
                                            const std::int32_t* expected_unpaired,
-                                           std::int64_t index,
-                                           std::int64_t elements) noexcept {
+                                           std::int64_t index, std::int64_t elements) noexcept {
   if (actual == nullptr || index >= elements) return false;
   std::int32_t channels = actual[index];
   if (channels == 0) {
