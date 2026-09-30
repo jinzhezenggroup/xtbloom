@@ -2569,8 +2569,9 @@ class ArrayBatch:
     unpaired_electrons : (nsystems,) int32
         Number of unpaired electrons of each system.
     spin_channels : (nsystems,) int32, optional
-        Orbital channels (1 restricted / 2 unrestricted); defaults to all
-        restricted ``1`` on a host buffer.
+        Orbital channels (0 automatic / 1 restricted / 2 unrestricted).
+        Automatic mode selects one channel when ``unpaired_electrons`` is zero
+        and two otherwise; omitting this argument uses automatic mode.
     point_charge_offsets, point_charge_positions, point_charge_values,
     point_charge_gammas : optional
         External point-charge group; must be supplied together.  Offsets are
@@ -2933,7 +2934,10 @@ def _compute_array_batch(
         consume_input("positions", (natoms, 3))
         consume_input("unpaired_electrons", (nsystems,))
         if arrays.get("spin_channels") is None:
-            default_spin = np.full(nsystems, 1, dtype=np.int32)
+            # ABI-v2 value zero is explicit automatic mode. The native layer
+            # resolves it from unpaired_electrons, so generic DLPack inputs stay
+            # unread and zero-copy even when they live on a CUDA device.
+            default_spin = np.zeros(nsystems, dtype=np.int32)
             keepalive.append(default_spin)
             arrays["spin_channels"] = default_spin
         consume_input("spin_channels", (nsystems,))
