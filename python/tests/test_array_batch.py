@@ -42,6 +42,12 @@ def _structure(case_id: str) -> Structure:
     return Structure(numbers, positions, charge=charge, uhf=uhf, spin_channels=spin)
 
 
+def _default_spin_structure(case_id: str) -> Structure:
+    """Build a structure while deliberately exercising the Python spin default."""
+    numbers, positions, charge, uhf, _spin = structure_inputs(case_by_id(case_id))
+    return Structure(numbers, positions, charge=charge, uhf=uhf)
+
+
 def _pack_single(structures: list[Structure], *, include_points: bool = True) -> dict:
     """Pack a ragged batch of structures into flat ABI descriptor arrays."""
     atom_offsets = [0]
@@ -159,7 +165,10 @@ def test_unrestricted_system_with_spin_channels() -> None:
 @pytest.mark.parametrize("method", ["GFN1-xTB", "GFN2-xTB"])
 def test_default_spin_channels_follow_unpaired_electrons(method: str) -> None:
     """Omitted spin channels select restricted/unrestricted per system."""
-    structures = [_structure("ketene"), _structure("oh_radical")]
+    structures = [
+        _default_spin_structure("ketene"),
+        _default_spin_structure("oh_radical"),
+    ]
     packed = _pack_single(structures)
     del packed["spin_channels"]
     result = ArrayBatch(**packed, method=method, backend="cpu").compute()
