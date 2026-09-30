@@ -3129,6 +3129,7 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
    * fixed-plan reuse. Effective channels remain restricted for closed shells
    * and unrestricted for the open-shell tail system. */
   batch.spin_channels.assign(batch.spin_channels.size(), 0);
+  batch.bind();
   std::vector<std::array<double, 3>> context_fields(
       static_cast<std::size_t>(batch.descriptor.batch_size),
       std::array<double, 3>{{0.001, -0.0005, 0.00025}});
