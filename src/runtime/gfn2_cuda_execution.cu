@@ -2593,9 +2593,12 @@ xtbloom_status_t make_topology_key(const xtbloom_batch_t& batch,
       error = "molecular_charges contains a nonfinite value";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
-    const std::int32_t channels = key.spin_channels[static_cast<std::size_t>(system)];
+    std::int32_t& channels = key.spin_channels[static_cast<std::size_t>(system)];
+    if (channels == 0) {
+      channels = key.unpaired_electrons[static_cast<std::size_t>(system)] == 0 ? 1 : 2;
+    }
     if (channels != 1 && channels != 2) {
-      error = "spin_channels values must be one or two";
+      error = "spin_channels values must be zero (auto), one, or two";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
