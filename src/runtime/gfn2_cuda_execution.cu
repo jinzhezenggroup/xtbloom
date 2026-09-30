@@ -2246,7 +2246,8 @@ bool validate_or_bind_fixed_topology_field(const char* name, const xtbloom_const
 }
 
 bool spin_channel_buffer_equals(const xtbloom_batch_t& batch,
-                                const std::vector<std::int32_t>& expected) noexcept {
+                                const std::vector<std::int32_t>& expected,
+                                const std::vector<std::int32_t>& unpaired_electrons) noexcept {
   /* ABI-v1 and an empty ABI-v2 suffix both mean one restricted channel. */
   const bool supplied =
       batch.struct_size >= XTBLOOM_BATCH_V2_SIZE &&
@@ -2255,7 +2256,19 @@ bool spin_channel_buffer_equals(const xtbloom_batch_t& batch,
     return std::all_of(expected.begin(), expected.end(),
                        [](std::int32_t channels) { return channels == 1; });
   }
-  return buffer_equals(batch.spin_channels, expected);
+  if (expected.size() != unpaired_electrons.size()) return false;
+  const std::size_t bytes = expected.size() * sizeof(std::int32_t);
+  if (!valid_host_extent(batch.spin_channels, bytes, expected.empty())) return false;
+  const auto* source = static_cast<const std::byte*>(batch.spin_channels.data);
+  for (std::size_t system = 0; system < expected.size(); ++system) {
+    std::int32_t channels = 0;
+    std::memcpy(&channels, source + system * sizeof(channels), sizeof(channels));
+    if (channels == 0) {
+      channels = unpaired_electrons[system] == 0 ? 1 : 2;
+    }
+    if (channels != expected[system]) return false;
+  }
+  return true;
 }
 
 bool finite_double_buffer(const xtbloom_const_buffer_t& buffer, std::int64_t elements,
@@ -2329,7 +2342,7 @@ TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
       !buffer_equals(batch.atomic_numbers, key.atomic_numbers) ||
       !double_buffer_equals(batch.molecular_charges, key.molecular_charges) ||
       !buffer_equals(batch.unpaired_electrons, key.unpaired_electrons) ||
-      !spin_channel_buffer_equals(batch, key.spin_channels)) {
+      !spin_channel_buffer_equals(batch, key.spin_channels, key.unpaired_electrons)) {
     /* Distinguish a short/wrong-space descriptor from a legitimate topology
      * change so invalid reuse attempts cannot enter candidate construction. */
     std::size_t atom_offset_bytes = 0u;
