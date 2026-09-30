@@ -264,6 +264,44 @@ def test_requires_grad_output_rejected() -> None:
 
 
 @pytest.mark.cuda
+def test_cuda_default_spin_channels_follow_open_shell() -> None:
+    """Omitted packed CUDA spin channels resolve radicals to two channels."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    case = case_by_id("oh_radical")
+    numbers, positions, charge, uhf, _spin = structure_inputs(case)
+    arrays = {
+        "atom_offsets": _wrap(
+            torch, "atom_offsets", np.array([0, len(numbers)], np.int64)
+        ),
+        "atomic_numbers": _wrap(torch, "atomic_numbers", numbers.astype(np.int32)),
+        "positions": _wrap(torch, "positions", positions),
+        "molecular_charges": _wrap(
+            torch, "molecular_charges", np.array([charge], dtype=np.float64)
+        ),
+        "unpaired_electrons": _wrap(
+            torch, "unpaired_electrons", np.array([uhf], dtype=np.int32)
+        ),
+    }
+    reference = Calculator(
+        "GFN2-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        backend="cuda",
+    ).singlepoint()
+    result = ArrayBatch(**arrays, backend="cuda").compute()
+    assert abs(float(result.energies.item()) - reference.energy) < 1.0e-10
+    assert np.allclose(result.forces, reference.forces, atol=1.0e-9)
+
+
+@pytest.mark.cuda
 def test_torch_cuda_batch_with_spin() -> None:
     """A ragged unrestricted batch runs on pure torch device arrays."""
     reason = _device_ready()

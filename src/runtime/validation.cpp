@@ -1381,8 +1381,8 @@ DescriptorValidationResult validate_host_topology_semantics(const xtbloom_batch_
                     static_cast<const unsigned char*>(spin_channels.data) +
                         static_cast<std::size_t>(system) * sizeof(channels),
                     sizeof(channels));
-        if (channels != 1 && channels != 2) {
-          return invalid("spin_channels values must be one or two");
+        if (channels != 0 && channels != 1 && channels != 2) {
+          return invalid("spin_channels values must be zero (auto), one, or two");
         }
       }
     }

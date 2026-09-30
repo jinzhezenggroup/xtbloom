@@ -85,6 +85,11 @@ struct FixedTopology {
     if (spin_present) {
       copy_host_elements(batch.spin_channels.data, static_cast<std::size_t>(batch_size),
                          spin_channels);
+      for (std::size_t system = 0; system < spin_channels.size(); ++system) {
+        if (spin_channels[system] == 0) {
+          spin_channels[system] = unpaired_electrons[system] == 0 ? 1 : 2;
+        }
+      }
     } else {
       spin_channels.assign(static_cast<std::size_t>(batch_size), 1);
     }
@@ -134,7 +139,15 @@ struct FixedTopology {
       return false;
     }
     if (spin_present) {
-      return bytes_equal(batch.spin_channels.data, spin_channels);
+      const auto* current = static_cast<const std::int32_t*>(batch.spin_channels.data);
+      for (std::size_t system = 0; system < spin_channels.size(); ++system) {
+        std::int32_t channels = current[system];
+        if (channels == 0) {
+          channels = unpaired_electrons[system] == 0 ? 1 : 2;
+        }
+        if (channels != spin_channels[system]) return false;
+      }
+      return true;
     }
     return std::all_of(spin_channels.begin(), spin_channels.end(),
                        [](std::int32_t channels) { return channels == 1; });

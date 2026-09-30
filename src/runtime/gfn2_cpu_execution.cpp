@@ -435,6 +435,11 @@ void stage_request(const xtbloom_batch_t& batch, HostRequest& request) {
   } else {
     request.spin_channels.assign(static_cast<std::size_t>(batch.batch_size), 1);
   }
+  for (std::size_t system = 0; system < request.spin_channels.size(); ++system) {
+    if (request.spin_channels[system] == 0) {
+      request.spin_channels[system] = request.unpaired_electrons[system] == 0 ? 1 : 2;
+    }
+  }
 
   if (batch.total_point_charges != 0) {
     copy_from_c_buffer(batch.point_charge_offsets, static_cast<std::size_t>(batch.batch_size) + 1u,

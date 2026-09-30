@@ -616,7 +616,9 @@ def _function() -> _AutogradFunction:
             )
             nsystems = int(normalized_atom_offsets.shape[0]) - 1
             if spin_channels is None:
-                spin_channels = torch.ones(
+                # Native value zero means automatic channel selection from the
+                # matching unpaired-electron count and needs no host readback.
+                spin_channels = torch.zeros(
                     nsystems, dtype=torch.int32, device=positions.device
                 )
             normalized_spin_channels, spin_channels_owner = _to_compact_tensor(
@@ -893,8 +895,9 @@ def xtbloom_torch(
     unpaired_electrons : (nsystems,) int32
         Number of unpaired electrons of each system.
     spin_channels : (nsystems,) int32, optional
-        Orbital channels (1 restricted / 2 unrestricted); defaults to all
-        restricted ``1``, exactly like :class:`xtbloom.ArrayBatch`.
+        Orbital channels (0 automatic / 1 restricted / 2 unrestricted).
+        Omitting the argument selects one channel for closed shells and two
+        for open shells, exactly like :class:`xtbloom.ArrayBatch`.
     method : str
         GFN model name: ``"GFN1-xTB"``/``"GFN1"`` or
         ``"GFN2-xTB"``/``"GFN2"``. Defaults to ``"GFN2-xTB"``.

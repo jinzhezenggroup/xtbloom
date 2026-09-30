@@ -58,9 +58,12 @@ systems in a ragged batch can still converge and publish results.
 ## Restricted and unrestricted spin
 
 The molecular charge and unpaired-electron count determine the electron
-population. `spin_channels=1` uses shared restricted orbitals;
-`spin_channels=2` uses separate unrestricted channels. The Python API defaults
-an open-shell system to unrestricted and submits that choice explicitly.
+population. `spin_channels=1` uses shared restricted orbitals and
+`spin_channels=2` uses separate unrestricted channels. ABI-v2 value
+`spin_channels=0` requests automatic selection: one channel when the
+unpaired-electron count is zero and two otherwise. The Python APIs use this
+automatic rule when the option is omitted. A missing/NULL C-ABI suffix keeps
+the historical ABI-v1 restricted default for compatibility.
 
 Electron-count and spin-parity inconsistencies are validated for the complete
 request before execution. They are input errors, not SCC failures.
