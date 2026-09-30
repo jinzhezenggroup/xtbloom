@@ -18,6 +18,10 @@ namespace xtbloom::test::gfn2 {
 
 /* Small system geometries supported by the reusable SCC test fixture. */
 enum class SmallSystemKind {
+  /* User-supplied CO_6444267115601304224457962: a 60-atom yttrium
+   * complex with a numerically sensitive two-channel SCC trajectory (#509).
+   * The electronic specification is supplied separately through the options. */
+  kYttriumSpinComplex,
   kH2,
   kHe,
   kLiH,
@@ -61,6 +65,10 @@ struct HostSccCaseOptions {
   double energy_tolerance = 1.0e-8;
   double electronic_temperature = 0.0;
   std::uint64_t geometry_generation = 1u;
+  /* Long, branch-sensitive trajectories need the actual production LP64
+   * provider rather than the fixture's portable Jacobi reference solver.
+   * Opt-in keeps existing tests runnable without an installed BLAS runtime. */
+  bool use_production_linalg = false;
 };
 
 /*
