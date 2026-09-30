@@ -276,7 +276,9 @@ def test_cuda_default_spin_channels_follow_open_shell() -> None:
     case = case_by_id("oh_radical")
     numbers, positions, charge, uhf, _spin = structure_inputs(case)
     arrays = {
-        "atom_offsets": _wrap(torch, "atom_offsets", np.array([0, len(numbers)], np.int64)),
+        "atom_offsets": _wrap(
+            torch, "atom_offsets", np.array([0, len(numbers)], np.int64)
+        ),
         "atomic_numbers": _wrap(torch, "atomic_numbers", numbers.astype(np.int32)),
         "positions": _wrap(torch, "positions", positions),
         "molecular_charges": _wrap(

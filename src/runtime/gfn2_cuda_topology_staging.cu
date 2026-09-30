@@ -331,8 +331,7 @@ __global__ void validate_and_compare_topology_kernel(
     if (!spin_channels_supplied) {
       candidate.spin_channels[system] = 1;
     } else if (candidate.spin_channels[system] == 0) {
-      candidate.spin_channels[system] =
-          candidate.unpaired_electrons[system] == 0 ? 1 : 2;
+      candidate.spin_channels[system] = candidate.unpaired_electrons[system] == 0 ? 1 : 2;
     }
     if (candidate.spin_channels[system] != 1 && candidate.spin_channels[system] != 2) {
       set_device_failure(report, DeviceError::kInvalidMetadata, Field::kSpinChannels, system);

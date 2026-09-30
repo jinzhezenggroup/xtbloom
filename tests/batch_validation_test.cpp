@@ -655,11 +655,9 @@ bool test_spin_channel_abi_v2() {
          f.batch.spin_channels.memory_space = XTBLOOM_MEMORY_CUDA_DEVICE;
        },
        "context backend is CPU"},
-      {"negative spin channels",
-       [](Fixture& f) { f.enable_spin_channels({1, -1}); },
+      {"negative spin channels", [](Fixture& f) { f.enable_spin_channels({1, -1}); },
        "zero (auto), one, or two"},
-      {"three spin channels",
-       [](Fixture& f) { f.enable_spin_channels({3, 1}); },
+      {"three spin channels", [](Fixture& f) { f.enable_spin_channels({3, 1}); },
        "zero (auto), one, or two"},
       {"spin channels alias output",
        [](Fixture& f) {
