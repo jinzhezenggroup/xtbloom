@@ -123,7 +123,10 @@ its pin. Each frozen input is captured and hashed once, then held in a private
 read-only snapshot for metadata parsing and all native batch assembly. Source
 geometry changes after capture cannot replace the verified bytes in a sweep.
 Snapshot creation and its memory/file footprint belong to planning/binding;
-the snapshot is closed after the finite-list run. This protects against ordinary
+the snapshot is closed after the finite-list run. Its teardown is separately
+reported as `input_snapshot_release_ms` and included in one-shot and
+planning-inclusive E2E; only the explicit reusable-plan metric amortizes it.
+This protects against ordinary
 concurrent source updates, not a malicious process with access to the same
 user's private temporary files.
 

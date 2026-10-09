@@ -1022,6 +1022,43 @@ def finite_convergence_binding(
         raise
 
 
+def finish_frozen_run(args: argparse.Namespace, row: dict[str, Any]) -> None:
+    """Release one captured plan and account for its filesystem teardown cost.
+
+    Snapshot destruction is not native compute, but excluding it from one-shot
+    E2E would hide a cost introduced by the frozen-input experiment itself.
+    """
+    captured = getattr(args, "finite_frozen_workload", None)
+    if captured is None:
+        return
+    started = time.perf_counter_ns()
+    captured.close()
+    release_ms = (time.perf_counter_ns() - started) * 1.0e-6
+    args.finite_frozen_workload = None
+    timing = row.setdefault("timing", {})
+    timing["input_snapshot_release_ms"] = release_ms
+    timing["input_snapshot_release_scope"] = (
+        "one teardown per captured plan; included in one-shot E2E and "
+        "amortized only in the explicit reusable-plan metric"
+    )
+    if "planning_inclusive_end_to_end_ms" in timing:
+        timing["planning_inclusive_end_to_end_ms"] = timing_summary(
+            [
+                sample + release_ms
+                for sample in timing["planning_inclusive_end_to_end_ms"]["samples_ms"]
+            ],
+            len(row["case_ids"]),
+        )
+        timing["planning_inclusive_scope"] = (
+            "complete planning/binding plus one snapshot teardown and each "
+            "strict-FRESH sweep; no plan-cost amortization is assumed"
+        )
+        timing["one_shot_total_ms"] += release_ms
+        timing["reusable_plan_mean_total_ms_per_sweep"] += release_ms / len(
+            row["measurement_sweeps"]
+        )
+
+
 def _max_abs_error(actual: object, expected: object) -> float | None:
     """Return a finite vector error, or ``None`` when shape/data are unusable."""
     if isinstance(expected, list):
@@ -2234,6 +2271,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "planning_inclusive_end_to_end_median_ms",
         "convergence_binding_json",
         "risk_band_by_case_id_json",
+        "input_snapshot_release_ms",
     )
     include_convergence = any(
         row.get("convergence_binding") is not None for row in rows
@@ -2303,6 +2341,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     allow_nan=False,
                 ),
                 "one_shot_total_ms": finite_timing.get("one_shot_total_ms"),
+                "input_snapshot_release_ms": finite_timing.get(
+                    "input_snapshot_release_ms"
+                ),
                 "planning_inclusive_end_to_end_median_ms": finite_timing.get(
                     "planning_inclusive_end_to_end_ms", {}
                 ).get("median_ms"),
@@ -2616,6 +2657,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         planning_ms,
                         property_name,
                     )
+                    finish_frozen_run(args, row)
                     rows.append(row)
                     print(  # noqa: T201 - preserve benchmark CLI progress output
                         f"  {row['availability']}", flush=True

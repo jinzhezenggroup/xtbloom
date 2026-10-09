@@ -403,6 +403,23 @@ class FrozenRunnerTests(unittest.TestCase):
         self.assertIn(
             "paired holdout decision incomplete", qualified["claim_eligibility_scope"]
         )
+        before_cleanup = qualified["timing"]["one_shot_total_ms"]
+        complete_before_cleanup = qualified["timing"][
+            "planning_inclusive_end_to_end_ms"
+        ]["median_ms"]
+        with mock.patch.object(
+            run.time, "perf_counter_ns", side_effect=[10_000_000, 14_000_000]
+        ):
+            run.finish_frozen_run(self.args, qualified)
+        self.assertIsNone(self.args.finite_frozen_workload)
+        self.assertEqual(qualified["timing"]["input_snapshot_release_ms"], 4.0)
+        self.assertAlmostEqual(
+            qualified["timing"]["one_shot_total_ms"], before_cleanup + 4.0
+        )
+        self.assertAlmostEqual(
+            qualified["timing"]["planning_inclusive_end_to_end_ms"]["median_ms"],
+            complete_before_cleanup + 4.0,
+        )
 
     def test_metadata_parsing_uses_the_verified_input_snapshot(self) -> None:
         """Keep a source-file mutation between capture and parsing out of the plan."""
