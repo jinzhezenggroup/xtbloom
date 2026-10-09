@@ -9,8 +9,10 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -4431,6 +4433,23 @@ struct Gfn2CudaExecutionCache::Impl {
                          public_result.device_staging.dipole_moment_elements, double);
     XTBLOOM_REJECT_WRITE("public-result diagnostics", public_result.diagnostics.control,
                          public_result.diagnostics.control_elements, Gfn2PublicResultBridgeControl);
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+    const auto diagnostics = candidate.scc_loop.diagnostics_device();
+    std::int64_t diagnostic_rows = 0;
+    if (diagnostics.maximum_iterations >
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+        !checked_elements(static_cast<std::int64_t>(diagnostics.maximum_iterations),
+                          diagnostics.bucket_count, diagnostic_rows)) {
+      error = "CUDA runtime admission audit diagnostic extent overflows int64_t";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    XTBLOOM_REJECT_WRITE("SCC diagnostic header", diagnostics.header, 1, Gfn2SccDiagnosticHeader);
+    XTBLOOM_REJECT_WRITE("SCC diagnostic iterations", diagnostics.iterations,
+                         static_cast<std::int64_t>(diagnostics.maximum_iterations),
+                         Gfn2SccDiagnosticIteration);
+    XTBLOOM_REJECT_WRITE("SCC diagnostic rows", diagnostics.rows, diagnostic_rows,
+                         Gfn2SccDiagnosticBucket);
+#endif
 #undef XTBLOOM_REJECT_WRITE
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -10363,10 +10382,18 @@ struct Gfn2CudaExecutionCache::Impl {
      * requests already select this same bounded path while capturing. */
     const bool native_periodic_request = current.host.key.native_lattice_enabled;
     const bool use_bounded_scc = capture_bounded_scc || native_periodic_request;
+    const auto bounded_scc = [&]() {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+      return launch_gfn2_restricted_scc_loop_cuda(current.scc_binding, inference.epoch_consumer,
+                                                  current.scc_loop.diagnostics_device(),
+                                                  execution_stream);
+#else
+      return launch_gfn2_restricted_scc_loop_cuda(current.scc_binding, inference.epoch_consumer,
+                                                  execution_stream);
+#endif
+    };
     const Gfn2SccLoopLaunchResult loop =
-        use_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
-                              current.scc_binding, inference.epoch_consumer, execution_stream)
-                        : current.scc_loop.launch(execution_stream);
+        use_bounded_scc ? bounded_scc() : current.scc_loop.launch(execution_stream);
     if (!loop.success()) {
       std::ostringstream message;
       message << "CUDA SCC loop submission failed: mode="
@@ -12004,6 +12031,29 @@ xtbloom_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache
     status = implementation.publish_public_results_locked(
         *working, options, result, public_result_transaction, ownership_published, true,
         completed_result_flags, error);
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+    /* Capture is deliberately outside SCC and after synchronous publication.
+     * An opt-in instrumented library is never a primary timing reference. */
+    const char* diagnostics_path = std::getenv("XTBLOOM_CUDA_SCC_DIAGNOSTICS_FILE");
+    if (status == XTBLOOM_STATUS_SUCCESS && diagnostics_path != nullptr &&
+        diagnostics_path[0] != '\0') {
+      try {
+        /* Contexts can complete concurrently. Keep their buffered JSON writes
+         * atomic within this process; separate processes need separate files. */
+        static std::mutex diagnostics_output_mutex;
+        std::lock_guard<std::mutex> diagnostics_lock(diagnostics_output_mutex);
+        std::ofstream diagnostics_output(diagnostics_path, std::ios::app);
+        const cudaError_t captured = working->scc_loop.write_diagnostics_json(
+            diagnostics_output, implementation.stream, static_cast<std::uint32_t>(start_mode));
+        if (captured != cudaSuccess) {
+          std::fprintf(stderr, "xTBloom SCC diagnostics unavailable: %s\n",
+                       cudaGetErrorString(captured));
+        }
+      } catch (const std::exception& exception) {
+        std::fprintf(stderr, "xTBloom SCC diagnostics unavailable: %s\n", exception.what());
+      }
+    }
+#endif
     return status;
   }();
   return finish(transaction_status);

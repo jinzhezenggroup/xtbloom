@@ -13,6 +13,7 @@ the scripts and method pages here define how evidence is produced and audited.
 | CPU FRESH/WARM scaling against explicit references | `natoms_scaling.py` | [FRESH/WARM scaling](fresh-warm.md) | `benchmarks.test_natoms_scaling` |
 | Cost of xTBloom-owned CUDA DLPack result arenas | `dlpack_result_memory.py` | [DLPack result memory](dlpack-result-memory.md) | `benchmarks.test_dlpack_result_memory` |
 | Dense 62-atom complete-Hessian batch throughput | `hessian.py` | Script module documentation and issue evidence README | `benchmarks.test_hessian` |
+| Opt-in CUDA SCC activity and actual execution-path diagnosis | `cuda_diagnostics.py` | [CUDA SCC diagnostics](cuda-diagnostics.md) | `benchmarks.test_cuda_diagnostics` |
 
 These protocols answer different questions. In particular, the public
 cross-engine figure and the FRESH/WARM study use different SCC settings,

@@ -1,10 +1,12 @@
 #include <cuda_runtime.h>
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <new>
+#include <ostream>
 #include <vector>
 
 #include "backends/cuda/gfn2_scc_loop.cuh"
@@ -55,17 +57,53 @@ Gfn2SccLoopLaunchResult validate_loop_plan(const Gfn2SccIterationBinding& bindin
 
 Gfn2SccLoopLaunchResult launch_restricted_scc_loop_impl(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice* geometry,
-    cudaStream_t stream) noexcept {
+    cudaStream_t stream, Gfn2SccDiagnosticsDevice diagnostics = {}) noexcept {
   Gfn2SccLoopLaunchResult result = validate_loop_plan(binding);
   if (!result.success()) {
     return result;
   }
 
   const std::uint64_t submission_bound = binding.plan.activity_policy.maximum_iterations;
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  if (diagnostics.header != nullptr) {
+    const cudaError_t status = reset_gfn2_scc_diagnostics_cuda(diagnostics, stream);
+    if (status != cudaSuccess) {
+      result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;
+      result.iteration.cuda_status = status;
+      return result;
+    }
+  }
+#endif
   for (std::uint64_t iteration = 0u; iteration < submission_bound; ++iteration) {
-    result.iteration = geometry == nullptr
-                           ? launch_gfn2_restricted_scc_iteration_cuda(binding, stream)
-                           : launch_gfn2_restricted_scc_iteration_cuda(binding, *geometry, stream);
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+    if (diagnostics.header != nullptr) {
+      result.iteration = geometry == nullptr
+                             ? launch_gfn2_restricted_scc_activity_cuda(binding, stream)
+                             : launch_gfn2_restricted_scc_activity_cuda(binding, *geometry, stream);
+      cudaError_t status = result.iteration.success()
+                               ? begin_gfn2_scc_diagnostics_cuda(diagnostics, binding, stream, true)
+                               : cudaSuccess;
+      if (result.iteration.success() && status == cudaSuccess) {
+        result.iteration =
+            geometry == nullptr
+                ? launch_gfn2_restricted_scc_numerical_body_cuda(binding, stream)
+                : launch_gfn2_restricted_scc_numerical_body_cuda(binding, *geometry, stream);
+      }
+      if (result.iteration.success() && status == cudaSuccess) {
+        status = finish_gfn2_scc_diagnostics_cuda(diagnostics, binding, false, stream);
+      }
+      if (status != cudaSuccess) {
+        result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;
+        result.iteration.cuda_status = status;
+      }
+    } else
+#endif
+    {
+      result.iteration =
+          geometry == nullptr
+              ? launch_gfn2_restricted_scc_iteration_cuda(binding, stream)
+              : launch_gfn2_restricted_scc_iteration_cuda(binding, *geometry, stream);
+    }
     if (!result.iteration.success()) {
       return result;
     }
@@ -342,11 +380,16 @@ struct Gfn2SccLoopCudaGraphOwner::State {
   Gfn2GeometryEpochConsumerDevice geometry{};
   bool dynamic_geometry = false;
   Gfn2SccLoopGraphFallbackReason fallback_reason = Gfn2SccLoopGraphFallbackReason::kNone;
+  Gfn2SccLoopGraphPreference preference = Gfn2SccLoopGraphPreference::kAuto;
   cudaGraph_t root_graph = nullptr;
   cudaGraphExec_t root_executable = nullptr;
   cudaGraph_t body_graph = nullptr;
   cudaGraphExec_t body_executable = nullptr;
   Gfn2SccDeviceLoopControl* control = nullptr;
+  Gfn2SccDiagnosticsDevice diagnostics{};
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  bool external_capture_uninstrumented = false;
+#endif
 
   /* Production exact-capacity dispatch chain. When ready, launch() uses the
    * chain instead of the monolithic body_graph/body_executable. Every chain
@@ -361,6 +404,83 @@ struct Gfn2SccLoopCudaGraphOwner::State {
 };
 
 namespace {
+
+cudaError_t allocate_diagnostics(Gfn2SccLoopCudaGraphOwner::State& state) noexcept {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  auto& diagnostics = state.diagnostics;
+  diagnostics.bucket_count = state.binding.plan.eigensolver_provider.bucket_count;
+  diagnostics.maximum_iterations = state.binding.plan.activity_policy.maximum_iterations;
+  const auto bucket_count = static_cast<std::size_t>(diagnostics.bucket_count);
+  const auto limit = std::numeric_limits<std::size_t>::max();
+  if (diagnostics.maximum_iterations > limit / sizeof(Gfn2SccDiagnosticIteration) ||
+      bucket_count > limit / sizeof(Gfn2EigensolverBucket) ||
+      (bucket_count != 0u &&
+       diagnostics.maximum_iterations > limit / sizeof(Gfn2SccDiagnosticBucket) / bucket_count)) {
+    return cudaErrorInvalidValue;
+  }
+  const auto iterations = static_cast<std::size_t>(diagnostics.maximum_iterations);
+  cudaError_t status =
+      cudaMalloc(reinterpret_cast<void**>(&diagnostics.header), sizeof(Gfn2SccDiagnosticHeader));
+  if (status == cudaSuccess) {
+    status = cudaMalloc(reinterpret_cast<void**>(&diagnostics.iterations),
+                        iterations * sizeof(Gfn2SccDiagnosticIteration));
+  }
+  if (status == cudaSuccess && bucket_count != 0u) {
+    status = cudaMalloc(reinterpret_cast<void**>(&diagnostics.rows),
+                        iterations * bucket_count * sizeof(Gfn2SccDiagnosticBucket));
+  }
+  if (status == cudaSuccess && bucket_count != 0u) {
+    status = cudaMalloc(reinterpret_cast<void**>(&diagnostics.buckets),
+                        bucket_count * sizeof(Gfn2EigensolverBucket));
+  }
+  if (status == cudaSuccess && bucket_count != 0u) {
+    status = cudaMemcpy(diagnostics.buckets, state.binding.plan.eigensolver_provider.buckets,
+                        bucket_count * sizeof(Gfn2EigensolverBucket), cudaMemcpyHostToDevice);
+  }
+  if (status == cudaSuccess) {
+    status = cudaMemset(diagnostics.iterations, 0, iterations * sizeof(Gfn2SccDiagnosticIteration));
+  }
+  if (status == cudaSuccess && bucket_count != 0u) {
+    status = cudaMemset(diagnostics.rows, 0,
+                        iterations * bucket_count * sizeof(Gfn2SccDiagnosticBucket));
+  }
+  if (status == cudaSuccess) {
+    const Gfn2SccDiagnosticHeader initial{};
+    status = cudaMemcpy(diagnostics.header, &initial, sizeof(initial), cudaMemcpyHostToDevice);
+  }
+  return status;
+#else
+  return cudaSuccess;
+#endif
+}
+
+cudaError_t diagnostic_reset(const Gfn2SccLoopCudaGraphOwner::State& state, cudaStream_t stream,
+                             Gfn2SccLoopExecutionMode mode) noexcept {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  return reset_gfn2_scc_diagnostics_cuda(state.diagnostics, stream,
+                                         static_cast<std::uint32_t>(mode));
+#else
+  return cudaSuccess;
+#endif
+}
+
+cudaError_t diagnostic_begin(const Gfn2SccLoopCudaGraphOwner::State& state,
+                             cudaStream_t stream) noexcept {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  return begin_gfn2_scc_diagnostics_cuda(state.diagnostics, state.binding, stream);
+#else
+  return cudaSuccess;
+#endif
+}
+
+cudaError_t diagnostic_finish(const Gfn2SccLoopCudaGraphOwner::State& state, bool exact_capacity,
+                              cudaStream_t stream) noexcept {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  return finish_gfn2_scc_diagnostics_cuda(state.diagnostics, state.binding, exact_capacity, stream);
+#else
+  return cudaSuccess;
+#endif
+}
 
 void destroy_graph_state(Gfn2SccLoopCudaGraphOwner::State* state) noexcept {
   if (state == nullptr) {
@@ -390,6 +510,10 @@ void destroy_graph_state(Gfn2SccLoopCudaGraphOwner::State* state) noexcept {
   if (state->control != nullptr) {
     (void)cudaFree(state->control);
   }
+  if (state->diagnostics.header != nullptr) (void)cudaFree(state->diagnostics.header);
+  if (state->diagnostics.iterations != nullptr) (void)cudaFree(state->diagnostics.iterations);
+  if (state->diagnostics.rows != nullptr) (void)cudaFree(state->diagnostics.rows);
+  if (state->diagnostics.buckets != nullptr) (void)cudaFree(state->diagnostics.buckets);
   delete state;
 }
 
@@ -569,6 +693,7 @@ Gfn2SccLoopGraphBuildResult build_device_tail_graph(
   }
   count_device_loop_body_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+  if (status == cudaSuccess) status = diagnostic_begin(state, capture_stream);
   const Gfn2SccIterationLaunchResult numerical =
       status == cudaSuccess ? launch_graph_numerical_body(state, capture_stream)
                             : Gfn2SccIterationLaunchResult{};
@@ -580,6 +705,7 @@ Gfn2SccLoopGraphBuildResult build_device_tail_graph(
     return capture_fallback(Gfn2SccLoopGraphFallbackReason::kNumericalBodyCaptureFailed,
                             numerical.cuda_status, numerical);
   }
+  if (status == cudaSuccess) status = diagnostic_finish(state, false, capture_stream);
   if (status == cudaSuccess) {
     snapshot_device_loop_failure_kernel<<<1, 1, 0, capture_stream>>>(state.binding.workspace.ledger,
                                                                      state.control);
@@ -638,6 +764,9 @@ Gfn2SccLoopGraphBuildResult build_device_tail_graph(
   }
   reset_device_loop_control_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+  if (status == cudaSuccess) {
+    status = diagnostic_reset(state, capture_stream, Gfn2SccLoopExecutionMode::kDeviceTailGraph);
+  }
   const Gfn2SccIterationLaunchResult root = status == cudaSuccess
                                                 ? launch_graph_activity(state, capture_stream)
                                                 : Gfn2SccIterationLaunchResult{};
@@ -844,6 +973,7 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   }
   count_device_loop_body_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+  if (status == cudaSuccess) status = diagnostic_begin(state, capture_stream);
   const Gfn2SccIterationLaunchResult pre_segment =
       status == cudaSuccess ? launch_graph_pre_eigensolver(state, capture_stream)
                             : Gfn2SccIterationLaunchResult{};
@@ -1054,6 +1184,7 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
     return chain_fallback(Gfn2SccLoopGraphFallbackReason::kDispatchBuildFailed,
                           post_segment.cuda_status, post_segment);
   }
+  if (status == cudaSuccess) status = diagnostic_finish(state, true, capture_stream);
   if (status == cudaSuccess) {
     snapshot_device_loop_failure_kernel<<<1, 1, 0, capture_stream>>>(workspace.ledger,
                                                                      state.control);
@@ -1118,6 +1249,10 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   }
   reset_device_loop_control_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+  if (status == cudaSuccess) {
+    status =
+        diagnostic_reset(state, capture_stream, Gfn2SccLoopExecutionMode::kDeviceDispatchChain);
+  }
   const Gfn2SccIterationLaunchResult root = status == cudaSuccess
                                                 ? launch_graph_activity(state, capture_stream)
                                                 : Gfn2SccIterationLaunchResult{};
@@ -1174,6 +1309,12 @@ Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
   return launch_restricted_scc_loop_impl(binding, &geometry, stream);
 }
 
+Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    Gfn2SccDiagnosticsDevice diagnostics, cudaStream_t stream) noexcept {
+  return launch_restricted_scc_loop_impl(binding, &geometry, stream, diagnostics);
+}
+
 Gfn2SccLoopCudaGraphOwner::~Gfn2SccLoopCudaGraphOwner() { reset(); }
 
 Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build(
@@ -1216,11 +1357,21 @@ Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build_impl(
     return result;
   }
   state->binding = binding;
+  state->preference = preference;
   if (geometry != nullptr) {
     state->geometry = *geometry;
     state->dynamic_geometry = true;
   }
   state_ = state;
+  const cudaError_t diagnostic_status = allocate_diagnostics(*state);
+  if (diagnostic_status != cudaSuccess) {
+    Gfn2SccLoopGraphBuildResult result{};
+    result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;
+    result.iteration.cuda_status = diagnostic_status;
+    result.cuda_status = diagnostic_status;
+    reset();
+    return result;
+  }
 
 #if CUDART_VERSION >= 12030
 #if CUDART_VERSION >= 12080
@@ -1297,9 +1448,19 @@ Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::launch(cudaStream_t stream) c
    * owner's body executable and control allocation. Capture the bounded DAG
    * instead so the outer executable remains valid after owner reset while the
    * caller-owned binding storage remains alive. */
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  state_->external_capture_uninstrumented = capture_status != cudaStreamCaptureStatusNone;
+#endif
   if (state_->root_executable == nullptr || capture_status != cudaStreamCaptureStatusNone) {
+    /* The independently captured DAG must not borrow this owner's ledger.
+     * Runtime-owned captures use the explicit diagnostic overload instead and
+     * retain the complete Prepared owner until their Graph is destroyed. */
+    const auto diagnostics = capture_status == cudaStreamCaptureStatusNone
+                                 ? state_->diagnostics
+                                 : Gfn2SccDiagnosticsDevice{};
     Gfn2SccLoopLaunchResult result = launch_restricted_scc_loop_impl(
-        state_->binding, state_->dynamic_geometry ? &state_->geometry : nullptr, stream);
+        state_->binding, state_->dynamic_geometry ? &state_->geometry : nullptr, stream,
+        diagnostics);
     result.execution_mode = Gfn2SccLoopExecutionMode::kBoundedFallback;
     return result;
   }
@@ -1428,7 +1589,208 @@ std::size_t Gfn2SccLoopCudaGraphOwner::retained_device_bytes() const noexcept {
   if (state_->device_table != nullptr) {
     bytes += static_cast<std::size_t>(state_->table_slots) * sizeof(cudaGraphExec_t);
   }
+  const auto diagnostics = state_->diagnostics;
+  if (diagnostics.header != nullptr) {
+    bytes +=
+        sizeof(Gfn2SccDiagnosticHeader) +
+        diagnostics.maximum_iterations * sizeof(Gfn2SccDiagnosticIteration) +
+        diagnostics.bucket_count * sizeof(Gfn2EigensolverBucket) +
+        diagnostics.maximum_iterations * diagnostics.bucket_count * sizeof(Gfn2SccDiagnosticBucket);
+  }
   return bytes;
+}
+
+Gfn2SccDiagnosticsDevice Gfn2SccLoopCudaGraphOwner::diagnostics_device() const noexcept {
+  return state_ == nullptr ? Gfn2SccDiagnosticsDevice{} : state_->diagnostics;
+}
+
+cudaError_t Gfn2SccLoopCudaGraphOwner::write_diagnostics_json(std::ostream& output,
+                                                              cudaStream_t stream,
+                                                              std::uint32_t start_policy) const {
+#ifndef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  return cudaErrorNotSupported;
+#else
+  const auto diagnostics = diagnostics_device();
+  if (diagnostics.header == nullptr || state_->external_capture_uninstrumented) {
+    return cudaErrorNotSupported;
+  }
+  Gfn2SccDiagnosticHeader header{};
+  std::vector<Gfn2SccDiagnosticIteration> iterations(diagnostics.maximum_iterations);
+  std::vector<Gfn2SccDiagnosticBucket> rows(diagnostics.maximum_iterations *
+                                            diagnostics.bucket_count);
+  const auto systems = static_cast<std::size_t>(state_->binding.plan.topology.batch_size);
+  std::vector<std::uint64_t> terminal_iterations(systems);
+  std::vector<xtbloom_status_t> terminal_statuses(systems);
+  std::vector<std::uint8_t> terminal_converged(systems);
+  std::vector<std::int32_t> bucket_systems(systems);
+  cudaError_t status =
+      cudaMemcpyAsync(&header, diagnostics.header, sizeof(header), cudaMemcpyDeviceToHost, stream);
+  if (status == cudaSuccess) {
+    status =
+        cudaMemcpyAsync(iterations.data(), diagnostics.iterations,
+                        iterations.size() * sizeof(iterations[0]), cudaMemcpyDeviceToHost, stream);
+  }
+  if (status == cudaSuccess && !rows.empty()) {
+    status = cudaMemcpyAsync(rows.data(), diagnostics.rows, rows.size() * sizeof(rows[0]),
+                             cudaMemcpyDeviceToHost, stream);
+  }
+  const auto copy_terminal = [&](void* destination, const void* source, std::size_t bytes) {
+    if (status == cudaSuccess && bytes != 0u) {
+      status = cudaMemcpyAsync(destination, source, bytes, cudaMemcpyDeviceToHost, stream);
+    }
+  };
+  const auto terminal = state_->binding.input.activity_state;
+  copy_terminal(terminal_iterations.data(), terminal.iterations,
+                systems * sizeof(terminal_iterations[0]));
+  copy_terminal(terminal_statuses.data(), terminal.system_statuses,
+                systems * sizeof(terminal_statuses[0]));
+  copy_terminal(terminal_converged.data(), terminal.converged,
+                systems * sizeof(terminal_converged[0]));
+  copy_terminal(bucket_systems.data(), state_->binding.plan.eigensolver_batch.bucket_systems,
+                systems * sizeof(bucket_systems[0]));
+  /* Settle every accepted readback even after a later copy fails, so local
+   * destination lifetimes never end with an outstanding transfer. */
+  const cudaError_t settled = cudaStreamSynchronize(stream);
+  if (status != cudaSuccess) return status;
+  if (settled != cudaSuccess) return settled;
+  if (header.overflow != 0u || header.iteration_count > diagnostics.maximum_iterations ||
+      header.execution_mode > 2u) {
+    return cudaErrorInvalidValue;
+  }
+  /* A corrupt readback must not index outside canonical state or emit a
+   * partially valid trace. The downloaded bucket map is a complete permutation,
+   * including peers that failed before executing a numerical body. */
+  std::vector<bool> seen_systems(systems, false);
+  for (std::int64_t bucket_index = 0; bucket_index < diagnostics.bucket_count; ++bucket_index) {
+    const auto bucket = state_->binding.plan.eigensolver_provider.buckets[bucket_index];
+    if (bucket.system_count < 0 || bucket.system_index_offset < 0 ||
+        static_cast<std::uint64_t>(bucket.system_index_offset) > systems ||
+        static_cast<std::uint64_t>(bucket.system_count) >
+            systems - static_cast<std::uint64_t>(bucket.system_index_offset)) {
+      return cudaErrorInvalidValue;
+    }
+    for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+      const auto system = bucket_systems[bucket.system_index_offset + local];
+      if (system < 0 || static_cast<std::size_t>(system) >= systems || seen_systems[system]) {
+        return cudaErrorInvalidValue;
+      }
+      seen_systems[system] = true;
+    }
+  }
+  if (std::find(seen_systems.begin(), seen_systems.end(), false) != seen_systems.end()) {
+    return cudaErrorInvalidValue;
+  }
+  const char* mode = header.execution_mode == 2u   ? "device_dispatch_chain"
+                     : header.execution_mode == 1u ? "device_tail_graph"
+                                                   : "bounded_fallback";
+  output << "{\"schema\":\"xtbloom.cuda.scc_diagnostics.v1\",\"instrumented\":true,"
+            "\"execution_mode\":\""
+         << mode << "\",\"fallback_reason\":"
+         << static_cast<std::uint32_t>(header.execution_mode == 0u && conditional_graph_ready()
+                                           ? Gfn2SccLoopGraphFallbackReason::kRuntimeBoundedOverride
+                                           : fallback_reason())
+         << ",\"batch_size\":" << state_->binding.plan.topology.batch_size
+         << ",\"maximum_iterations\":" << diagnostics.maximum_iterations
+         << ",\"plan_token\":" << state_->binding.plan.plan_token
+         << ",\"wavefunction_layout_fingerprint\":"
+         << state_->binding.plan.wavefunction_layout.layout_fingerprint
+         << ",\"start_policy\":" << start_policy
+         << ",\"graph_preference\":" << static_cast<std::uint32_t>(state_->preference)
+         << ",\"chain_measured_ao_bound\":" << kGfn2SccDispatchChainMeasuredOrbitalBound
+         << ",\"diagnostic_device_bytes\":"
+         << sizeof(Gfn2SccDiagnosticHeader) + iterations.size() * sizeof(iterations[0]) +
+                rows.size() * sizeof(rows[0]) +
+                diagnostics.bucket_count * sizeof(Gfn2EigensolverBucket)
+         << ",\"chain_selection_constraints\":[";
+  bool constraint_written = false;
+  const auto constraint = [&](const char* reason) {
+    if (constraint_written) output << ',';
+    output << '"' << reason << '"';
+    constraint_written = true;
+  };
+  if (state_->preference == Gfn2SccLoopGraphPreference::kDeviceTailGraph) {
+    constraint("forced_device_tail_graph");
+  } else if (state_->preference == Gfn2SccLoopGraphPreference::kAuto) {
+    if (state_->binding.plan.topology.batch_size <= 1) constraint("singleton_no_capacity_gain");
+    if (!gfn2_scc_dispatch_chain_regime_applies(state_->binding.plan)) {
+      constraint("outside_measured_ao_regime");
+    }
+    const auto channels = state_->binding.plan.wavefunction_layout.total_spin_channels;
+    if (channels > 0 && channels != state_->binding.plan.topology.batch_size) {
+      constraint("mixed_spin_dispatch_unsupported");
+    }
+  }
+  output << "],\"buckets\":[";
+  for (std::int64_t bucket_index = 0; bucket_index < diagnostics.bucket_count; ++bucket_index) {
+    const auto bucket = state_->binding.plan.eigensolver_provider.buckets[bucket_index];
+    if (bucket_index != 0) output << ',';
+    output << "{\"bucket_index\":" << bucket_index << ",\"ao\":" << bucket.orbital_count
+           << ",\"system_capacity\":" << bucket.system_count << ",\"channel_capacity\":"
+           << (bucket.solve_count > 0 ? bucket.solve_count : bucket.system_count) << '}';
+  }
+  output << "],\"terminal_buckets\":[";
+  for (std::int64_t bucket_index = 0; bucket_index < diagnostics.bucket_count; ++bucket_index) {
+    const auto bucket = state_->binding.plan.eigensolver_provider.buckets[bucket_index];
+    Gfn2SccDiagnosticBucket counts{};
+    for (std::int32_t local = 0; local < bucket.system_count; ++local) {
+      const auto system = bucket_systems[bucket.system_index_offset + local];
+      const auto status_code = terminal_statuses[system];
+      if (status_code == XTBLOOM_STATUS_SCC_NOT_CONVERGED ||
+          (status_code == XTBLOOM_STATUS_SUCCESS && terminal_converged[system] == 0u &&
+           terminal_iterations[system] >= diagnostics.maximum_iterations)) {
+        ++counts.exhausted_systems;
+      } else if (status_code != XTBLOOM_STATUS_SUCCESS) {
+        ++counts.failed_systems;
+      } else if (terminal_converged[system] != 0u) {
+        ++counts.converged_systems;
+      }
+    }
+    if (bucket_index != 0) output << ',';
+    output << "{\"bucket_index\":" << bucket_index
+           << ",\"converged_systems\":" << counts.converged_systems
+           << ",\"failed_systems\":" << counts.failed_systems
+           << ",\"exhausted_systems\":" << counts.exhausted_systems << ",\"unfinished_systems\":"
+           << bucket.system_count - counts.converged_systems - counts.failed_systems -
+                  counts.exhausted_systems
+           << '}';
+  }
+  output << "],\"terminal_systems\":[";
+  for (std::size_t system = 0u; system < systems; ++system) {
+    if (system != 0u) output << ',';
+    output << "{\"system_index\":" << system << ",\"iterations\":" << terminal_iterations[system]
+           << ",\"status\":" << terminal_statuses[system]
+           << ",\"converged\":" << static_cast<unsigned>(terminal_converged[system]) << '}';
+  }
+  output << "],\"iterations\":[";
+  for (std::uint64_t iteration = 0u; iteration < header.iteration_count; ++iteration) {
+    if (iteration != 0u) output << ',';
+    const auto record = iterations[iteration];
+    output << "{\"iteration\":" << iteration << ",\"start_ns\":" << record.start_ns
+           << ",\"end_ns\":" << record.end_ns
+           << ",\"plan_failure_record\":" << record.plan_failure_record << ",\"buckets\":[";
+    for (std::int64_t bucket_index = 0; bucket_index < diagnostics.bucket_count; ++bucket_index) {
+      if (bucket_index != 0) output << ',';
+      const auto row = rows[iteration * diagnostics.bucket_count + bucket_index];
+      output << "{\"bucket_index\":" << bucket_index << ",\"active_systems\":" << row.active_systems
+             << ",\"active_channels\":" << row.active_channels;
+      const auto slots = [&](const char* name, std::uint64_t count) {
+        output << ",\"" << name << "\":";
+        if (count == kGfn2SccDiagnosticUnknown)
+          output << "null";
+        else
+          output << count;
+      };
+      slots("submitted_solver_slots", row.submitted_solver_slots);
+      slots("submitted_backtransform_slots", row.submitted_backtransform_slots);
+      output << ",\"converged_systems\":" << row.converged_systems
+             << ",\"failed_systems\":" << row.failed_systems
+             << ",\"exhausted_systems\":" << row.exhausted_systems << '}';
+    }
+    output << "]}";
+  }
+  output << "]}\n";
+  return output.good() ? cudaSuccess : cudaErrorUnknown;
+#endif
 }
 
 std::size_t Gfn2SccLoopCudaGraphOwner::dispatch_chain_executable_count() const noexcept {
