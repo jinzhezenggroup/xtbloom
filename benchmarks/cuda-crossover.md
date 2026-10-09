@@ -56,8 +56,9 @@ alongside every complete sample ledger. Launch failures, including a
 non-executable binary, remain explicit failures without stopping the matrix.
 Malformed/truncated later JSONL preserves complete prefix records, the raw
 stdout, and a parse diagnostic rather than discarding earlier samples. Existing
-CTest and nox registration is
-unchanged, and no GPU runtime is started by `--list-grid` or the harness tests.
+native CTest names and default invocations remain unchanged; the integrity
+module is included in the benchmark CTest and nox suites. No GPU runtime is
+started by `--list-grid` or the harness tests.
 
 List the default matrix without launching the native executable:
 
