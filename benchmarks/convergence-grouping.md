@@ -103,13 +103,14 @@ python3 -m benchmarks.run --library /path/to/libxtbloom.so \
   --convergence-plan /path/to/issue-514-freeze-plan.json \
   --convergence-freeze-sha256 <prior-logical-freeze-sha256> \
   --convergence-workload-sha256 <prior-workload-manifest-file-sha256> \
+  --convergence-cohort-sha256 <prior-complete-ordered-cohort-logical-sha256> \
   --convergence-partition holdout --warmups 5 --repetitions 30
 ```
 
 The command is one strategy, not the balanced paired evaluation orchestrator;
 run it through the scheduler and preserve all three strategy orders/blocks
 required below. The logical freeze identity is not the freeze file's byte hash.
-Both expected identities must come from the prior checkpoint, not potentially
+All expected identities must come from the prior checkpoint, not potentially
 rewritten files. The runner reconstructs the entire static policy/split/protocol,
 checks every frozen system against actual input AO, charge and explicit spin
 metadata, and verifies all frozen input hashes against the separately pinned
@@ -117,8 +118,21 @@ workload manifest. Geometry bytes remain provenance, not scheduling features.
 Missing or mismatched identities fail before inference, including for frozen
 peers outside the selected view.
 
+The workload manifest is parsed from the same captured bytes checked against
+its pin. Each frozen input is captured and hashed once, then held in a private
+read-only snapshot for metadata parsing and all native batch assembly. Source
+geometry changes after capture cannot replace the verified bytes in a sweep.
+Snapshot creation and its memory/file footprint belong to planning/binding;
+the snapshot is closed after the finite-list run. This protects against ordinary
+concurrent source updates, not a malicious process with access to the same
+user's private temporary files.
+
 `--convergence-partition` validates rather than filters: supply the exact
-view/partition intersection ID file. No system is silently dropped or added.
+view/partition intersection ID file. Its complete ordered ID list must match
+the externally pinned cohort digest, so a legitimate roster subset cannot
+silently replace a predeclared view. Obtain its logical digest before measurement
+with `ordered_case_ids_sha256` (canonical compact JSON list, SHA-256); this is
+not the ID text file's byte hash. No system is silently dropped or added.
 Original/exact-AO baselines validate the same binding but do not evaluate risk
 annotations. Freeze reading, complete-roster hashing and verification, input
 inspection, annotations and planner work all count in `planning_ms`. Each row
@@ -127,6 +141,11 @@ one-time planning cost to each strict-FRESH sweep without assumed amortization;
 the existing sweep-only distribution and explicit reusable-plan metric remain
 separate. JSON and CSV retain the policy/split/freeze/input identities and risk
 bands. This integration supplies no scientific qualification or adoption.
+Legacy non-frozen CSV columns and sweep timing fields remain unchanged; the
+additional binding/planning-inclusive fields require the opt-in freeze flags.
+Every standalone frozen run explicitly has `claim_eligible=false`, even if its
+separate `independent_reference_qualified` science check passes. A single
+strategy's output is not the complete balanced paired holdout decision.
 
 ## Prospective holdout matrix
 

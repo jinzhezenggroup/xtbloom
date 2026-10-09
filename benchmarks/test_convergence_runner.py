@@ -98,13 +98,27 @@ class FrozenRunnerTests(unittest.TestCase):
             convergence_plan=self.freeze_path,
             convergence_freeze_sha256=self.freeze["freeze_plan_sha256"],
             convergence_workload_sha256=run.sha256_file(self.manifest_path),
+            convergence_cohort_sha256=convergence_grouping.ordered_case_ids_sha256(
+                ("a", "b", "c", "d")
+            ),
             convergence_partition="all",
         )
+        self.addCleanup(self._close_capture)
+
+    def _close_capture(self) -> None:
+        """Release private input snapshots created by a fixture's direct planner."""
+        captured = getattr(self.args, "finite_frozen_workload", None)
+        if captured is not None:
+            captured.close()
 
     def plan(
-        self, ids: tuple[str, ...] = ("a", "b", "c", "d")
+        self, ids: tuple[str, ...] = ("a", "b", "c", "d"), *, pin_selected: bool = True
     ) -> tuple[ao_grouping.AOGroupingPlan, float]:
         """Exercise the public-runner planning boundary with complete fixtures."""
+        if pin_selected:
+            self.args.convergence_cohort_sha256 = (
+                convergence_grouping.ordered_case_ids_sha256(ids)
+            )
         return run.finite_case_plan(self.args, self.manifest, self.cases, ids, 2)
 
     def test_candidate_uses_single_planner_and_complete_annotations(self) -> None:
@@ -156,11 +170,13 @@ class FrozenRunnerTests(unittest.TestCase):
         input_path = Path(self.cases["d"]["input"])
         original = input_path.read_bytes()
         input_path.write_bytes(original.replace(b"0 0 0", b"0.1 0 0"))
-        with self.assertRaisesRegex(run.BenchmarkError, "input hash.*mismatched"):
+        with self.assertRaisesRegex(run.BenchmarkError, "input SHA-256 mismatch"):
             self.plan(("a",))
         input_path.write_bytes(original)
         del self.cases["d"]["input_sha256"]
-        with self.assertRaisesRegex(run.BenchmarkError, "input hash.*missing"):
+        self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        self.args.convergence_workload_sha256 = run.sha256_file(self.manifest_path)
+        with self.assertRaisesRegex(run.BenchmarkError, "input SHA-256.*missing"):
             self.plan(("a",))
 
     def test_expected_workload_and_freeze_identities_are_external_pins(self) -> None:
@@ -170,10 +186,16 @@ class FrozenRunnerTests(unittest.TestCase):
                 self.subTest(field=field),
                 mock.patch.object(self.args, field, "0" * 64),
                 self.assertRaisesRegex(
-                    run.BenchmarkError, "expected experiment identity"
+                    run.BenchmarkError, "expected (experiment identity|SHA-256)"
                 ),
             ):
                 self.plan()
+
+    def test_cohort_pin_rejects_omission_addition_and_order_change(self) -> None:
+        """Require the exact preregistered view, not an arbitrary valid subset."""
+        for ids in (("a",), ("a", "b", "c", "d", "a"), ("d", "c", "b", "a")):
+            with self.subTest(ids=ids), self.assertRaises(run.BenchmarkError):
+                self.plan(ids, pin_selected=False)
 
     def test_partition_is_a_validator_not_a_filter(self) -> None:
         """Keep submitted view order and reject rather than remove wrong peers."""
@@ -215,18 +237,51 @@ class FrozenRunnerTests(unittest.TestCase):
             self.assertEqual(plan.strategy, strategy)
             self.assertEqual(plan.risk_bands_by_case_id, ())
 
+    def test_frozen_original_keeps_its_legacy_hash_and_csv_columns(self) -> None:
+        """Keep new binding opt-in without changing the original permutation hash."""
+        self.args.ao_grouping = "original"
+        plan, _ = self.plan()
+        expected = ao_grouping.make_plan(("a", "b", "c", "d"), 2)
+        self.assertEqual(plan.plan_sha256, expected.plan_sha256)
+        self.assertEqual(plan.ao_counts_by_case_id, ())
+        self.assertIsNone(plan.basis_sha256)
+        csv_path = self.root / "legacy.csv"
+        run.write_csv(
+            csv_path,
+            [
+                dict(
+                    run.base_row(
+                        run.Cell("xtbloom", "cpu", "host", "gas", "energy", 1, ("a",))
+                    ),
+                    availability="available",
+                )
+            ],
+        )
+        with csv_path.open(newline="", encoding="utf-8") as handle:
+            fields = next(csv.reader(handle))
+        self.assertNotIn("convergence_binding_json", fields)
+        self.assertNotIn("planning_inclusive_end_to_end_median_ms", fields)
+
     def test_finite_row_restores_failures_and_retains_binding_in_csv(self) -> None:
         """Publish all failed slices and keep planning-inclusive provenance."""
         plan, _ = self.plan()
+        expected_inputs = {
+            case_id: Path(case["input"]).read_bytes()
+            for case_id, case in self.cases.items()
+        }
+        for case in self.cases.values():
+            Path(case["input"]).write_text("changed source after capture\n")
+        self.manifest_path.write_text('{"method": "changed after capture"}')
         self.args.library = Path("/tmp/mock-library.so")
         self.args.backends = ("cpu",)
         self.args.device_id = 0
         self.args.cpu_threads = 1
         self.args.warmups = 0
         self.args.repetitions = 2
+        failed_case_id: str | None = "b"
 
         class FakeAdapter:
-            """Publish a failed peer without executing a native backend."""
+            """Publish controlled peer outcomes without a native backend."""
 
             def __init__(
                 self,
@@ -238,6 +293,11 @@ class FrozenRunnerTests(unittest.TestCase):
                 **options: object,
             ) -> None:
                 self.cases = cases
+                for case in cases:
+                    if Path(case["input"]).read_bytes() != expected_inputs[case["id"]]:
+                        raise AssertionError(
+                            "native assembly did not receive frozen input bytes"
+                        )
                 if options != {
                     "strict_fresh": True,
                     "request_charges": True,
@@ -267,7 +327,7 @@ class FrozenRunnerTests(unittest.TestCase):
                     )
                 }
                 for case in self.cases:
-                    failed = case["id"] == "b"
+                    failed = case["id"] == failed_case_id
                     value = float("nan") if failed else 0.0
                     output["energies_hartree"].append(value)
                     output["scc_iterations"].append(8 if failed else 3)
@@ -323,6 +383,46 @@ class FrozenRunnerTests(unittest.TestCase):
         self.assertEqual(
             json.loads(csv_row["risk_band_by_case_id_json"]),
             row["risk_band_by_case_id"],
+        )
+        failed_case_id = None
+        self.args.repetitions = 1
+        with (
+            mock.patch.object(run, "XTBloomAdapter", FakeAdapter),
+            mock.patch.object(run, "timed_invoke", return_value=0.1),
+            mock.patch.object(
+                run,
+                "finite_case_correctness",
+                return_value={"status": "pass", "independent_reference_pass": True},
+            ),
+        ):
+            qualified = run.benchmark_finite_xtbloom_cell(
+                self.args, self.manifest, self.cases, plan, 7.5, "force"
+            )
+        self.assertTrue(qualified["independent_reference_qualified"])
+        self.assertFalse(qualified["claim_eligible"])
+        self.assertIn(
+            "paired holdout decision incomplete", qualified["claim_eligibility_scope"]
+        )
+
+    def test_metadata_parsing_uses_the_verified_input_snapshot(self) -> None:
+        """Keep a source-file mutation between capture and parsing out of the plan."""
+        parser = run.case_atomic_numbers
+        original = Path(self.cases["a"]["input"]).read_bytes()
+
+        def mutate_source_then_parse(
+            path: Path, manifest: dict[str, Any], case: dict[str, Any]
+        ) -> tuple[int, ...]:
+            Path(self.cases["a"]["input"]).write_text("source changed after capture\n")
+            return parser(path, manifest, case)
+
+        with mock.patch.object(
+            run, "case_atomic_numbers", side_effect=mutate_source_then_parse
+        ):
+            plan, _ = self.plan()
+        self.assertEqual(dict(plan.ao_counts_by_case_id)["a"], 8)
+        captured = self.args.finite_frozen_workload
+        self.assertEqual(
+            Path(captured.cases_by_id["a"]["input"]).read_bytes(), original
         )
 
     def test_validate_freeze_rejects_rehashed_edits_and_numeric_aliases(self) -> None:
@@ -382,6 +482,8 @@ class ConvergenceCLITests(unittest.TestCase):
             "a" * 64,
             "--convergence-workload-sha256",
             "b" * 64,
+            "--convergence-cohort-sha256",
+            "c" * 64,
         ]
         run.validate_args(parser.parse_args(base + flags))
         for flag in (
@@ -389,6 +491,7 @@ class ConvergenceCLITests(unittest.TestCase):
             "--convergence-plan",
             "--convergence-freeze-sha256",
             "--convergence-workload-sha256",
+            "--convergence-cohort-sha256",
         ):
             partial = flags.copy()
             offset = partial.index(flag)

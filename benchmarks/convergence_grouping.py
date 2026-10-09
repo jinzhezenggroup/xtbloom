@@ -120,6 +120,18 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
 
 
+def ordered_case_ids_sha256(case_ids: tuple[str, ...] | list[str]) -> str:
+    """Hash the complete ordered cohort independently of its grouping permutation.
+
+    The expected identity must be pinned before measurement; a partition check
+    alone cannot detect a difficult system removed from the submitted view.
+    """
+    identities = [_identity(case_id, "cohort case ID") for case_id in case_ids]
+    if len(identities) != len(set(identities)):
+        raise ConvergenceGroupingError("cohort case IDs must be unique")
+    return _sha256_json(identities)
+
+
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     """Reject duplicate JSON keys so parsing cannot silently change a plan."""
     result: dict[str, object] = {}
