@@ -3705,6 +3705,15 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.scc_iteration_production
       COMMAND xtbloom_cuda_scc_iteration_production_test
     )
+    add_test(NAME xtbloom.cuda.scc_iteration_direct_control
+      COMMAND xtbloom_cuda_scc_iteration_production_test --unrestricted-parity
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_host_capture_control
+      COMMAND xtbloom_cuda_scc_iteration_production_test --host-capture-control
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_device_tail_count
+      COMMAND xtbloom_cuda_scc_iteration_production_test --device-tail-count
+    )
     add_test(NAME xtbloom.cuda.scc_iteration_large_singleton
       COMMAND xtbloom_cuda_scc_iteration_production_test --large-singleton-tridiagonal
     )

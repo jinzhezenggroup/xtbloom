@@ -372,8 +372,16 @@ bool download(const T* device, std::int64_t elements, std::vector<T>& host, cuda
 
 template <typename T>
 bool download_value(const T* device, T& host, cudaStream_t stream) {
-  return device != nullptr &&
-         cudaMemcpyAsync(&host, device, sizeof(T), cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+  if (device == nullptr) {
+    return false;
+  }
+  const cudaError_t status =
+      cudaMemcpyAsync(&host, device, sizeof(T), cudaMemcpyDeviceToHost, stream);
+  if (status != cudaSuccess) {
+    std::fprintf(stderr, "SCC scalar download failed: %s (%d): %s\n", cudaGetErrorName(status),
+                 static_cast<int>(status), cudaGetErrorString(status));
+  }
+  return status == cudaSuccess;
 }
 
 template <typename T>
@@ -4003,6 +4011,14 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--unrestricted-parity") == 0) {
     return test_production_iteration_cpu_parity(false, 1, true, true);
   }
+  /* Separate processes keep clean sanitizer controls independent of a
+   * device-Graph finding and its potentially poisoned CUDA context. */
+  if (argc == 2 && std::strcmp(argv[1], "--host-capture-control") == 0) {
+    return test_device_tail_owner_whole_pipeline_capture();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--device-tail-count") == 0) {
+    return test_conditional_graph_exact_body_count(1);
+  }
   if (argc == 2 && std::strcmp(argv[1], "--mixed-parity") == 0) {
     return test_mixed_spin_batch_one_step_cpu_parity();
   }
@@ -4055,6 +4071,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr,
                  "usage: %s "
                  "[--benchmark|--unrestricted-smoke|--unrestricted-parity|--mixed-parity|"
+                 "--host-capture-control|--device-tail-count|"
                  "--mixed-acceptance|--mixed-bounded|--mixed-conditional|"
                  "--dispatch-chain|--finite-temperature-parity|--large-singleton-tridiagonal|"
                  "--large-singleton-sanitizer|--deterministic-debug]\n",
