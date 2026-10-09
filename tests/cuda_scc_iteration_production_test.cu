@@ -3699,6 +3699,18 @@ bool supported_crossover_sanitizer_coordinate(std::int64_t ao_count, std::int64_
          (ao_count == 180 && batch_size == 256 && active_denominator == 4);
 }
 
+constexpr bool sanitizer_control_device_unavailable(cudaError_t status, int device_count) {
+  return status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver ||
+         (status == cudaSuccess && device_count == 0);
+}
+
+static_assert(sanitizer_control_device_unavailable(cudaSuccess, 0));
+static_assert(!sanitizer_control_device_unavailable(cudaSuccess, 1));
+static_assert(sanitizer_control_device_unavailable(cudaErrorNoDevice, 0));
+static_assert(sanitizer_control_device_unavailable(cudaErrorInsufficientDriver, 0));
+static_assert(!sanitizer_control_device_unavailable(cudaErrorInitializationError, 0));
+static_assert(!sanitizer_control_device_unavailable(cudaErrorUnknown, 0));
+
 int run_crossover_sanitizer_control(std::int64_t requested_ao, std::int64_t batch_size,
                                     std::int64_t active_denominator, const char* mode) {
   /* This one-body diagnostic replays a fixed iteration mask, not a convergence
@@ -4569,8 +4581,7 @@ int main(int argc, char** argv) {
         derive_crossover_activity_mask(batch_size, active_denominator, kCrossoverSanitizerSeed);
     int device_count = 0;
     const cudaError_t count_status = cudaGetDeviceCount(&device_count);
-    if (count_status == cudaErrorNoDevice || count_status == cudaErrorInsufficientDriver ||
-        device_count == 0) {
+    if (sanitizer_control_device_unavailable(count_status, device_count)) {
       (void)cudaGetLastError();
       print_sanitizer_control_header(mode, ao_count, batch_size, active_denominator, mask,
                                      "unavailable");

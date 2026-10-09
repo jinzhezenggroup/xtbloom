@@ -148,3 +148,6 @@ coordinates to fit. This local table bound does not replace the repository's
 boolean/integral-float aliases, and every paired iteration ledger must respect
 the declared one-body bound before any timing pair is usable. Malformed failed
 rows retain their diagnostics but contribute no usable statistics.
+Schema-complete failures can retain descriptive event distributions with their
+failure status; they never become eligible performance results. Unexpected CUDA
+initialization errors fail a control instead of being hidden as a no-device skip.

@@ -367,6 +367,12 @@ def _summarize_coordinate(
     coordinate: cuda_crossover.Coordinate,
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
+    """Keep valid failure timings descriptive; invalid prefixes have no statistics.
+
+    A schema-complete native failure can explain a negative coordinate without
+    becoming a qualified performance result. Usable pairs mean valid diagnostic
+    records, not a passed wrapper or scientific/production acceptance.
+    """
     status = result.get("status")
     if status not in {"pass", "failure", "unavailable"}:
         raise ValueError("unknown wrapper coordinate status")
