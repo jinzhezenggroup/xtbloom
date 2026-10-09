@@ -564,5 +564,62 @@ class FiniteRunnerTests(unittest.TestCase):
         )
 
 
+class ReferenceQualificationTests(unittest.TestCase):
+    """Distinguish numerical execution from independent property qualification."""
+
+    def test_missing_reference_is_diagnostic_not_scientifically_qualified(self) -> None:
+        """Finite converged outputs do not replace an independent E/F/q oracle."""
+        result = {
+            "status": 0,
+            "scc_converged": 1,
+            "energy_hartree": 1.0,
+            "forces_hartree_per_bohr": [0.0, 0.0, 0.0],
+            "atomic_charges_e": [0.0],
+            "point_charge_forces_hartree_per_bohr": [],
+        }
+        check = run.finite_case_correctness(
+            {"oracle_role": "diagnostic-no-independent-reference"},
+            {},
+            result,
+            {},
+            "force",
+        )
+        self.assertEqual(check["status"], "pass")
+        self.assertFalse(check["independent_reference_pass"])
+        self.assertEqual(
+            check["missing_reference_properties"],
+            ["energy_hartree", "forces_hartree_per_bohr", "partial_charges_e"],
+        )
+        self.assertIn("no independent reference", check["reference_validation"])
+
+    def test_energy_reference_cannot_qualify_force_and_charge_outputs(self) -> None:
+        """Requested-property qualification requires all relevant reference slices."""
+        result = {
+            "status": 0,
+            "scc_converged": 1,
+            "energy_hartree": 1.0,
+            "forces_hartree_per_bohr": [0.0, 0.0, 0.0],
+            "atomic_charges_e": [0.0],
+            "point_charge_forces_hartree_per_bohr": [],
+        }
+        manifest = {
+            "tolerances": {
+                "energy": {"atol": 1.0e-7},
+                "forces": {"atol": 1.0e-7},
+                "charges": {"atol": 1.0e-7},
+            }
+        }
+        expected = {"energy_hartree": 1.0}
+        check = run.finite_case_correctness({}, expected, result, manifest, "force")
+        self.assertEqual(check["status"], "pass")
+        self.assertFalse(check["independent_reference_pass"])
+        expected.update(
+            forces_hartree_per_bohr=[0.0, 0.0, 0.0], partial_charges_e=[0.0]
+        )
+        check = run.finite_case_correctness({}, expected, result, manifest, "force")
+        self.assertTrue(check["independent_reference_pass"])
+        self.assertEqual(check["missing_reference_properties"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

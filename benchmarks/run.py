@@ -885,7 +885,18 @@ def finite_case_correctness(
         values = value if isinstance(value, list) else [value]
         if any(not math.isfinite(float(component)) for component in values):
             passed = False
-    diagnostic_only = case.get("oracle_role") == "diagnostic-unbackgrounded-charged"
+    diagnostic_only = case.get("oracle_role") in {
+        "diagnostic-unbackgrounded-charged",
+        "diagnostic-no-independent-reference",
+    }
+    required_reference_properties = {
+        "energy_hartree",
+        "partial_charges_e",
+    }
+    if property_name == "force":
+        required_reference_properties.add("forces_hartree_per_bohr")
+        if result.get("point_charge_forces_hartree_per_bohr"):
+            required_reference_properties.add("point_charge_forces_hartree_per_bohr")
     oracle_properties = case.get("xtbloom_oracle_properties")
     for actual_key, (expected_key, tolerance_key) in comparisons.items():
         requested = actual_key == "energy_hartree" or actual_key == "atomic_charges_e"
@@ -913,7 +924,9 @@ def finite_case_correctness(
         if error is None or error > float(tolerance):
             passed = False
 
-    if diagnostic_only:
+    if case.get("oracle_role") == "diagnostic-no-independent-reference":
+        reference_validation = "no independent reference; status/finite outputs checked"
+    elif diagnostic_only:
         reference_validation = "diagnostic-only oracle; finite status checked"
     elif errors:
         reference_validation = "committed independent conformance golden"
@@ -922,6 +935,12 @@ def finite_case_correctness(
     return {
         "status": "pass" if passed else "fail",
         "reference_validation": reference_validation,
+        "independent_reference_pass": (
+            passed and required_reference_properties.issubset(errors)
+        ),
+        "missing_reference_properties": sorted(
+            required_reference_properties - errors.keys()
+        ),
         "max_abs_errors": errors,
         "skipped_oracle_properties": skipped,
     }
@@ -1250,7 +1269,7 @@ def benchmark_finite_xtbloom_cell(
             )
             else "pass"
         ),
-        "reference": "committed independent conformance goldens where applicable",
+        "reference": "per-ID independent property comparisons where applicable",
         "case_count": len(final_results),
         "sweep_count": len(measurement_sweeps),
         "successful_system_ids": [
@@ -1261,6 +1280,22 @@ def benchmark_finite_xtbloom_cell(
         "failed_system_ids": ordered_failed_systems,
         "correctness_failure_ids": ordered_correctness_failures,
     }
+    unqualified_reference_ids = {
+        result["case_id"]
+        for sweep in measurement_sweeps
+        for result in sweep["case_results"]
+        if not result["correctness"].get("independent_reference_pass", False)
+    }
+    row["correctness"]["unqualified_reference_ids"] = [
+        case_id
+        for case_id in plan.original_case_ids
+        if case_id in unqualified_reference_ids
+    ]
+    row["independent_reference_qualified"] = (
+        row["correctness"]["status"] == "pass" and not unqualified_reference_ids
+    )
+    if not row["independent_reference_qualified"]:
+        row["claim_eligible"] = False
     return row
 
 
