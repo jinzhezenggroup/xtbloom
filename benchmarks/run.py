@@ -14,6 +14,7 @@ import csv
 import ctypes
 import hashlib
 import json
+import math
 import os
 import platform
 import resource
@@ -39,6 +40,11 @@ import xtbloom_public_api as public_api
 from xtbloom_public_api import PublicBatchStorage
 
 try:
+    from . import ao_grouping
+except ImportError:  # Direct ``python benchmarks/run.py`` execution.
+    import ao_grouping
+
+try:
     from .xtb_adapter import XtbAdapter, XtbError, XtbState
 except ImportError:  # Direct ``python benchmarks/run.py`` execution.
     from xtb_adapter import XtbAdapter, XtbError, XtbState
@@ -56,6 +62,8 @@ except ImportError:  # Direct ``python benchmarks/run.py`` execution.
     from dxtb_adapter import timed_invoke as timed_dxtb_invoke
 
 SCHEMA_VERSION = 1
+NONFINITE_JSON_TAG = "__xtbloom_nonfinite_float__"
+NONFINITE_JSON_VALUES = ("NaN", "Infinity", "-Infinity")
 DEFAULT_BATCH_SIZES = (1, 8, 32, 128)
 DEFAULT_PROPERTIES = ("energy", "force")
 DEFAULT_WORKLOADS = ("gas", "qmmm")
@@ -271,6 +279,7 @@ class Cell:
     workload: str
     property: str
     batch_size: int
+    case_ids: tuple[str, ...] | None = None
 
 
 def workload_case_ids(workload: str, batch_size: int) -> tuple[str, ...]:
@@ -313,13 +322,24 @@ class XTBloomAdapter:
         cell: Cell,
         device_id: int,
         cpu_threads: int,
+        *,
+        strict_fresh: bool = False,
+        request_charges: bool = False,
+        allow_system_failures: bool = False,
     ) -> None:
         self.cell = cell
         self.library_path = library_path
         self.library = public_api._configure_library(library_path)
-        if len(case_sequence) != cell.batch_size:
+        if cell.case_ids is None and len(case_sequence) != cell.batch_size:
             raise BenchmarkError("case sequence length must equal the requested batch")
+        if cell.case_ids is not None and (
+            len(case_sequence) != len(cell.case_ids)
+            or len(case_sequence) > cell.batch_size
+            or tuple(case["id"] for case in case_sequence) != cell.case_ids
+        ):
+            raise BenchmarkError("finite case sequence does not match its batch plan")
         self.storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
+        self.allow_system_failures = allow_system_failures
         self.context = public_api._make_context(
             self.library, cell.backend, device_id, cpu_threads
         )
@@ -358,13 +378,24 @@ class XTBloomAdapter:
                 # A QM/MM force workload covers the complete public force
                 # contract: both QM atoms and caller-owned external sites.
                 self.options.flags |= public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+        if request_charges:
+            self.options.flags |= public_api.XTBLOOM_COMPUTE_ATOMIC_CHARGES
+        if strict_fresh:
+            self.options.scc_start_mode = public_api.XTBLOOM_SCC_START_FRESH
+            self.options.max_scc_iterations = 500
+            self.options.charge_tolerance = 1.0e-10
+            self.options.energy_tolerance = 1.0e-12
+            self.options.electronic_temperature = (
+                300.0 * public_api.XTBLOOM_KELVIN_TO_HARTREE
+            )
         # These public defaults are recorded in every row and match normal API use.
-        self.systems = cell.batch_size
+        self.systems = len(case_sequence)
         self.atoms = len(self.storage.atomic_numbers)
         self.energies = (ctypes.c_double * self.systems)()
         self.forces = (
             (ctypes.c_double * (3 * self.atoms))() if cell.property == "force" else None
         )
+        self.charges = (ctypes.c_double * self.atoms)() if request_charges else None
         self.point_forces = (
             (ctypes.c_double * (3 * len(self.storage.point_charge_values)))()
             if cell.property == "force" and self.storage.point_charge_values
@@ -384,6 +415,10 @@ class XTBloomAdapter:
         self.result.energies = self.memory.output(self.energies, "energies")
         if self.forces is not None:
             self.result.forces = self.memory.output(self.forces, "forces")
+        if self.charges is not None:
+            self.result.atomic_charges = self.memory.output(
+                self.charges, "atomic_charges"
+            )
         if self.point_forces is not None:
             self.result.point_charge_forces = self.memory.output(
                 self.point_forces, "point_charge_forces"
@@ -439,14 +474,18 @@ class XTBloomAdapter:
             if self.statuses[index] != public_api.XTBLOOM_STATUS_SUCCESS
             or self.converged[index] != 1
         ]
-        if failures:
+        if failures and not self.allow_system_failures:
             raise BenchmarkError("; ".join(failures))
         output: dict[str, Any] = {
             "energies_hartree": [float(value) for value in self.energies],
             "scc_iterations": [int(value) for value in self.iterations],
+            "scc_converged": [int(value) for value in self.converged],
+            "per_system_status": [int(value) for value in self.statuses],
         }
         if self.forces is not None:
             output["forces_hartree_per_bohr"] = [float(value) for value in self.forces]
+        if self.charges is not None:
+            output["atomic_charges_e"] = [float(value) for value in self.charges]
         if self.point_forces is not None:
             output["point_charge_forces_hartree_per_bohr"] = [
                 float(value) for value in self.point_forces
@@ -624,6 +663,605 @@ def benchmark_xtbloom_cell(
     finally:
         if adapter is not None:
             adapter.close()
+
+
+def case_atomic_numbers(
+    manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any]
+) -> tuple[int, ...]:
+    """Read QM atom identities using the same input parsers as the public runner."""
+    input_path = canonical_case_input_path(manifest_path, case)
+    if public_api.is_periodic_manifest(manifest):
+        document = public_api.periodic_gfn2.parse_turbomole(input_path)
+        symbol_numbers = {
+            symbol.lower(): number
+            for number, symbol in enumerate(conformance.ELEMENT_SYMBOLS)
+            if symbol
+        }
+        try:
+            return tuple(
+                symbol_numbers[symbol.lower()] for symbol in document["symbols"]
+            )
+        except KeyError as exc:
+            raise BenchmarkError(
+                f"case {case['id']} has an element absent from the GFN2 basis"
+            ) from exc
+    if case.get("input_schema") == "qmmm-v1":
+        hardness = (
+            manifest.get("reference_engines", {})
+            .get("xtb", {})
+            .get("point_charge_hardness_hartree")
+        )
+        if hardness is None:
+            raise BenchmarkError(
+                "point-charge case lacks the pinned GFN2 hardness table"
+            )
+        document = conformance.load_qmmm_input(input_path, case, hardness)
+        return tuple(int(number) for number in document["qm"]["atomic_numbers"])
+    document = conformance.load_turbomole_coord(input_path, case)
+    return tuple(int(number) for number in document["atomic_numbers"])
+
+
+def canonical_resolved_path(path: Path, description: str) -> Path:
+    """Resolve one provenance/input path to an existing canonical file path."""
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BenchmarkError(f"cannot resolve {description} {path}: {exc}") from exc
+
+
+def canonical_case_input_path(manifest_path: Path, case: dict[str, Any]) -> Path:
+    """Resolve a manifest input with the same repository-root rule as adapters."""
+    return canonical_resolved_path(
+        conformance.resolve_manifest_path(manifest_path, case["input"]),
+        f"input for case {case['id']}",
+    )
+
+
+def canonical_path_label(path: Path) -> str:
+    """Use a repository-relative provenance label when the file is in-tree."""
+    try:
+        return path.relative_to(REPOSITORY_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def provenance_file_record(path: Path, description: str) -> dict[str, Any]:
+    """Hash a resolved file incrementally without retaining its contents."""
+    resolved = canonical_resolved_path(path, description)
+    try:
+        digest = sha256_file(resolved)
+        if digest is None:
+            raise BenchmarkError(f"{description} is not a regular file: {resolved}")
+        size_bytes = resolved.stat().st_size
+    except OSError as exc:
+        raise BenchmarkError(
+            f"cannot hash or stat {description} {resolved}: {exc}"
+        ) from exc
+    return {
+        "path": canonical_path_label(resolved),
+        "size_bytes": size_bytes,
+        "sha256": digest,
+    }
+
+
+def provenance_case_ids(args: argparse.Namespace) -> tuple[str, ...]:
+    """Return each input identity selected by the finite list or matrix once."""
+    if args.case_ids is not None:
+        return tuple(dict.fromkeys(args.case_ids))
+    return tuple(
+        dict.fromkeys(
+            case_id
+            for workload in args.workloads
+            for batch_size in args.batch_sizes
+            for case_id in workload_case_ids(workload, batch_size)
+        )
+    )
+
+
+def input_provenance(
+    manifest_path: Path,
+    case_ids: Sequence[str],
+    cases: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build archival manifest/input digests outside all measured intervals."""
+    manifest_record = provenance_file_record(manifest_path, "manifest")
+    selected_inputs = []
+    for case_id in case_ids:
+        case = cases.get(case_id)
+        if case is None:
+            raise BenchmarkError(
+                f"selected case {case_id!r} is absent from the manifest"
+            )
+        input_path = canonical_case_input_path(manifest_path, case)
+        selected_inputs.append(
+            {
+                "case_id": case_id,
+                "manifest_input": case["input"],
+                **provenance_file_record(input_path, f"input for case {case_id}"),
+            }
+        )
+    return {
+        "manifest": manifest_record,
+        "selected_inputs": selected_inputs,
+        "hashing_scope": (
+            "SHA-256 provenance only; computed before benchmark cells and excluded "
+            "from planning_ms and all sweep timings"
+        ),
+    }
+
+
+def finite_case_plan(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    case_ids: tuple[str, ...],
+    batch_cap: int,
+) -> tuple[ao_grouping.AOGroupingPlan, float]:
+    """Plan one finite list and account for input inspection and AO analysis."""
+    started = time.perf_counter_ns()
+    basis_sha256 = None
+    counts: dict[str, int] | None = None
+    if args.ao_grouping == "exact-ao":
+        if public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB:
+            raise BenchmarkError("exact-AO grouping requires a GFN2 manifest")
+        basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
+            REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
+        )
+        counts = {
+            case_id: ao_grouping.count_gfn2_aos(
+                case_atomic_numbers(args.manifest, manifest, cases[case_id]),
+                basis_counts,
+            )
+            for case_id in case_ids
+        }
+    plan = ao_grouping.make_plan(
+        case_ids,
+        batch_cap,
+        strategy=args.ao_grouping,
+        ao_counts_by_case_id=counts,
+        basis_sha256=basis_sha256,
+    )
+    planning_ms = (time.perf_counter_ns() - started) * 1.0e-6
+    return plan, planning_ms
+
+
+def _max_abs_error(actual: object, expected: object) -> float | None:
+    """Return a finite vector error, or ``None`` when shape/data are unusable."""
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            return None
+        values = list(zip(actual, expected, strict=True))
+    else:
+        values = [(actual, expected)]
+    errors = []
+    for actual_value, expected_value in values:
+        try:
+            actual_float = float(actual_value)
+            expected_float = float(expected_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(actual_float) or not math.isfinite(expected_float):
+            return None
+        errors.append(abs(actual_float - expected_float))
+    return max(errors, default=0.0)
+
+
+def finite_case_correctness(
+    case: dict[str, Any],
+    expected: dict[str, Any],
+    result: dict[str, Any],
+    manifest: dict[str, Any],
+    property_name: str,
+) -> dict[str, Any]:
+    """Compare available per-ID outputs with the pinned public conformance oracle."""
+    comparisons = {
+        "energy_hartree": ("energy_hartree", "energy"),
+        "forces_hartree_per_bohr": (
+            "forces_hartree_per_bohr",
+            "forces",
+        ),
+        "atomic_charges_e": ("partial_charges_e", "charges"),
+        "point_charge_forces_hartree_per_bohr": (
+            "point_charge_forces_hartree_per_bohr",
+            "point_charge_forces",
+        ),
+    }
+    tolerances = manifest.get("tolerances", {})
+    errors: dict[str, float | None] = {}
+    skipped: list[str] = []
+    passed = (
+        result["status"] == public_api.XTBLOOM_STATUS_SUCCESS
+        and result["scc_converged"] == 1
+    )
+    for key in (
+        "energy_hartree",
+        "forces_hartree_per_bohr",
+        "atomic_charges_e",
+        "point_charge_forces_hartree_per_bohr",
+    ):
+        value = result.get(key)
+        if value is None:
+            continue
+        values = value if isinstance(value, list) else [value]
+        if any(not math.isfinite(float(component)) for component in values):
+            passed = False
+    diagnostic_only = case.get("oracle_role") == "diagnostic-unbackgrounded-charged"
+    oracle_properties = case.get("xtbloom_oracle_properties")
+    for actual_key, (expected_key, tolerance_key) in comparisons.items():
+        requested = actual_key == "energy_hartree" or actual_key == "atomic_charges_e"
+        requested = requested or (
+            property_name == "force"
+            and actual_key
+            in {
+                "forces_hartree_per_bohr",
+                "point_charge_forces_hartree_per_bohr",
+            }
+        )
+        if not requested or expected_key not in expected:
+            continue
+        if diagnostic_only or (
+            oracle_properties is not None and expected_key not in oracle_properties
+        ):
+            skipped.append(expected_key)
+            continue
+        actual_value = result.get(actual_key)
+        error = _max_abs_error(actual_value, expected[expected_key])
+        errors[expected_key] = error
+        tolerance = case.get("tolerances", {}).get(expected_key)
+        if tolerance is None:
+            tolerance = tolerances[tolerance_key]["atol"]
+        if error is None or error > float(tolerance):
+            passed = False
+
+    if diagnostic_only:
+        reference_validation = "diagnostic-only oracle; finite status checked"
+    elif errors:
+        reference_validation = "committed independent conformance golden"
+    else:
+        reference_validation = "no applicable independent reference property"
+    return {
+        "status": "pass" if passed else "fail",
+        "reference_validation": reference_validation,
+        "max_abs_errors": errors,
+        "skipped_oracle_properties": skipped,
+    }
+
+
+def finite_sweep_outcome(
+    sweep_index: int, results: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """Retain per-ID convergence and correctness for one measured sweep."""
+    case_results = []
+    successful_ids = []
+    failed_system_ids = []
+    correctness_failure_ids = []
+    for result in results:
+        case_id = result["case_id"]
+        system_failed = (
+            result["status"] != public_api.XTBLOOM_STATUS_SUCCESS
+            or result["scc_converged"] != 1
+        )
+        correctness = result["correctness"]
+        if system_failed:
+            failed_system_ids.append(case_id)
+        else:
+            successful_ids.append(case_id)
+        if correctness["status"] != "pass":
+            correctness_failure_ids.append(case_id)
+        case_results.append(
+            {
+                "case_id": case_id,
+                "original_index": result["original_index"],
+                "status": result["status"],
+                "scc_converged": result["scc_converged"],
+                "scc_iterations": result["scc_iterations"],
+                "correctness": correctness,
+            }
+        )
+    correctness_status = (
+        "fail" if failed_system_ids or correctness_failure_ids else "pass"
+    )
+    return {
+        "sweep_index": sweep_index,
+        "case_results": case_results,
+        "correctness": {
+            "status": correctness_status,
+            "case_count": len(case_results),
+            "successful_system_ids": successful_ids,
+            "failed_system_ids": failed_system_ids,
+            "correctness_failure_ids": correctness_failure_ids,
+        },
+    }
+
+
+def benchmark_finite_xtbloom_cell(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    plan: ao_grouping.AOGroupingPlan,
+    planning_ms: float,
+    property_name: str,
+) -> dict[str, Any]:
+    """Measure complete strict-FRESH host-descriptor sweeps over planned batches."""
+    cell = Cell(
+        "xtbloom",
+        args.backends[0],
+        "host",
+        "finite-list",
+        property_name,
+        plan.max_batch_size,
+        plan.original_case_ids,
+    )
+    row = base_row(cell)
+    row.update(
+        {
+            "availability": "available",
+            "ao_grouping": plan.strategy,
+            "plan_sha256": plan.plan_sha256,
+            "planning_ms": planning_ms,
+            "total_systems": len(plan.original_case_ids),
+            "batch_count": len(plan.batches),
+            "actual_batch_sizes": [len(batch.case_ids) for batch in plan.batches],
+            "planned_case_order": list(plan.ordered_case_ids),
+            "canonical_index_by_case_id": plan.canonical_index_by_case_id,
+            "basis_sha256": plan.basis_sha256,
+            "ao_count_by_case_id": dict(plan.ao_counts_by_case_id),
+            "ao_batches": [
+                {
+                    "ao_count": batch.ao_count,
+                    "case_ids": list(batch.case_ids),
+                    "canonical_indices": list(batch.canonical_indices),
+                    "size": len(batch.case_ids),
+                }
+                for batch in plan.batches
+            ],
+            "grouping_contract": {
+                "key": "exact GFN2 spatial AO count"
+                if plan.strategy == "exact-ao"
+                else None,
+                "tie_break": "canonical input index",
+                "spin_policy": (
+                    "whole systems retain manifest spin metadata; "
+                    "spin is not a grouping key"
+                ),
+                "outcome_policy": (
+                    "planning does not read SCC results or convergence outcomes"
+                ),
+                "tail_policy": (
+                    "retain a final batch smaller than the cap; never pad or drop cases"
+                ),
+                "batch_size_cap": plan.max_batch_size,
+            },
+        }
+    )
+    sweep_samples: list[dict[str, Any]] = []
+    warmup_samples: list[dict[str, Any]] = []
+    memory_snapshots: list[dict[str, Any]] = []
+    measurement_sweeps: list[dict[str, Any]] = []
+    row["measurement_sweeps"] = measurement_sweeps
+    final_results: tuple[dict[str, Any], ...] = ()
+    rss_before = current_rss_bytes()
+
+    def run_sweep(
+        capture_results: bool,
+    ) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+        sweep_start = time.perf_counter_ns()
+        preparation_ms = 0.0
+        compute_ms = 0.0
+        publication_ms = 0.0
+        batch_outputs: list[dict[str, Any]] = []
+        batch_case_correctness: dict[str, Any] = {}
+        sweep_memory: list[dict[str, Any]] = []
+        for batch in plan.batches:
+            prep_start = time.perf_counter_ns()
+            batch_cell = Cell(
+                cell.engine,
+                cell.backend,
+                cell.memory_mode,
+                cell.workload,
+                cell.property,
+                plan.max_batch_size,
+                batch.case_ids,
+            )
+            case_sequence = tuple(cases[case_id] for case_id in batch.case_ids)
+            adapter = XTBloomAdapter(
+                args.library,
+                args.manifest,
+                manifest,
+                case_sequence,
+                batch_cell,
+                args.device_id,
+                args.cpu_threads,
+                strict_fresh=True,
+                request_charges=True,
+                allow_system_failures=True,
+            )
+            preparation_ms += (time.perf_counter_ns() - prep_start) * 1.0e-6
+            try:
+                compute_ms += timed_invoke(adapter)
+                publish_start = time.perf_counter_ns()
+                output = adapter.results()
+                required_outputs = ["atomic_charges_e"]
+                if property_name == "force":
+                    required_outputs.append("forces_hartree_per_bohr")
+                    if adapter.storage.point_charge_values:
+                        required_outputs.append("point_charge_forces_hartree_per_bohr")
+                batch_outputs.extend(
+                    ao_grouping.split_batch_results(
+                        batch.case_ids,
+                        adapter.storage.atom_offsets,
+                        adapter.storage.point_charge_offsets,
+                        output,
+                        tuple(required_outputs),
+                    )
+                )
+                for case_slice in adapter.storage.slices:
+                    batch_case_correctness[case_slice.case["id"]] = (
+                        case_slice.case,
+                        case_slice.expected,
+                    )
+                publication_ms += (time.perf_counter_ns() - publish_start) * 1.0e-6
+                sweep_memory.append(
+                    {
+                        "case_ids": list(batch.case_ids),
+                        "ao_count": batch.ao_count,
+                        "snapshot": adapter.memory_snapshot(),
+                    }
+                )
+            finally:
+                adapter.close()
+
+        scatter_start = time.perf_counter_ns()
+        restored = ao_grouping.scatter_case_results(plan, batch_outputs)
+        scatter_ms = (time.perf_counter_ns() - scatter_start) * 1.0e-6
+        sweep_ms = (time.perf_counter_ns() - sweep_start) * 1.0e-6
+        correctness_validation_ms = 0.0
+        if capture_results:
+            correctness_start = time.perf_counter_ns()
+            for result in restored:
+                case, expected = batch_case_correctness[result["case_id"]]
+                result["correctness"] = finite_case_correctness(
+                    case, expected, result, manifest, property_name
+                )
+            correctness_validation_ms = (
+                time.perf_counter_ns() - correctness_start
+            ) * 1.0e-6
+        return (
+            {
+                "preparation_ms": preparation_ms,
+                "compute_ms": compute_ms,
+                "publication_ms": publication_ms,
+                "scatter_ms": scatter_ms,
+                "correctness_validation_ms": correctness_validation_ms,
+                "end_to_end_ms": sweep_ms,
+                "memory_snapshots": sweep_memory,
+            },
+            restored if capture_results else (),
+        )
+
+    try:
+        for _ in range(args.warmups):
+            timing, _ = run_sweep(capture_results=False)
+            timing.pop("memory_snapshots", None)
+            warmup_samples.append(timing)
+        for sweep_index in range(1, args.repetitions + 1):
+            timing, results = run_sweep(capture_results=True)
+            sweep_memory = timing.pop("memory_snapshots", [])
+            memory_snapshots.extend(sweep_memory)
+            sweep_samples.append(timing)
+            final_results = results
+            sweep_outcome = finite_sweep_outcome(sweep_index, results)
+            sweep_outcome["memory_snapshots"] = sweep_memory
+            measurement_sweeps.append(sweep_outcome)
+            row["case_results"] = list(final_results)
+    except public_api.BackendUnavailable as exc:
+        row.update({"availability": "unavailable", "unavailable_reason": str(exc)})
+        return row
+    except (
+        BenchmarkError,
+        ao_grouping.AOGroupingError,
+        conformance.ConformanceError,
+        OSError,
+    ) as exc:
+        row.update({"availability": "error", "error": str(exc)})
+        return row
+
+    # Keep output slices from the final measured sweep, but retain context-held
+    # memory snapshots from every measured sweep before context destruction.
+    row["case_results"] = list(final_results)
+    row["case_results_scope"] = "full output slices from the final measured sweep"
+    row["memory"] = {
+        "host_rss_before_setup_bytes": rss_before,
+        "host_peak_rss_bytes": max(
+            (entry["snapshot"]["host_process_hwm_bytes"] for entry in memory_snapshots),
+            default=process_hwm_bytes(),
+        ),
+        "batch_context_snapshots": memory_snapshots,
+        "scope": (
+            "all measured sweeps, one batch context at a time; "
+            "samples taken before context destruction"
+        ),
+    }
+    row["timing"] = {
+        "warmups": warmup_samples,
+        "samples": sweep_samples,
+        "preparation_ms_median": statistics.median(
+            item["preparation_ms"] for item in sweep_samples
+        ),
+        "compute_ms_median": statistics.median(
+            item["compute_ms"] for item in sweep_samples
+        ),
+        "publication_ms_median": statistics.median(
+            item["publication_ms"] for item in sweep_samples
+        ),
+        "scatter_ms_median": statistics.median(
+            item["scatter_ms"] for item in sweep_samples
+        ),
+        "correctness_validation_ms_median": statistics.median(
+            item["correctness_validation_ms"] for item in sweep_samples
+        ),
+        "end_to_end_ms": timing_summary(
+            [item["end_to_end_ms"] for item in sweep_samples],
+            len(plan.original_case_ids),
+        ),
+        "one_shot_total_ms": planning_ms + sweep_samples[0]["end_to_end_ms"],
+        "reusable_plan_mean_total_ms_per_sweep": (
+            planning_ms / args.repetitions
+            + statistics.mean(item["end_to_end_ms"] for item in sweep_samples)
+        ),
+        "plan_amortization": (
+            "plan_ms / number_of_reuses is added per sweep only when the same ordered "
+            "case IDs, input bytes, GFN2 parameter hash, and batch cap remain valid"
+        ),
+        "scope": (
+            "end-to-end includes per-batch input assembly, context and descriptor "
+            "setup, synchronous strict-FRESH compute with CUDA completion sync "
+            "when applicable, output publication, context-held memory sampling, "
+            "context destruction, and canonical scatter; oracle comparisons are "
+            "reported separately"
+        ),
+    }
+    correctness_failures = {
+        case_id
+        for sweep in measurement_sweeps
+        for case_id in sweep["correctness"]["correctness_failure_ids"]
+    }
+    failed_systems = {
+        case_id
+        for sweep in measurement_sweeps
+        for case_id in sweep["correctness"]["failed_system_ids"]
+    }
+    successful_every_sweep = set(plan.original_case_ids)
+    for sweep in measurement_sweeps:
+        successful_every_sweep.intersection_update(
+            sweep["correctness"]["successful_system_ids"]
+        )
+    ordered_correctness_failures = [
+        case_id for case_id in plan.original_case_ids if case_id in correctness_failures
+    ]
+    ordered_failed_systems = [
+        case_id for case_id in plan.original_case_ids if case_id in failed_systems
+    ]
+    row["correctness"] = {
+        "status": (
+            "fail"
+            if any(
+                sweep["correctness"]["status"] != "pass" for sweep in measurement_sweeps
+            )
+            else "pass"
+        ),
+        "reference": "committed independent conformance goldens where applicable",
+        "case_count": len(final_results),
+        "sweep_count": len(measurement_sweeps),
+        "successful_system_ids": [
+            case_id
+            for case_id in plan.original_case_ids
+            if case_id in successful_every_sweep
+        ],
+        "failed_system_ids": ordered_failed_systems,
+        "correctness_failure_ids": ordered_correctness_failures,
+    }
+    return row
 
 
 def point_source_atomic_numbers(
@@ -1042,7 +1680,6 @@ def dxtb_cells(args: argparse.Namespace) -> Iterable[Cell]:
 
 def base_row(cell: Cell) -> dict[str, Any]:
     """Create stable identity fields shared by available and unavailable rows."""
-    identifiers = workload_case_ids(cell.workload, cell.batch_size)
     row = {
         "engine": cell.engine,
         "backend": cell.backend,
@@ -1051,9 +1688,14 @@ def base_row(cell: Cell) -> dict[str, Any]:
         "property": cell.property,
         "batch_size": cell.batch_size,
     }
-    if cell.workload in WORKLOAD_CASES:
+    if cell.case_ids is not None:
+        row["case_ids"] = list(cell.case_ids)
+        row["case_count"] = len(cell.case_ids)
+    elif cell.workload in WORKLOAD_CASES:
+        identifiers = workload_case_ids(cell.workload, cell.batch_size)
         row["case_id"] = identifiers[0]
     else:
+        identifiers = workload_case_ids(cell.workload, cell.batch_size)
         row["case_ids"] = list(identifiers)
     return row
 
@@ -1246,12 +1888,45 @@ def xtbloom_cells(args: argparse.Namespace) -> Iterable[Cell]:
                     )
 
 
+def json_safe_value(value: object) -> object:
+    """Encode non-finite floats as tagged objects accepted by strict JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        marker = (
+            "NaN" if math.isnan(value) else "Infinity" if value > 0 else "-Infinity"
+        )
+        return {NONFINITE_JSON_TAG: marker}
+    if isinstance(value, dict):
+        return {key: json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe_value(item) for item in value]
+    return value
+
+
+def restore_json_safe_value(value: dict[str, object]) -> object:
+    """Decode a tagged non-finite float object created by :func:`json_safe_value`."""
+    if len(value) == 1 and value.get(NONFINITE_JSON_TAG) in NONFINITE_JSON_VALUES:
+        marker = value[NONFINITE_JSON_TAG]
+        if marker == "NaN":
+            return float("nan")
+        if marker == "Infinity":
+            return float("inf")
+        return float("-inf")
+    return value
+
+
 def write_json(path: Path, document: dict[str, Any]) -> None:
-    """Atomically replace one reviewable JSON artifact."""
+    """Atomically replace one standards-compliant JSON artifact."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
-        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(
+            json_safe_value(document),
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     temporary.replace(path)
 
@@ -1281,6 +1956,17 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "max_abs_point_charge_force_error_hartree_per_bohr",
         "warm_samples_ms",
         "memory_json",
+        "ao_grouping",
+        "plan_sha256",
+        "planning_ms",
+        "batch_count",
+        "preparation_ms_median",
+        "compute_ms_median",
+        "publication_ms_median",
+        "scatter_ms_median",
+        "end_to_end_median_ms",
+        "end_to_end_samples_ms",
+        "one_shot_total_ms",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -1290,6 +1976,8 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         for row in rows:
             warm = row.get("warm", {})
             correct = row.get("correctness", {})
+            finite_timing = row.get("timing", {})
+            end_to_end = finite_timing.get("end_to_end_ms", {})
             writer.writerow(
                 {
                     "engine": row["engine"],
@@ -1298,7 +1986,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     "workload": row["workload"],
                     "case_id": row.get("case_id"),
                     "case_ids": (
-                        json.dumps(row["case_ids"]) if "case_ids" in row else None
+                        json.dumps(json_safe_value(row["case_ids"]), allow_nan=False)
+                        if "case_ids" in row
+                        else None
                     ),
                     "property": row["property"],
                     "batch_size": row["batch_size"],
@@ -1320,8 +2010,28 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     "max_abs_point_charge_force_error_hartree_per_bohr": correct.get(
                         "max_abs_point_charge_force_error_hartree_per_bohr"
                     ),
-                    "warm_samples_ms": json.dumps(warm.get("samples_ms")),
-                    "memory_json": json.dumps(row.get("memory"), sort_keys=True),
+                    "warm_samples_ms": json.dumps(
+                        json_safe_value(warm.get("samples_ms")), allow_nan=False
+                    ),
+                    "memory_json": json.dumps(
+                        json_safe_value(row.get("memory")),
+                        allow_nan=False,
+                        sort_keys=True,
+                    ),
+                    "ao_grouping": row.get("ao_grouping"),
+                    "plan_sha256": row.get("plan_sha256"),
+                    "planning_ms": row.get("planning_ms"),
+                    "batch_count": row.get("batch_count"),
+                    "preparation_ms_median": finite_timing.get("preparation_ms_median"),
+                    "compute_ms_median": finite_timing.get("compute_ms_median"),
+                    "publication_ms_median": finite_timing.get("publication_ms_median"),
+                    "scatter_ms_median": finite_timing.get("scatter_ms_median"),
+                    "end_to_end_median_ms": end_to_end.get("median_ms"),
+                    "end_to_end_samples_ms": json.dumps(
+                        json_safe_value(end_to_end.get("samples_ms")),
+                        allow_nan=False,
+                    ),
+                    "one_shot_total_ms": finite_timing.get("one_shot_total_ms"),
                 }
             )
     temporary.replace(path)
@@ -1371,6 +2081,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch-sizes",
         type=lambda value: parse_csv_values(value, int),
         default=DEFAULT_BATCH_SIZES,
+    )
+    finite_cases = parser.add_mutually_exclusive_group()
+    finite_cases.add_argument(
+        "--case-ids",
+        type=lambda value: parse_csv_values(value),
+        help="finite manifest case IDs in canonical input order",
+    )
+    finite_cases.add_argument(
+        "--case-ids-file",
+        type=Path,
+        help="UTF-8 file with one manifest case ID per line",
+    )
+    parser.add_argument(
+        "--ao-grouping",
+        choices=("original", "exact-ao"),
+        default="original",
+        help="finite-list strategy; exact-ao is opt-in and original remains default",
     )
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repetitions", type=int, default=5)
@@ -1429,6 +2156,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dxtb-cpu-threads", type=int, default=1)
     parser.add_argument("--fail-on-correctness", action="store_true")
+    parser.add_argument(
+        "--require-available",
+        action="store_true",
+        help="exit nonzero if any requested benchmark coordinate is unavailable",
+    )
     return parser
 
 
@@ -1455,20 +2187,87 @@ def validate_args(args: argparse.Namespace) -> None:
         raise BenchmarkError("batch sizes must be positive")
     if args.dxtb_cpu_threads <= 0:
         raise BenchmarkError("dxtb CPU threads must be positive")
+    finite_list_requested = args.case_ids is not None or args.case_ids_file is not None
+    if not finite_list_requested and args.ao_grouping != "original":
+        raise BenchmarkError("--ao-grouping requires --case-ids or --case-ids-file")
+    if finite_list_requested:
+        if args.case_ids is not None:
+            if not args.case_ids:
+                raise BenchmarkError("finite case list must not be empty")
+            if len(set(args.case_ids)) != len(args.case_ids):
+                raise BenchmarkError("finite case IDs must be unique")
+        if args.engines != ("xtbloom",):
+            raise BenchmarkError("finite-list grouping requires --engines xtbloom")
+        if len(args.backends) != 1:
+            raise BenchmarkError(
+                "finite-list grouping requires exactly one backend: cpu or cuda"
+            )
+        if args.backends == ("cuda",) and args.cuda_memory_modes != ("host",):
+            raise BenchmarkError("finite-list CUDA grouping requires host descriptors")
+
+
+def read_case_id_file(path: Path) -> tuple[str, ...]:
+    """Read a finite ordered manifest selection, ignoring blank and comment lines."""
+    try:
+        return tuple(
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    except OSError as exc:
+        raise BenchmarkError(f"cannot read finite case ID file {path}: {exc}") from exc
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run requested cells and always retain both machine-readable artifacts."""
     args = build_parser().parse_args(argv)
     try:
+        if args.case_ids_file is not None:
+            args.case_ids = read_case_id_file(args.case_ids_file)
         validate_args(args)
         manifest = conformance.load_json(args.manifest)
-        cases = {
-            case["id"]: case for case in conformance.selected_cases(manifest, None)
-        }
+        manifest_cases = conformance.selected_cases(manifest, None)
+        cases: dict[str, dict[str, Any]] = {}
+        for case in manifest_cases:
+            case_id = case["id"]
+            if case_id in cases:
+                raise BenchmarkError(f"manifest contains duplicate case ID {case_id!r}")
+            cases[case_id] = case
+        if args.case_ids is not None:
+            missing = [case_id for case_id in args.case_ids if case_id not in cases]
+            if missing:
+                raise BenchmarkError(
+                    "finite case IDs are absent from the manifest: "
+                    + ", ".join(missing)
+                )
         metadata = environment_metadata(args)
+        provenance = input_provenance(args.manifest, provenance_case_ids(args), cases)
         rows: list[dict[str, Any]] = []
-        if "xtbloom" in args.engines:
+        if args.case_ids is not None:
+            for property_name in args.properties:
+                for batch_cap in args.batch_sizes:
+                    plan, planning_ms = finite_case_plan(
+                        args, manifest, cases, args.case_ids, batch_cap
+                    )
+                    print(  # noqa: T201 - preserve benchmark CLI progress output
+                        "RUN xtbloom "
+                        f"{args.backends[0]}/host finite-list {plan.strategy} "
+                        f"{property_name} cap={batch_cap} systems={len(args.case_ids)}",
+                        flush=True,
+                    )
+                    row = benchmark_finite_xtbloom_cell(
+                        args,
+                        manifest,
+                        cases,
+                        plan,
+                        planning_ms,
+                        property_name,
+                    )
+                    rows.append(row)
+                    print(  # noqa: T201 - preserve benchmark CLI progress output
+                        f"  {row['availability']}", flush=True
+                    )
+        if args.case_ids is None and "xtbloom" in args.engines:
             for cell in xtbloom_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1485,7 +2284,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
-        if "xtb" in args.engines:
+        if args.case_ids is None and "xtb" in args.engines:
             for cell in xtb_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1502,7 +2301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
-        if "tblite" in args.engines:
+        if args.case_ids is None and "tblite" in args.engines:
             for cell in tblite_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1519,7 +2318,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
-        if "dxtb" in args.engines:
+        if args.case_ids is None and "dxtb" in args.engines:
             for cell in dxtb_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1539,8 +2338,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         document = {
             "schema_version": SCHEMA_VERSION,
             "metadata": metadata,
+            "provenance": provenance,
+            "nonfinite_json_encoding": {
+                "tag": NONFINITE_JSON_TAG,
+                "values": list(NONFINITE_JSON_VALUES),
+            },
             "protocol": {
                 "batch_sizes": list(args.batch_sizes),
+                "finite_case_ids": (
+                    list(args.case_ids) if args.case_ids is not None else None
+                ),
+                "ao_grouping": args.ao_grouping,
+                "strict_fresh_host_descriptors": args.case_ids is not None,
                 "properties": list(args.properties),
                 "workloads": {
                     name: (
@@ -1553,6 +2362,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
                 "warmups": args.warmups,
                 "repetitions": args.repetitions,
+                "fail_on_correctness": args.fail_on_correctness,
+                "require_available": args.require_available,
                 "units": {"latency": "ms", "throughput": "systems/s"},
             },
             "rows": rows,
@@ -1566,10 +2377,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         failed = [
             row for row in rows if row.get("correctness", {}).get("status") == "fail"
         ]
+        unavailable = [row for row in rows if row["availability"] == "unavailable"]
         if errors:
             return 1
         if args.fail_on_correctness and failed:
             return 2
+        if args.require_available and unavailable:
+            return 3
         return 0
     except (BenchmarkError, conformance.ConformanceError) as exc:
         print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
