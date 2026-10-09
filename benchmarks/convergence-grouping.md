@@ -51,9 +51,13 @@ The policy is static and has no fitting step. If later work fits a policy, it
 must use a separate `purpose: calibration-only` document containing only the
 case/group IDs and scalar `scc_iterations`, `scc_converged`, and `status`
 outcomes. `validate_calibration_input` checks each case/group pair against the
-frozen calibration partition before accepting those outcomes; it rejects
-holdout group IDs and unknown fields, so nested arbitrary labels cannot hide
-holdout identities. The scheduling parser never accepts calibration outcomes.
+frozen calibration partition before accepting those outcomes. Callers must
+also supply `expected_freeze_plan_sha256` from an independently stored prior
+checkpoint; the validator checks the frozen document's canonical logical hash
+against that pin before inspecting outcome records. Do not obtain the pin from
+the same mutable freeze-plan file. The validator rejects holdout group IDs and
+unknown fields, so nested arbitrary labels cannot hide holdout identities. The
+scheduling parser never accepts calibration outcomes.
 
 ## Frozen artifacts
 
@@ -65,9 +69,11 @@ python3 -m benchmarks.convergence_grouping freeze-plan \
   --output /path/to/issue-514-freeze-plan.json
 ```
 
-The command refuses to overwrite an existing plan. It writes the complete
-policy and split plus SHA-256 identities for the policy, split, normalized
-input manifest, and whole freeze plan. The split uses the fixed seed
+The command creates the output with exclusive `open("x")`, so a path created
+concurrently is rejected without replacing its bytes; a collision returns
+status 1. Use `--output -` to write the plan to standard output. It writes the
+complete policy and split plus SHA-256 identities for the policy, split,
+normalized input manifest, and whole freeze plan. The split uses the fixed seed
 `xtbloom-issue-514-fixed-group-split-v1-2026-10-09`, ranks group IDs by
 SHA-256, and assigns `ceil(group_count / 5)` groups to holdout while retaining
 at least one calibration group. Input row order does not affect these hashes.
@@ -148,7 +154,12 @@ Legacy non-frozen CSV columns and sweep timing fields remain unchanged; the
 additional binding/planning-inclusive fields require the opt-in freeze flags.
 Every standalone frozen run explicitly has `claim_eligible=false`, even if its
 separate `independent_reference_qualified` science check passes. A single
-strategy's output is not the complete balanced paired holdout decision.
+strategy's output is not the complete balanced paired holdout decision. The
+frozen CSV also exports the structured `claim_eligible`,
+`claim_eligibility_scope`, and `independent_reference_qualified` fields using
+JSON boolean/null values for the two qualification flags and text for the
+scope; an independent-reference value of `true` leaves the standalone run's
+`claim_eligible` value `false`.
 
 ## Prospective holdout matrix
 

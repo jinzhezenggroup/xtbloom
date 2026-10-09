@@ -261,6 +261,9 @@ class FrozenRunnerTests(unittest.TestCase):
             fields = next(csv.reader(handle))
         self.assertNotIn("convergence_binding_json", fields)
         self.assertNotIn("planning_inclusive_end_to_end_median_ms", fields)
+        self.assertNotIn("claim_eligible", fields)
+        self.assertNotIn("claim_eligibility_scope", fields)
+        self.assertNotIn("independent_reference_qualified", fields)
 
     def test_finite_row_restores_failures_and_retains_binding_in_csv(self) -> None:
         """Publish all failed slices and keep planning-inclusive provenance."""
@@ -384,6 +387,11 @@ class FrozenRunnerTests(unittest.TestCase):
             json.loads(csv_row["risk_band_by_case_id_json"]),
             row["risk_band_by_case_id"],
         )
+        self.assertIs(json.loads(csv_row["claim_eligible"]), False)
+        self.assertEqual(
+            csv_row["claim_eligibility_scope"], row["claim_eligibility_scope"]
+        )
+        self.assertIs(json.loads(csv_row["independent_reference_qualified"]), False)
         failed_case_id = None
         self.args.repetitions = 1
         with (
@@ -419,6 +427,17 @@ class FrozenRunnerTests(unittest.TestCase):
         self.assertAlmostEqual(
             qualified["timing"]["planning_inclusive_end_to_end_ms"]["median_ms"],
             complete_before_cleanup + 4.0,
+        )
+        run.write_csv(csv_path, [qualified])
+        with csv_path.open(newline="", encoding="utf-8") as handle:
+            qualified_csv_row = next(csv.DictReader(handle))
+        self.assertIs(json.loads(qualified_csv_row["claim_eligible"]), False)
+        self.assertIs(
+            json.loads(qualified_csv_row["independent_reference_qualified"]), True
+        )
+        self.assertEqual(
+            qualified_csv_row["claim_eligibility_scope"],
+            qualified["claim_eligibility_scope"],
         )
 
     def test_metadata_parsing_uses_the_verified_input_snapshot(self) -> None:

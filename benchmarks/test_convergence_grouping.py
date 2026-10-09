@@ -9,6 +9,8 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from typing import IO
+from unittest.mock import patch
 
 from benchmarks import convergence_grouping as grouping
 
@@ -333,6 +335,7 @@ class FrozenSplitTests(unittest.TestCase):
                 ],
             },
             plan,
+            expected_freeze_plan_sha256=plan["freeze_plan_sha256"],
         )
         self.assertEqual(result[0]["case_id"], case_id)
 
@@ -360,6 +363,7 @@ class FrozenSplitTests(unittest.TestCase):
                     ],
                 },
                 plan,
+                expected_freeze_plan_sha256=plan["freeze_plan_sha256"],
             )
 
     def test_calibration_input_rejects_wrong_purpose_unknown_case_and_bad_outcomes(
@@ -389,31 +393,52 @@ class FrozenSplitTests(unittest.TestCase):
         with self.assertRaisesRegex(
             grouping.ConvergenceGroupingError, "calibration-only"
         ):
-            grouping.validate_calibration_input(wrong_purpose, plan)
+            grouping.validate_calibration_input(
+                wrong_purpose,
+                plan,
+                expected_freeze_plan_sha256=plan["freeze_plan_sha256"],
+            )
         mismatched = json.loads(json.dumps(valid))
         mismatched["records"][0]["case_id"] = "not-in-frozen-input"
         with self.assertRaisesRegex(
             grouping.ConvergenceGroupingError, "frozen group mapping"
         ):
-            grouping.validate_calibration_input(mismatched, plan)
+            grouping.validate_calibration_input(
+                mismatched,
+                plan,
+                expected_freeze_plan_sha256=plan["freeze_plan_sha256"],
+            )
         nonfinite = json.loads(json.dumps(valid))
         nonfinite["records"][0]["scc_iterations"] = math.nan
         with self.assertRaisesRegex(
             grouping.ConvergenceGroupingError, "scc_iterations"
         ):
-            grouping.validate_calibration_input(nonfinite, plan)
+            grouping.validate_calibration_input(
+                nonfinite,
+                plan,
+                expected_freeze_plan_sha256=plan["freeze_plan_sha256"],
+            )
         invalid_boolean = json.loads(json.dumps(valid))
         invalid_boolean["records"][0]["scc_converged"] = 1
         with self.assertRaisesRegex(grouping.ConvergenceGroupingError, "scc_converged"):
-            grouping.validate_calibration_input(invalid_boolean, plan)
+            grouping.validate_calibration_input(
+                invalid_boolean,
+                plan,
+                expected_freeze_plan_sha256=plan["freeze_plan_sha256"],
+            )
         hidden_group = json.loads(json.dumps(valid))
         hidden_group["records"][0]["holdout_group_id"] = "holdout-family"
         with self.assertRaisesRegex(grouping.ConvergenceGroupingError, "unknown"):
-            grouping.validate_calibration_input(hidden_group, plan)
+            grouping.validate_calibration_input(
+                hidden_group,
+                plan,
+                expected_freeze_plan_sha256=plan["freeze_plan_sha256"],
+            )
 
     def test_calibration_guard_rejects_tampered_serialized_hashes(self) -> None:
         """Verify frozen hashes before trusting a calibration partition."""
         plan = grouping.build_freeze_plan(_manifest())
+        freeze_pin = plan["freeze_plan_sha256"]
         plan["split"]["groups"][0]["partition"] = "holdout"
         calibration_input = {
             "schema_version": 1,
@@ -428,8 +453,104 @@ class FrozenSplitTests(unittest.TestCase):
                 }
             ],
         }
-        with self.assertRaisesRegex(grouping.ConvergenceGroupingError, "split hash"):
-            grouping.validate_calibration_input(calibration_input, plan)
+        with self.assertRaisesRegex(
+            grouping.ConvergenceGroupingError, "freeze-plan hash"
+        ):
+            grouping.validate_calibration_input(
+                calibration_input,
+                plan,
+                expected_freeze_plan_sha256=freeze_pin,
+            )
+
+    def test_calibration_rejects_rehashed_split_tampering_against_external_pin(
+        self,
+    ) -> None:
+        """Reject a self-consistent rewrite that moves holdout into calibration."""
+        plan = grouping.build_freeze_plan(_manifest())
+        freeze_pin = plan["freeze_plan_sha256"]
+        tampered_plan = json.loads(json.dumps(plan))
+        groups = tampered_plan["split"]["groups"]
+        calibration_group = next(
+            group for group in groups if group["partition"] == "calibration"
+        )
+        holdout_group = next(
+            group for group in groups if group["partition"] == "holdout"
+        )
+        calibration_group["partition"] = "holdout"
+        holdout_group["partition"] = "calibration"
+        tampered_plan["split_sha256"] = grouping._sha256_json(tampered_plan["split"])
+        tampered_without_hash = {
+            key: value
+            for key, value in tampered_plan.items()
+            if key != "freeze_plan_sha256"
+        }
+        tampered_plan["freeze_plan_sha256"] = grouping._sha256_json(
+            tampered_without_hash
+        )
+        self.assertEqual(
+            grouping._sha256_json(tampered_plan["split"]),
+            tampered_plan["split_sha256"],
+        )
+        self.assertEqual(
+            grouping._sha256_json(tampered_without_hash),
+            tampered_plan["freeze_plan_sha256"],
+        )
+        calibration_input = {
+            "schema_version": 1,
+            "purpose": "calibration-only",
+            "records": [
+                {
+                    "case_id": holdout_group["case_ids"][0],
+                    "molecule_group_id": holdout_group["molecule_group_id"],
+                    "scc_iterations": 5,
+                    "scc_converged": False,
+                    "status": 5,
+                }
+            ],
+        }
+        with self.assertRaisesRegex(
+            grouping.ConvergenceGroupingError, "expected experiment identity"
+        ):
+            grouping.validate_calibration_input(
+                calibration_input,
+                tampered_plan,
+                expected_freeze_plan_sha256=freeze_pin,
+            )
+
+    def test_calibration_requires_a_valid_external_freeze_pin(self) -> None:
+        """Require a well-formed pin matching the frozen plan's logical digest."""
+        plan = grouping.build_freeze_plan(_manifest())
+        calibration_document = {
+            "schema_version": 1,
+            "purpose": "calibration-only",
+            "records": [
+                {
+                    "case_id": "alkane-a-conf-1",
+                    "molecule_group_id": "alkane-a",
+                    "scc_iterations": 5,
+                    "scc_converged": False,
+                    "status": 5,
+                }
+            ],
+        }
+        with self.assertRaises(TypeError):
+            grouping.validate_calibration_input(calibration_document, plan)
+        with self.assertRaisesRegex(
+            grouping.ConvergenceGroupingError, "expected experiment identity"
+        ):
+            grouping.validate_calibration_input(
+                calibration_document,
+                plan,
+                expected_freeze_plan_sha256="0" * 64,
+            )
+        with self.assertRaisesRegex(
+            grouping.ConvergenceGroupingError, "lowercase SHA-256"
+        ):
+            grouping.validate_calibration_input(
+                calibration_document,
+                plan,
+                expected_freeze_plan_sha256="A" * 64,
+            )
 
 
 class FreezePlanCliTests(unittest.TestCase):
@@ -446,43 +567,62 @@ class FreezePlanCliTests(unittest.TestCase):
         )
 
     def test_freeze_plan_cli_serializes_hashes_and_refuses_overwrite(self) -> None:
-        """Write preregistration hashes once without attaching outcomes."""
+        """Write once, preserve existing bytes, and support standard output."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = root / "input.json"
             output_path = root / "freeze-plan.json"
             manifest_path.write_text(json.dumps(_manifest()), encoding="utf-8")
-            self.assertEqual(
-                grouping.main(
-                    [
-                        "freeze-plan",
-                        "--manifest",
-                        str(manifest_path),
-                        "--output",
-                        str(output_path),
-                    ]
-                ),
-                0,
-            )
+            command = ["freeze-plan", "--manifest", str(manifest_path), "--output"]
+            self.assertEqual(grouping.main([*command, str(output_path)]), 0)
             plan = json.loads(output_path.read_text(encoding="utf-8"))
             for field in ("policy_sha256", "split_sha256", "input_identity_sha256"):
                 self.assertEqual(len(plan[field]), 64)
             self.assertNotIn("training_results", plan)
             self.assertNotIn("holdout_measurements", plan)
+            original_bytes = b"preserve this existing artifact\n"
+            output_path.write_bytes(original_bytes)
             with (
                 contextlib.redirect_stderr(io.StringIO()),
-                self.assertRaises(SystemExit) as error,
             ):
-                grouping.main(
-                    [
-                        "freeze-plan",
-                        "--manifest",
-                        str(manifest_path),
-                        "--output",
-                        str(output_path),
-                    ]
-                )
-            self.assertEqual(error.exception.code, 2)
+                self.assertEqual(grouping.main([*command, str(output_path)]), 1)
+            self.assertEqual(output_path.read_bytes(), original_bytes)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(grouping.main([*command, "-"]), 0)
+            self.assertEqual(json.loads(stdout.getvalue()), plan)
+
+    def test_freeze_plan_cli_preserves_file_created_during_exclusive_open(self) -> None:
+        """Keep a competing writer's bytes when exclusive creation loses a race."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "input.json"
+            output_path = root / "freeze-plan.json"
+            manifest_path.write_text(json.dumps(_manifest()), encoding="utf-8")
+            command = ["freeze-plan", "--manifest", str(manifest_path), "--output"]
+            competing_bytes = b"created by a competing writer\n"
+            original_open = Path.open
+
+            def competing_writer_open(
+                path: Path,
+                mode: str = "r",
+                *args: object,
+                **kwargs: object,
+            ) -> IO[str]:
+                """Create the competing file immediately before the CLI's open."""
+                if path == output_path and mode == "x":
+                    with original_open(path, "x", encoding="utf-8") as stream:
+                        stream.write(competing_bytes.decode("utf-8"))
+                    return original_open(path, mode, *args, **kwargs)
+                return original_open(path, mode, *args, **kwargs)
+
+            with (
+                patch.object(Path, "open", new=competing_writer_open),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                result = grouping.main([*command, str(output_path)])
+            self.assertEqual(result, 1)
+            self.assertEqual(output_path.read_bytes(), competing_bytes)
 
     def test_strict_json_loader_rejects_duplicate_keys_and_nan(self) -> None:
         """Reject duplicate object keys and nonstandard NaN tokens on read."""

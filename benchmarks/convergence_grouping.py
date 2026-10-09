@@ -120,6 +120,17 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
 
 
+def _validate_expected_sha256(value: object, identity: str) -> str:
+    """Require an externally pinned lowercase SHA-256 identity."""
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ConvergenceGroupingError(f"{identity} must be a lowercase SHA-256")
+    return value
+
+
 def ordered_case_ids_sha256(case_ids: tuple[str, ...] | list[str]) -> str:
     """Hash the complete ordered cohort independently of its grouping permutation.
 
@@ -496,17 +507,9 @@ def validate_freeze_plan(
     if not isinstance(frozen_plan, Mapping):
         raise ConvergenceGroupingError("frozen plan must be an object")
     if expected_freeze_plan_sha256 is not None:
-        if (
-            not isinstance(expected_freeze_plan_sha256, str)
-            or len(expected_freeze_plan_sha256) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in expected_freeze_plan_sha256
-            )
-        ):
-            raise ConvergenceGroupingError(
-                "expected freeze identity must be a lowercase SHA-256"
-            )
+        expected_freeze_plan_sha256 = _validate_expected_sha256(
+            expected_freeze_plan_sha256, "expected freeze identity"
+        )
         if frozen_plan.get("freeze_plan_sha256") != expected_freeze_plan_sha256:
             raise ConvergenceGroupingError(
                 "frozen plan does not match the expected experiment identity"
@@ -602,10 +605,27 @@ def evaluation_protocol_document() -> dict[str, object]:
 
 def _validated_split_groups(
     frozen_plan: Mapping[str, object],
+    *,
+    expected_freeze_plan_sha256: str,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Verify frozen hashes and return the group partition and case mapping."""
+    """Verify the external freeze pin and hashes before returning split maps."""
+    expected_freeze_plan_sha256 = _validate_expected_sha256(
+        expected_freeze_plan_sha256, "expected freeze identity"
+    )
     if not isinstance(frozen_plan, Mapping):
         raise ConvergenceGroupingError("frozen plan must be an object")
+    plan_without_hash = {
+        key: value for key, value in frozen_plan.items() if key != "freeze_plan_sha256"
+    }
+    logical_freeze_sha256 = _sha256_json(plan_without_hash)
+    if logical_freeze_sha256 != frozen_plan.get("freeze_plan_sha256"):
+        raise ConvergenceGroupingError(
+            "freeze-plan hash does not match the serialized plan"
+        )
+    if logical_freeze_sha256 != expected_freeze_plan_sha256:
+        raise ConvergenceGroupingError(
+            "frozen plan does not match the expected experiment identity"
+        )
     split = frozen_plan.get("split")
     if not isinstance(split, Mapping) or _sha256_json(split) != frozen_plan.get(
         "split_sha256"
@@ -619,13 +639,6 @@ def _validated_split_groups(
     ):
         raise ConvergenceGroupingError(
             "frozen policy hash does not match its serialized policy"
-        )
-    plan_without_hash = {
-        key: value for key, value in frozen_plan.items() if key != "freeze_plan_sha256"
-    }
-    if _sha256_json(plan_without_hash) != frozen_plan.get("freeze_plan_sha256"):
-        raise ConvergenceGroupingError(
-            "freeze-plan hash does not match the serialized plan"
         )
     groups = split.get("groups")
     if not isinstance(groups, list):
@@ -667,15 +680,24 @@ def _validated_split_groups(
 
 
 def validate_calibration_input(
-    calibration_document: object, frozen_plan: Mapping[str, object]
+    calibration_document: object,
+    frozen_plan: Mapping[str, object],
+    *,
+    expected_freeze_plan_sha256: str,
 ) -> tuple[dict[str, object], ...]:
     """Validate a separate labeled calibration file and reject every holdout ID.
 
     SCC iteration, convergence, and status outcomes are legal only in this
     purpose-tagged calibration document; scheduling metadata never accepts
-    them. This prototype does not fit a model, but the guard makes later
-    calibration work respect the frozen split.
+    them. The required logical freeze identity must come from an independent
+    prior checkpoint; the canonical frozen document is checked against it
+    before any outcome record is inspected. This prototype does not fit a
+    model, but the guard makes later calibration work respect the frozen split.
     """
+    partitions, case_groups = _validated_split_groups(
+        frozen_plan,
+        expected_freeze_plan_sha256=expected_freeze_plan_sha256,
+    )
     if not isinstance(calibration_document, Mapping):
         raise ConvergenceGroupingError("calibration input must be an object")
     _require_exact_keys(
@@ -691,7 +713,6 @@ def validate_calibration_input(
         raise ConvergenceGroupingError(
             "calibration input must declare schema v1 and purpose calibration-only"
         )
-    partitions, case_groups = _validated_split_groups(frozen_plan)
     records = calibration_document["records"]
     if not isinstance(records, list) or not records:
         raise ConvergenceGroupingError("calibration records must be a nonempty list")
@@ -786,11 +807,14 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(serialized)
         else:
             output = Path(arguments.output)
-            if output.exists():
-                raise ConvergenceGroupingError(
-                    f"refusing to overwrite existing freeze plan: {output}"
+            try:
+                with output.open("x", encoding="utf-8") as stream:
+                    stream.write(serialized)
+            except FileExistsError:
+                sys.stderr.write(
+                    f"error: refusing to overwrite existing freeze plan: {output}\n"
                 )
-            output.write_text(serialized, encoding="utf-8")
+                return 1
     except (ConvergenceGroupingError, OSError) as exc:
         parser.error(str(exc))
     return 0

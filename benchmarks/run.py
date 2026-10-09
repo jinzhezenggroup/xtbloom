@@ -2231,7 +2231,11 @@ def write_json(path: Path, document: dict[str, Any]) -> None:
 
 
 def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
-    """Flatten the main metrics while retaining nested evidence as JSON columns."""
+    """Flatten metrics while retaining evidence and freeze-only qualification.
+
+    Frozen rows export JSON booleans so CSV-only consumers can distinguish
+    independent science checks from the still-incomplete adoption protocol.
+    """
     fields = [
         "engine",
         "backend",
@@ -2272,6 +2276,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "convergence_binding_json",
         "risk_band_by_case_id_json",
         "input_snapshot_release_ms",
+        "claim_eligible",
+        "claim_eligibility_scope",
+        "independent_reference_qualified",
     )
     include_convergence = any(
         row.get("convergence_binding") is not None for row in rows
@@ -2356,6 +2363,11 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     json_safe_value(row.get("risk_band_by_case_id")),
                     allow_nan=False,
                     sort_keys=True,
+                ),
+                "claim_eligible": json.dumps(row.get("claim_eligible")),
+                "claim_eligibility_scope": row.get("claim_eligibility_scope"),
+                "independent_reference_qualified": json.dumps(
+                    row.get("independent_reference_qualified")
                 ),
             }
             if not include_convergence:
