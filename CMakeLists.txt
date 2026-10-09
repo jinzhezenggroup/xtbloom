@@ -1954,7 +1954,7 @@ if(XTBLOOM_BUILD_TESTS)
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
       benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_ao_grouping
-      benchmarks.test_convergence_grouping
+      benchmarks.test_convergence_grouping benchmarks.test_convergence_runner
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   execute_process(

@@ -85,6 +85,49 @@ result by its canonical mapping. The comparison remains three distinct
 strategies: `original`, #513 `exact-ao`, and experimental `ao-risk`; `original`
 stays the default.
 
+The finite-list runner consumes those annotations only with explicit
+`--ao-grouping ao-risk`. Batches use ascending exact AO, then the fixed
+`high`, `elevated`, `guarded`, `low` band order, then canonical input index.
+Every AO/band bucket retains its own cap-bounded tail. Its schema-2 plan hash
+covers the annotations and frozen policy identities; existing strategies keep
+their schema-1 plan encoding and unchanged behavior without convergence flags.
+
+All three strategies can bind the same prior experiment checkpoint:
+
+```bash
+python3 -m benchmarks.run --library /path/to/libxtbloom.so \
+  --manifest /path/to/workload-manifest.json --engines xtbloom --backends cuda \
+  --cuda-memory-modes host --case-ids-file /path/to/view-holdout-ids.txt \
+  --ao-grouping ao-risk --batch-sizes 64 256 --properties force \
+  --convergence-manifest /path/to/input-only-manifest.json \
+  --convergence-plan /path/to/issue-514-freeze-plan.json \
+  --convergence-freeze-sha256 <prior-logical-freeze-sha256> \
+  --convergence-workload-sha256 <prior-workload-manifest-file-sha256> \
+  --convergence-partition holdout --warmups 5 --repetitions 30
+```
+
+The command is one strategy, not the balanced paired evaluation orchestrator;
+run it through the scheduler and preserve all three strategy orders/blocks
+required below. The logical freeze identity is not the freeze file's byte hash.
+Both expected identities must come from the prior checkpoint, not potentially
+rewritten files. The runner reconstructs the entire static policy/split/protocol,
+checks every frozen system against actual input AO, charge and explicit spin
+metadata, and verifies all frozen input hashes against the separately pinned
+workload manifest. Geometry bytes remain provenance, not scheduling features.
+Missing or mismatched identities fail before inference, including for frozen
+peers outside the selected view.
+
+`--convergence-partition` validates rather than filters: supply the exact
+view/partition intersection ID file. No system is silently dropped or added.
+Original/exact-AO baselines validate the same binding but do not evaluate risk
+annotations. Freeze reading, complete-roster hashing and verification, input
+inspection, annotations and planner work all count in `planning_ms`. Each row
+also reports `planning_inclusive_end_to_end_ms`, which adds the complete
+one-time planning cost to each strict-FRESH sweep without assumed amortization;
+the existing sweep-only distribution and explicit reusable-plan metric remain
+separate. JSON and CSV retain the policy/split/freeze/input identities and risk
+bands. This integration supplies no scientific qualification or adoption.
+
 ## Prospective holdout matrix
 
 The eligible comparison is a finite input set, strict FRESH, CUDA public

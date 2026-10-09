@@ -24,6 +24,29 @@ GFN2_PARAMETERS = REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
 class AOPlanTests(unittest.TestCase):
     """Cover exact shell semantics, stable grouping, and canonical restoration."""
 
+    def _make_risk_plan(
+        self,
+        case_ids: tuple[str, ...],
+        max_batch_size: int,
+        counts: dict[str, int],
+        bands: dict[str, str],
+        *,
+        basis_sha256: str = "a" * 64,
+        risk_policy_sha256: str = "b" * 64,
+        risk_freeze_plan_sha256: str = "c" * 64,
+    ) -> ao_grouping.AOGroupingPlan:
+        """Build a risk plan with valid, fixed provenance defaults."""
+        return ao_grouping.make_plan(
+            case_ids,
+            max_batch_size,
+            strategy="ao-risk",
+            ao_counts_by_case_id=counts,
+            basis_sha256=basis_sha256,
+            risk_bands_by_case_id=bands,
+            risk_policy_sha256=risk_policy_sha256,
+            risk_freeze_plan_sha256=risk_freeze_plan_sha256,
+        )
+
     def test_generated_gfn2_shells_define_exact_ao_degeneracies(self) -> None:
         """Use generated shell angular momenta for spatial AO counts."""
         basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
@@ -44,6 +67,319 @@ class AOPlanTests(unittest.TestCase):
         single = ao_grouping.make_plan(("one",), 64, "exact-ao", {"one": 4}, "a" * 64)
         self.assertEqual(single.batches[0].case_ids, ("one",))
         self.assertEqual(single.canonical_index_by_case_id, {"one": 0})
+
+        risk_empty = self._make_risk_plan((), 64, {}, {})
+        self.assertEqual(risk_empty.ordered_case_ids, ())
+        self.assertEqual(risk_empty.batches, ())
+        self.assertEqual(risk_empty.risk_bands_by_case_id, ())
+        risk_single = self._make_risk_plan(
+            ("one",), 64, {"one": 4}, {"one": "elevated"}
+        )
+        self.assertEqual(risk_single.batches[0].case_ids, ("one",))
+        self.assertEqual(risk_single.batches[0].risk_band, "elevated")
+        self.assertEqual(risk_single.risk_bands_by_case_id, (("one", "elevated"),))
+
+    def test_risk_buckets_keep_stable_ties_caps_tails_and_rare_groups(self) -> None:
+        """Keep every case in stable AO/risk buckets, including short tails."""
+        case_ids = (
+            "guarded-a",
+            "low-a",
+            "high-a",
+            "elevated-a",
+            "guarded-b",
+            "high-b",
+            "low-b",
+            "high-c",
+        )
+        plan = self._make_risk_plan(
+            case_ids,
+            2,
+            dict.fromkeys(case_ids, 8),
+            {
+                "guarded-a": "guarded",
+                "low-a": "low",
+                "high-a": "high",
+                "elevated-a": "elevated",
+                "guarded-b": "guarded",
+                "high-b": "high",
+                "low-b": "low",
+                "high-c": "high",
+            },
+        )
+        self.assertEqual(
+            plan.ordered_case_ids,
+            (
+                "high-a",
+                "high-b",
+                "high-c",
+                "elevated-a",
+                "guarded-a",
+                "guarded-b",
+                "low-a",
+                "low-b",
+            ),
+        )
+        self.assertEqual(
+            [batch.case_ids for batch in plan.batches],
+            [
+                ("high-a", "high-b"),
+                ("high-c",),
+                ("elevated-a",),
+                ("guarded-a", "guarded-b"),
+                ("low-a", "low-b"),
+            ],
+        )
+        self.assertEqual(
+            [batch.risk_band for batch in plan.batches],
+            ["high", "high", "elevated", "guarded", "low"],
+        )
+        self.assertEqual(
+            [index for batch in plan.batches for index in batch.canonical_indices],
+            [2, 5, 7, 3, 0, 4, 1, 6],
+        )
+        self.assertEqual(
+            tuple(case_id for batch in plan.batches for case_id in batch.case_ids),
+            plan.ordered_case_ids,
+        )
+        self.assertTrue(all(len(batch.case_ids) <= 2 for batch in plan.batches))
+
+    def test_risk_sort_uses_ao_before_band_and_splits_each_ao_bucket(self) -> None:
+        """Order distinct AO buckets first even when risk bands reverse them."""
+        case_ids = ("largest-low", "smallest-high", "middle-guarded", "next-elevated")
+        plan = self._make_risk_plan(
+            case_ids,
+            8,
+            {
+                "largest-low": 12,
+                "smallest-high": 3,
+                "middle-guarded": 9,
+                "next-elevated": 6,
+            },
+            {
+                "largest-low": "low",
+                "smallest-high": "high",
+                "middle-guarded": "guarded",
+                "next-elevated": "elevated",
+            },
+        )
+        self.assertEqual(
+            plan.ordered_case_ids,
+            ("smallest-high", "next-elevated", "middle-guarded", "largest-low"),
+        )
+        self.assertEqual(
+            [(batch.ao_count, batch.risk_band) for batch in plan.batches],
+            [(3, "high"), (6, "elevated"), (9, "guarded"), (12, "low")],
+        )
+        self.assertTrue(all(len(batch.case_ids) == 1 for batch in plan.batches))
+
+    def test_risk_plan_hash_uses_schema_two_and_records_provenance(self) -> None:
+        """Include ordered annotations and both frozen hashes in plan identity."""
+        case_ids = ("guarded", "high", "low")
+        counts = dict.fromkeys(case_ids, 4)
+        bands = {"guarded": "guarded", "high": "high", "low": "low"}
+        plan = self._make_risk_plan(case_ids, 2, counts, bands)
+        expected_document = {
+            "schema_version": 2,
+            "strategy": "ao-risk",
+            "max_batch_size": 2,
+            "original_case_ids": ["guarded", "high", "low"],
+            "ao_counts_by_case_id": [["guarded", 4], ["high", 4], ["low", 4]],
+            "basis_sha256": "a" * 64,
+            "batches": [
+                {
+                    "case_ids": ["high"],
+                    "canonical_indices": [1],
+                    "ao_count": 4,
+                    "risk_band": "high",
+                },
+                {
+                    "case_ids": ["guarded"],
+                    "canonical_indices": [0],
+                    "ao_count": 4,
+                    "risk_band": "guarded",
+                },
+                {
+                    "case_ids": ["low"],
+                    "canonical_indices": [2],
+                    "ao_count": 4,
+                    "risk_band": "low",
+                },
+            ],
+            "risk_bands_by_case_id": [
+                ["guarded", "guarded"],
+                ["high", "high"],
+                ["low", "low"],
+            ],
+            "risk_policy_sha256": "b" * 64,
+            "risk_freeze_plan_sha256": "c" * 64,
+        }
+        expected_hash = hashlib.sha256(
+            json.dumps(
+                expected_document, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        self.assertEqual(plan.plan_sha256, expected_hash)
+        self.assertEqual(plan.risk_bands_by_case_id, tuple(bands.items()))
+        self.assertEqual(plan.risk_policy_sha256, "b" * 64)
+        self.assertEqual(plan.risk_freeze_plan_sha256, "c" * 64)
+        self.assertNotEqual(
+            plan.plan_sha256,
+            self._make_risk_plan(
+                case_ids,
+                2,
+                counts,
+                bands,
+                risk_policy_sha256="d" * 64,
+            ).plan_sha256,
+        )
+        self.assertNotEqual(
+            plan.plan_sha256,
+            self._make_risk_plan(
+                case_ids,
+                2,
+                counts,
+                {"guarded": "low", "high": "high", "low": "guarded"},
+            ).plan_sha256,
+        )
+        self.assertNotEqual(
+            plan.plan_sha256,
+            self._make_risk_plan(
+                case_ids,
+                2,
+                counts,
+                bands,
+                risk_freeze_plan_sha256="d" * 64,
+            ).plan_sha256,
+        )
+
+    def test_risk_metadata_is_required_exact_and_strictly_typed(self) -> None:
+        """Reject incomplete IDs, invalid labels, malformed hashes, and bool counts."""
+        base = {
+            "case_ids": ("a", "b"),
+            "max_batch_size": 2,
+            "strategy": "ao-risk",
+            "ao_counts_by_case_id": {"a": 2, "b": 4},
+            "basis_sha256": "a" * 64,
+            "risk_bands_by_case_id": {"a": "high", "b": "low"},
+            "risk_policy_sha256": "b" * 64,
+            "risk_freeze_plan_sha256": "c" * 64,
+        }
+        invalid_updates = (
+            ("missing counts", {"ao_counts_by_case_id": None}),
+            ("missing count ID", {"ao_counts_by_case_id": {"a": 2}}),
+            ("boolean count", {"ao_counts_by_case_id": {"a": True, "b": 4}}),
+            ("missing basis hash", {"basis_sha256": None}),
+            ("uppercase basis hash", {"basis_sha256": "A" * 64}),
+            ("missing risk bands", {"risk_bands_by_case_id": None}),
+            ("missing risk ID", {"risk_bands_by_case_id": {"a": "high"}}),
+            (
+                "unexpected risk ID",
+                {"risk_bands_by_case_id": {"a": "high", "extra": "low"}},
+            ),
+            (
+                "invalid risk label",
+                {"risk_bands_by_case_id": {"a": "HIGH", "b": "low"}},
+            ),
+            ("boolean risk label", {"risk_bands_by_case_id": {"a": True, "b": "low"}}),
+            ("missing policy hash", {"risk_policy_sha256": None}),
+            ("uppercase policy hash", {"risk_policy_sha256": "B" * 64}),
+            ("short policy hash", {"risk_policy_sha256": "b" * 63}),
+            ("boolean policy hash", {"risk_policy_sha256": True}),
+            ("missing freeze hash", {"risk_freeze_plan_sha256": None}),
+            ("nonhex freeze hash", {"risk_freeze_plan_sha256": "g" * 64}),
+            ("short freeze hash", {"risk_freeze_plan_sha256": "c" * 63}),
+            ("boolean freeze hash", {"risk_freeze_plan_sha256": False}),
+            ("boolean cap", {"max_batch_size": True}),
+        )
+        for label, updates in invalid_updates:
+            with (
+                self.subTest(label=label),
+                self.assertRaises(ao_grouping.AOGroupingError),
+            ):
+                ao_grouping.make_plan(**(base | updates))
+
+    def test_legacy_strategies_reject_risk_metadata(self) -> None:
+        """Prevent risk inputs from being silently ignored by legacy plans."""
+        metadata = (
+            {"risk_bands_by_case_id": {}},
+            {"risk_policy_sha256": "a" * 64},
+            {"risk_freeze_plan_sha256": "b" * 64},
+        )
+        for strategy in ("original", "exact-ao"):
+            for risk_metadata in metadata:
+                arguments: dict[str, Any] = {
+                    "case_ids": ("case",),
+                    "max_batch_size": 1,
+                    "strategy": strategy,
+                    **risk_metadata,
+                }
+                if strategy == "exact-ao":
+                    arguments.update(
+                        ao_counts_by_case_id={"case": 3}, basis_sha256="c" * 64
+                    )
+                with (
+                    self.subTest(strategy=strategy, metadata=risk_metadata),
+                    self.assertRaisesRegex(
+                        ao_grouping.AOGroupingError, "risk metadata"
+                    ),
+                ):
+                    ao_grouping.make_plan(**arguments)
+
+    def test_ao_risk_scatter_keeps_every_peer_and_failed_nan_in_input_order(
+        self,
+    ) -> None:
+        """Restore the full risk-sorted batch result set through the shared scatter."""
+        case_ids = ("failed", "peer-b", "peer-a")
+        plan = self._make_risk_plan(
+            case_ids,
+            1,
+            {"failed": 7, "peer-b": 3, "peer-a": 3},
+            {"failed": "high", "peer-b": "low", "peer-a": "high"},
+        )
+        records = []
+        for batch in plan.batches:
+            for case_id in batch.case_ids:
+                is_failed = case_id == "failed"
+                records.append(
+                    {
+                        "case_id": case_id,
+                        "energy_hartree": float("nan") if is_failed else 1.25,
+                        "scc_converged": 0 if is_failed else 1,
+                        "status": 5 if is_failed else 0,
+                    }
+                )
+        restored = ao_grouping.scatter_case_results(plan, records)
+        self.assertEqual([record["case_id"] for record in restored], list(case_ids))
+        self.assertEqual([record["original_index"] for record in restored], [0, 1, 2])
+        self.assertTrue(math.isnan(restored[0]["energy_hartree"]))
+        self.assertEqual(restored[0]["status"], 5)
+        self.assertEqual(
+            [record["energy_hartree"] for record in restored[1:]], [1.25, 1.25]
+        )
+
+    def test_legacy_exact_ao_hash_remains_schema_one_regression(self) -> None:
+        """Keep the pre-risk exact-AO hash bytes and default risk fields stable."""
+        plan = ao_grouping.make_plan(
+            ("large", "small-b", "medium", "small-a"),
+            2,
+            "exact-ao",
+            {"large": 9, "small-b": 3, "medium": 6, "small-a": 3},
+            "c" * 64,
+        )
+        self.assertEqual(
+            plan.plan_sha256,
+            "01d38a643fb5d4701d5bd3d65a2797b181e0ad817cf3ebae41f418622f8d1e37",
+        )
+        self.assertEqual(plan.risk_bands_by_case_id, ())
+        self.assertIsNone(plan.risk_policy_sha256)
+        self.assertIsNone(plan.risk_freeze_plan_sha256)
+
+        original = ao_grouping.make_plan(("second", "first"), 1)
+        self.assertEqual(
+            original.plan_sha256,
+            "8418ecc0c59b8b366533ca685bfb686063c7e0e45c8074baee4efeeedebcccaf",
+        )
+        self.assertIsNone(original.batches[0].risk_band)
 
     def test_same_and_different_ao_plans_are_stable_and_cap_bounded(self) -> None:
         """Keep exact-AO groups deterministic and split them at the cap."""

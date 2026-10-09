@@ -297,6 +297,7 @@ def _run_python_tests(session: nox.Session) -> None:
         "benchmarks.test_dxtb_adapter",
         "benchmarks.test_evidence_size",
         "benchmarks.test_convergence_grouping",
+        "benchmarks.test_convergence_runner",
         "benchmarks.test_ao_grouping",
         "benchmarks.test_omol25_inputs",
         env=test_environment,

@@ -40,9 +40,10 @@ import xtbloom_public_api as public_api
 from xtbloom_public_api import PublicBatchStorage
 
 try:
-    from . import ao_grouping
+    from . import ao_grouping, convergence_grouping
 except ImportError:  # Direct ``python benchmarks/run.py`` execution.
     import ao_grouping
+    import convergence_grouping
 
 try:
     from .xtb_adapter import XtbAdapter, XtbError, XtbState
@@ -801,9 +802,16 @@ def finite_case_plan(
     started = time.perf_counter_ns()
     basis_sha256 = None
     counts: dict[str, int] | None = None
-    if args.ao_grouping == "exact-ao":
+    risk_bands = None
+    risk_policy_sha256 = None
+    risk_freeze_plan_sha256 = None
+    binding = None
+    if (
+        args.ao_grouping in {"exact-ao", "ao-risk"}
+        or getattr(args, "convergence_plan", None) is not None
+    ):
         if public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB:
-            raise BenchmarkError("exact-AO grouping requires a GFN2 manifest")
+            raise BenchmarkError("AO/risk grouping requires a GFN2 manifest")
         basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
             REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
         )
@@ -814,15 +822,164 @@ def finite_case_plan(
             )
             for case_id in case_ids
         }
+    if getattr(args, "convergence_plan", None) is not None:
+        binding, annotations = finite_convergence_binding(
+            args, manifest, cases, case_ids, basis_counts
+        )
+        if args.ao_grouping == "ao-risk":
+            risk_bands = {
+                case_id: annotations[case_id].risk_band for case_id in case_ids
+            }
+            risk_policy_sha256 = binding["policy_sha256"]
+            risk_freeze_plan_sha256 = binding["freeze_plan_sha256"]
+    elif args.ao_grouping == "ao-risk":
+        raise BenchmarkError(
+            "ao-risk requires a convergence manifest and pinned freeze plan"
+        )
     plan = ao_grouping.make_plan(
         case_ids,
         batch_cap,
         strategy=args.ao_grouping,
         ao_counts_by_case_id=counts,
         basis_sha256=basis_sha256,
+        **(
+            {
+                "risk_bands_by_case_id": risk_bands,
+                "risk_policy_sha256": risk_policy_sha256,
+                "risk_freeze_plan_sha256": risk_freeze_plan_sha256,
+            }
+            if args.ao_grouping == "ao-risk"
+            else {}
+        ),
     )
     planning_ms = (time.perf_counter_ns() - started) * 1.0e-6
+    args.finite_convergence_binding = binding
     return plan, planning_ms
+
+
+def finite_convergence_binding(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    case_ids: tuple[str, ...],
+    basis_counts: dict[int, int],
+) -> tuple[dict[str, Any], dict[str, convergence_grouping.GroupingAnnotation]]:
+    """Validate the complete frozen input roster before using selected annotations.
+
+    Partition selection never filters the requested list: a caller must supply
+    the desired view/partition intersection explicitly. All file verification,
+    input inspection and candidate annotation work stays inside planning_ms.
+    The separately pinned workload manifest binds geometry bytes without making
+    coordinates or their hashes scheduling features.
+    """
+    try:
+        workload_record = provenance_file_record(args.manifest, "convergence workload")
+        if workload_record["sha256"] != args.convergence_workload_sha256:
+            raise BenchmarkError(
+                "workload manifest does not match the expected experiment identity"
+            )
+        document = convergence_grouping.load_json_document(args.convergence_manifest)
+        frozen = convergence_grouping.load_json_document(args.convergence_plan)
+        scheduling_cases = convergence_grouping.validate_freeze_plan(
+            document,
+            frozen,
+            expected_freeze_plan_sha256=args.convergence_freeze_sha256,
+        )
+        scheduling_by_id = {case.case_id: case for case in scheduling_cases}
+        if not set(case_ids).issubset(scheduling_by_id):
+            raise BenchmarkError(
+                "requested case IDs are outside the frozen scheduling roster"
+            )
+        for scheduling_case in scheduling_cases:
+            if scheduling_case.case_id not in cases:
+                raise BenchmarkError(
+                    "a frozen case ID is absent from the workload manifest"
+                )
+            workload_case = cases[scheduling_case.case_id]
+            input_path = canonical_case_input_path(args.manifest, workload_case)
+            expected_input_sha256 = workload_case.get("input_sha256")
+            if (
+                not isinstance(expected_input_sha256, str)
+                or sha256_file(input_path) != expected_input_sha256
+            ):
+                raise BenchmarkError(
+                    "frozen workload input hash is missing or mismatched for "
+                    f"{scheduling_case.case_id}"
+                )
+            actual_metadata = {
+                "atomic_numbers": list(
+                    case_atomic_numbers(args.manifest, manifest, workload_case)
+                ),
+                "molecular_charge": workload_case.get("molecular_charge", 0),
+            }
+            actual_metadata["exact_ao_count"] = ao_grouping.count_gfn2_aos(
+                actual_metadata["atomic_numbers"], basis_counts
+            )
+            for field in ("spin_channels", "unpaired_electrons"):
+                if field in workload_case:
+                    actual_metadata[field] = workload_case[field]
+            actual = convergence_grouping.parse_scheduling_manifest(
+                {
+                    "schema_version": 1,
+                    "systems": [
+                        {
+                            "case_id": scheduling_case.case_id,
+                            "molecule_group_id": scheduling_case.molecule_group_id,
+                            "scheduling_metadata": actual_metadata,
+                        }
+                    ],
+                }
+            )[0]
+            if actual != scheduling_case:
+                raise BenchmarkError(
+                    "frozen scheduling metadata does not match workload inputs "
+                    f"for {actual.case_id}"
+                )
+        partition_by_case_id = {
+            case_id: group["partition"]
+            for group in frozen["split"]["groups"]
+            for case_id in group["case_ids"]
+        }
+        partition = getattr(args, "convergence_partition", "all")
+        if partition != "all" and any(
+            partition_by_case_id[case_id] != partition for case_id in case_ids
+        ):
+            raise BenchmarkError(
+                "requested case IDs cross the declared convergence partition"
+            )
+        annotations = (
+            convergence_grouping.annotate_scheduling_inputs(document)
+            if args.ao_grouping == "ao-risk"
+            else {}
+        )
+        return {
+            "policy_sha256": frozen["policy_sha256"],
+            "freeze_plan_sha256": frozen["freeze_plan_sha256"],
+            "split_sha256": frozen["split_sha256"],
+            "input_identity_sha256": frozen["input_identity_sha256"],
+            "partition": partition,
+            "selected_partitions": sorted(
+                {partition_by_case_id[case_id] for case_id in case_ids}
+            ),
+            "selected_case_count": len(case_ids),
+            "frozen_case_count": len(scheduling_cases),
+            "workload_manifest": workload_record,
+            "metadata_file": provenance_file_record(
+                args.convergence_manifest, "convergence manifest"
+            ),
+            "freeze_file": provenance_file_record(
+                args.convergence_plan, "convergence freeze"
+            ),
+            "cost_scope": (
+                "freeze verification, complete input binding and candidate "
+                "annotations included in planning_ms"
+            ),
+            "qualification": (
+                "preregistered input-only prototype; not a holdout result or adoption"
+            ),
+        }, annotations
+    except convergence_grouping.ConvergenceGroupingError as exc:
+        raise BenchmarkError(f"invalid convergence binding: {exc}") from exc
 
 
 def _max_abs_error(actual: object, expected: object) -> float | None:
@@ -1053,6 +1210,19 @@ def benchmark_finite_xtbloom_cell(
             },
         }
     )
+    if getattr(args, "finite_convergence_binding", None) is not None:
+        row["convergence_binding"] = args.finite_convergence_binding
+    if plan.strategy == "ao-risk":
+        row["risk_band_by_case_id"] = dict(plan.risk_bands_by_case_id)
+        row["grouping_contract"]["key"] = (
+            "exact GFN2 spatial AO count and preregistered input-only risk band"
+        )
+        row["grouping_contract"]["spin_policy"] = (
+            "explicit spin metadata is a fixed risk feature, "
+            "not a changed numerical policy"
+        )
+        for batch_record, batch in zip(row["ao_batches"], plan.batches, strict=True):
+            batch_record["risk_band"] = batch.risk_band
     sweep_samples: list[dict[str, Any]] = []
     warmup_samples: list[dict[str, Any]] = []
     memory_snapshots: list[dict[str, Any]] = []
@@ -1222,6 +1392,14 @@ def benchmark_finite_xtbloom_cell(
         "end_to_end_ms": timing_summary(
             [item["end_to_end_ms"] for item in sweep_samples],
             len(plan.original_case_ids),
+        ),
+        "planning_inclusive_end_to_end_ms": timing_summary(
+            [planning_ms + item["end_to_end_ms"] for item in sweep_samples],
+            len(plan.original_case_ids),
+        ),
+        "planning_inclusive_scope": (
+            "one complete planning/binding cost plus each strict-FRESH sweep; "
+            "no plan-cost amortization is assumed"
         ),
         "one_shot_total_ms": planning_ms + sweep_samples[0]["end_to_end_ms"],
         "reusable_plan_mean_total_ms_per_sweep": (
@@ -2002,6 +2180,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "end_to_end_median_ms",
         "end_to_end_samples_ms",
         "one_shot_total_ms",
+        "planning_inclusive_end_to_end_median_ms",
+        "convergence_binding_json",
+        "risk_band_by_case_id_json",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -2067,6 +2248,19 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                         allow_nan=False,
                     ),
                     "one_shot_total_ms": finite_timing.get("one_shot_total_ms"),
+                    "planning_inclusive_end_to_end_median_ms": finite_timing.get(
+                        "planning_inclusive_end_to_end_ms", {}
+                    ).get("median_ms"),
+                    "convergence_binding_json": json.dumps(
+                        json_safe_value(row.get("convergence_binding")),
+                        allow_nan=False,
+                        sort_keys=True,
+                    ),
+                    "risk_band_by_case_id_json": json.dumps(
+                        json_safe_value(row.get("risk_band_by_case_id")),
+                        allow_nan=False,
+                        sort_keys=True,
+                    ),
                 }
             )
     temporary.replace(path)
@@ -2130,9 +2324,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ao-grouping",
-        choices=("original", "exact-ao"),
+        choices=("original", "exact-ao", "ao-risk"),
         default="original",
         help="finite-list strategy; exact-ao is opt-in and original remains default",
+    )
+    parser.add_argument(
+        "--convergence-manifest",
+        type=Path,
+        help="input-only scheduling metadata for a frozen finite-list experiment",
+    )
+    parser.add_argument(
+        "--convergence-plan",
+        type=Path,
+        help=(
+            "preregistered policy/group split produced by "
+            "convergence_grouping freeze-plan"
+        ),
+    )
+    parser.add_argument(
+        "--convergence-freeze-sha256",
+        help=(
+            "expected logical freeze-plan SHA-256 from the prior experiment checkpoint"
+        ),
+    )
+    parser.add_argument(
+        "--convergence-workload-sha256",
+        help=(
+            "expected workload manifest SHA-256 from the prior experiment checkpoint; "
+            "also binds every frozen input file hash"
+        ),
+    )
+    parser.add_argument(
+        "--convergence-partition",
+        choices=("all", "calibration", "holdout"),
+        default="all",
+        help="validate the requested IDs' partition without dropping or adding systems",
     )
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repetitions", type=int, default=5)
@@ -2223,6 +2449,33 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.dxtb_cpu_threads <= 0:
         raise BenchmarkError("dxtb CPU threads must be positive")
     finite_list_requested = args.case_ids is not None or args.case_ids_file is not None
+    convergence_inputs = (
+        getattr(args, "convergence_manifest", None),
+        getattr(args, "convergence_plan", None),
+        getattr(args, "convergence_freeze_sha256", None),
+        getattr(args, "convergence_workload_sha256", None),
+    )
+    convergence_requested = any(value is not None for value in convergence_inputs)
+    if convergence_requested and not all(
+        value is not None for value in convergence_inputs
+    ):
+        raise BenchmarkError(
+            "convergence manifest, plan and expected freeze/workload SHA-256 "
+            "are required together"
+        )
+    if args.ao_grouping == "ao-risk" and not convergence_requested:
+        raise BenchmarkError(
+            "ao-risk requires input-only convergence metadata and a pinned freeze plan"
+        )
+    if convergence_requested and not finite_list_requested:
+        raise BenchmarkError(
+            "convergence binding requires an explicit finite case list"
+        )
+    if (
+        getattr(args, "convergence_partition", "all") != "all"
+        and not convergence_requested
+    ):
+        raise BenchmarkError("convergence partition requires a pinned freeze plan")
     if not finite_list_requested and args.ao_grouping != "original":
         raise BenchmarkError("--ao-grouping requires --case-ids or --case-ids-file")
     if finite_list_requested:

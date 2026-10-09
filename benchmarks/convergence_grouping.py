@@ -468,6 +468,46 @@ def build_freeze_plan(document: object) -> dict[str, object]:
     return plan
 
 
+def validate_freeze_plan(
+    document: object,
+    frozen_plan: object,
+    *,
+    expected_freeze_plan_sha256: str | None = None,
+) -> tuple[SchedulingCase, ...]:
+    """Bind input-only metadata to the current policy and externally pinned freeze.
+
+    Self-consistent hashes alone do not prevent a rewritten policy or split.
+    Reconstructing the entire preregistration also rejects changed thresholds,
+    partitions and numeric-type aliases. An expected identity must come from
+    the experiment's prior checkpoint, not be rediscovered from this file.
+    """
+    if not isinstance(frozen_plan, Mapping):
+        raise ConvergenceGroupingError("frozen plan must be an object")
+    if expected_freeze_plan_sha256 is not None:
+        if (
+            not isinstance(expected_freeze_plan_sha256, str)
+            or len(expected_freeze_plan_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_freeze_plan_sha256
+            )
+        ):
+            raise ConvergenceGroupingError(
+                "expected freeze identity must be a lowercase SHA-256"
+            )
+        if frozen_plan.get("freeze_plan_sha256") != expected_freeze_plan_sha256:
+            raise ConvergenceGroupingError(
+                "frozen plan does not match the expected experiment identity"
+            )
+    expected = build_freeze_plan(document)
+    if _sha256_json(frozen_plan) != _sha256_json(expected):
+        raise ConvergenceGroupingError(
+            "frozen plan does not match its input metadata, current policy "
+            "and preregistered split"
+        )
+    return parse_scheduling_manifest(document)
+
+
 def evaluation_protocol_document() -> dict[str, object]:
     """Return the prospective timing, correctness, and decision matrix."""
     return {
