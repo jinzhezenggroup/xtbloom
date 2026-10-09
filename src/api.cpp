@@ -874,6 +874,21 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
       return fail(validation.status, std::move(validation.error));
     }
 
+#if defined(XTBLOOM_HAS_CUDA)
+    if (external_energy_host_staged) {
+      /* This route bypasses the CUDA candidate builder. Check its frozen
+       * benchmark selection before CPU-cache mutation or callback execution. */
+      const auto& cache = context->implementation->gfn2_cuda_execution_cache;
+      if (cache == nullptr) {
+        return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                    "CUDA context does not own a GFN2 execution cache");
+      }
+      std::string error;
+      const xtbloom_status_t status = cache->validate_scc_benchmark_cpu_bridge(error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return fail(status, std::move(error));
+    }
+#endif
+
     /* CUDA completes pointer-attribute and topology semantic validation under
      * the cache transaction before accessing caller storage. CPU retains the
      * historical complete host validation sequence here. */

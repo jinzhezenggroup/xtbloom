@@ -423,6 +423,18 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
       atom(6, point[0] * kAngstromToBohr, point[1] * kAngstromToBohr, point[2] * kAngstromToBohr);
     }
   };
+  const auto append_synthetic_carbon_cluster = [&](std::int32_t carbon_count) {
+    /* Keep the component-size fixtures deterministic and non-overlapping;
+     * they intentionally make no molecular-geometry qualification claim. */
+    constexpr double kSpacingBohr = 6.0;
+    for (std::int32_t index = 0; index < carbon_count; ++index) {
+      const std::int32_t x = index % 5;
+      const std::int32_t y = (index / 5) % 3;
+      const std::int32_t z = index / 15;
+      atom(6, kSpacingBohr * static_cast<double>(x), kSpacingBohr * static_cast<double>(y),
+           kSpacingBohr * static_cast<double>(z));
+    }
+  };
 
   switch (kind) {
     case SmallSystemKind::kH2:
@@ -456,6 +468,19 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
       append_alkane(20);
       break;
     }
+    case SmallSystemKind::kC10H22:
+      append_benchmark_alkane(10);
+      break;
+    case SmallSystemKind::kSyntheticC10:
+      append_synthetic_carbon_cluster(10);
+      break;
+    case SmallSystemKind::kSyntheticC10HCation:
+      append_synthetic_carbon_cluster(10);
+      atom(1, -2.0, 0.0, 0.0);
+      break;
+    case SmallSystemKind::kSyntheticC45:
+      append_synthetic_carbon_cluster(45);
+      break;
     case SmallSystemKind::kC90H182: {
       /* Keep the same deterministic all-trans construction as C20H42 while
        * crossing CUDA 12.9's 512-orbital vector-capture boundary. */

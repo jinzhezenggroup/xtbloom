@@ -2,11 +2,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <initializer_list>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -874,7 +879,8 @@ struct ProductionFixture {
               bool mixed_spin_batch = false, const std::vector<SmallSystemKind>& systems = {},
               double electronic_temperature = 0.0, CouplingSelection coupling = {},
               std::uint64_t maximum_iterations = 8u, double residual_tolerance = 1.0e-10,
-              double energy_tolerance = 1.0e-8, bool deterministic_debug = false) {
+              double energy_tolerance = 1.0e-8, bool deterministic_debug = false,
+              const std::vector<double>& molecular_charges = {}) {
     if (batch_size <= 0) {
       return false;
     }
@@ -916,6 +922,9 @@ struct ProductionFixture {
       options.molecular_charges.assign(static_cast<std::size_t>(batch_size), 1.0);
       options.unpaired_electrons.assign(static_cast<std::size_t>(batch_size), 1);
       options.spin_channels.assign(static_cast<std::size_t>(batch_size), 2);
+    }
+    if (!molecular_charges.empty()) {
+      options.molecular_charges = molecular_charges;
     }
     options.geometry_generation = kGeometryGeneration;
     options.maximum_iterations = maximum_iterations;
@@ -3190,6 +3199,690 @@ int benchmark_dispatch_chain_vs_monolithic() {
   return 0;
 }
 
+struct CrossoverSnapshot {
+  std::vector<double> free_energies;
+  std::vector<double> eigenvalues;
+  std::vector<double> occupations;
+  std::vector<double> density;
+  std::vector<double> weighted_density;
+  std::vector<double> qsh;
+  std::vector<double> qat;
+  std::vector<double> dipoles;
+  std::vector<double> quadrupoles;
+  std::vector<std::uint64_t> iterations;
+  std::vector<xtbloom_status_t> statuses;
+  std::vector<std::uint8_t> converged;
+  std::vector<std::uint8_t> active_mask;
+};
+
+struct CrossoverRun {
+  float elapsed_ms = 0.0F;
+  CrossoverSnapshot snapshot;
+};
+
+struct CrossoverParity {
+  bool equal = true;
+  double maximum_energy_delta = 0.0;
+  double maximum_charge_delta = 0.0;
+  double maximum_state_delta = 0.0;
+};
+
+bool download_crossover_snapshot(const ProductionFixture& fixture, CrossoverSnapshot& snapshot) {
+  const Gfn2SccIterationDeviceState& state = fixture.binding.state;
+  return download(state.scc.free_energies, state.scc.batch_elements, snapshot.free_energies,
+                  fixture.handles.stream()) &&
+         download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements,
+                  snapshot.eigenvalues, fixture.handles.stream()) &&
+         download(state.occupations.occupations, state.occupations.occupation_elements,
+                  snapshot.occupations, fixture.handles.stream()) &&
+         download(state.density.density, state.density.density_elements, snapshot.density,
+                  fixture.handles.stream()) &&
+         download(state.density.energy_weighted_density, state.density.weighted_density_elements,
+                  snapshot.weighted_density, fixture.handles.stream()) &&
+         download(state.raw_population.qsh, state.raw_population.qsh_elements, snapshot.qsh,
+                  fixture.handles.stream()) &&
+         download(state.raw_population.qat, state.raw_population.qat_elements, snapshot.qat,
+                  fixture.handles.stream()) &&
+         download(state.raw_population.dipole, state.raw_population.dipole_elements,
+                  snapshot.dipoles, fixture.handles.stream()) &&
+         download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                  snapshot.quadrupoles, fixture.handles.stream()) &&
+         download(state.scc.iterations, state.scc.batch_elements, snapshot.iterations,
+                  fixture.handles.stream()) &&
+         download(state.scc.system_statuses, state.scc.batch_elements, snapshot.statuses,
+                  fixture.handles.stream()) &&
+         download(state.scc.converged, state.scc.batch_elements, snapshot.converged,
+                  fixture.handles.stream()) &&
+         download(fixture.binding.workspace.ledger.active_mask,
+                  fixture.binding.workspace.ledger.batch_elements, snapshot.active_mask,
+                  fixture.handles.stream()) &&
+         cudaStreamSynchronize(fixture.handles.stream()) == cudaSuccess;
+}
+
+CrossoverParity compare_crossover_snapshots(const CrossoverSnapshot& chain,
+                                            const CrossoverSnapshot& tail) {
+  CrossoverParity parity{};
+  const auto compare_values = [&](const std::vector<double>& first,
+                                  const std::vector<double>& second, double& maximum_delta) {
+    if (first.size() != second.size()) {
+      parity.equal = false;
+      return;
+    }
+    for (std::size_t index = 0; index < first.size(); ++index) {
+      if (std::isnan(first[index]) && std::isnan(second[index])) {
+        continue;
+      }
+      if (!std::isfinite(first[index]) || !std::isfinite(second[index])) {
+        parity.equal = false;
+        maximum_delta = std::numeric_limits<double>::max();
+        continue;
+      }
+      const double delta = std::abs(first[index] - second[index]);
+      maximum_delta = std::max(maximum_delta, delta);
+      if (!near(first[index], second[index], 1.0e-10)) {
+        parity.equal = false;
+      }
+    }
+  };
+  compare_values(chain.free_energies, tail.free_energies, parity.maximum_energy_delta);
+  compare_values(chain.eigenvalues, tail.eigenvalues, parity.maximum_state_delta);
+  compare_values(chain.occupations, tail.occupations, parity.maximum_state_delta);
+  compare_values(chain.density, tail.density, parity.maximum_state_delta);
+  compare_values(chain.weighted_density, tail.weighted_density, parity.maximum_state_delta);
+  compare_values(chain.qsh, tail.qsh, parity.maximum_state_delta);
+  compare_values(chain.qat, tail.qat, parity.maximum_charge_delta);
+  compare_values(chain.dipoles, tail.dipoles, parity.maximum_state_delta);
+  compare_values(chain.quadrupoles, tail.quadrupoles, parity.maximum_state_delta);
+  parity.equal = parity.equal && chain.iterations == tail.iterations &&
+                 chain.statuses == tail.statuses && chain.converged == tail.converged;
+  return parity;
+}
+
+void print_json_array(const std::vector<std::uint64_t>& values) {
+  std::putchar('[');
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    std::printf(index == 0u ? "%llu" : ",%llu", static_cast<unsigned long long>(values[index]));
+  }
+  std::putchar(']');
+}
+
+void print_json_array(const std::vector<xtbloom_status_t>& values) {
+  std::putchar('[');
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    std::printf(index == 0u ? "%d" : ",%d", static_cast<int>(values[index]));
+  }
+  std::putchar(']');
+}
+
+void print_json_array(const std::vector<std::uint8_t>& values) {
+  std::putchar('[');
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    std::printf(index == 0u ? "%u" : ",%u", static_cast<unsigned>(values[index]));
+  }
+  std::putchar(']');
+}
+
+const char* crossover_fixture_name(std::int64_t ao_count) {
+  switch (ao_count) {
+    case 40:
+      return "synthetic_C10_cluster";
+    case 41:
+      return "synthetic_C10H_cation";
+    case 62:
+      return "C10H22_all_trans";
+    case 122:
+      return "C20H42_straight_chain";
+    case 180:
+      return "synthetic_C45_cluster";
+    default:
+      return "unknown";
+  }
+}
+
+SmallSystemKind crossover_system_kind(std::int64_t ao_count) {
+  switch (ao_count) {
+    case 40:
+      return SmallSystemKind::kSyntheticC10;
+    case 41:
+      return SmallSystemKind::kSyntheticC10HCation;
+    case 62:
+      return SmallSystemKind::kC10H22;
+    case 122:
+      return SmallSystemKind::kC20H42;
+    case 180:
+      return SmallSystemKind::kSyntheticC45;
+    default:
+      return SmallSystemKind::kH2;
+  }
+}
+
+constexpr std::uint64_t kCrossoverMaximumIterations = 1u;
+constexpr std::uint64_t kCrossoverSanitizerSeed = 515u;
+
+struct CrossoverActivityMask {
+  std::int64_t active_count = 0;
+  std::vector<std::uint8_t> active_mask;
+  std::vector<std::uint64_t> terminal_iterations;
+};
+
+bool create_crossover_fixture(ProductionFixture& fixture, std::int64_t requested_ao,
+                              std::int64_t batch_size) {
+  const SmallSystemKind kind = crossover_system_kind(requested_ao);
+  const std::vector<SmallSystemKind> systems(static_cast<std::size_t>(batch_size), kind);
+  std::vector<double> charges;
+  if (requested_ao == 41) {
+    /* C10H+ has 40 GFN2 valence electrons (60 total electrons), so this
+     * synthetic AO41 probe has even restricted occupations. */
+    charges.assign(static_cast<std::size_t>(batch_size), 1.0);
+  }
+  if (!fixture.create(false, batch_size, false, false, systems, 0.0, CouplingSelection{},
+                      kCrossoverMaximumIterations, 1.0e-10, 1.0e-8, false, charges)) {
+    return false;
+  }
+  const auto& layout = fixture.host.wavefunction_layout();
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    const std::size_t index = static_cast<std::size_t>(system);
+    const std::int64_t actual_ao =
+        layout.batch_orbital_offsets[index + 1u] - layout.batch_orbital_offsets[index];
+    if (actual_ao != requested_ao || layout.spin_channels[index] != 1 ||
+        layout.unpaired_electrons[index] != 0 ||
+        std::fmod(layout.electron_counts[index], 2.0) != 0.0) {
+      std::fprintf(stderr,
+                   "fixture AO/electronic parity mismatch at system %lld: ao=%lld spin=%d "
+                   "unpaired=%d electrons=%.17g\n",
+                   static_cast<long long>(system), static_cast<long long>(actual_ao),
+                   layout.spin_channels[index], layout.unpaired_electrons[index],
+                   layout.electron_counts[index]);
+      return false;
+    }
+  }
+  return true;
+}
+
+CrossoverActivityMask derive_crossover_activity_mask(std::int64_t batch_size,
+                                                     std::int64_t active_denominator,
+                                                     std::uint64_t seed) {
+  constexpr std::uint64_t kSplitMixIncrement = 0x9e3779b97f4a7c15ULL;
+  constexpr std::uint64_t kSplitMixMultiplier1 = 0xbf58476d1ce4e5b9ULL;
+  constexpr std::uint64_t kSplitMixMultiplier2 = 0x94d049bb133111ebULL;
+  CrossoverActivityMask result{};
+  result.active_count = (batch_size + active_denominator / 2) / active_denominator;
+  std::vector<std::int64_t> permutation(static_cast<std::size_t>(batch_size));
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    permutation[static_cast<std::size_t>(system)] = system;
+  }
+  std::uint64_t random_state = seed;
+  auto next_random = [&]() {
+    random_state += kSplitMixIncrement;
+    std::uint64_t value = random_state;
+    value = (value ^ (value >> 30u)) * kSplitMixMultiplier1;
+    value = (value ^ (value >> 27u)) * kSplitMixMultiplier2;
+    return value ^ (value >> 31u);
+  };
+  for (std::int64_t index = batch_size - 1; index > 0; --index) {
+    const std::int64_t other =
+        static_cast<std::int64_t>(next_random() % static_cast<std::uint64_t>(index + 1));
+    std::swap(permutation[static_cast<std::size_t>(index)],
+              permutation[static_cast<std::size_t>(other)]);
+  }
+  result.active_mask.assign(static_cast<std::size_t>(batch_size), 0u);
+  for (std::int64_t index = 0; index < result.active_count; ++index) {
+    result.active_mask[static_cast<std::size_t>(permutation[static_cast<std::size_t>(index)])] = 1u;
+  }
+  result.terminal_iterations.assign(static_cast<std::size_t>(batch_size),
+                                    kCrossoverMaximumIterations);
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    if (result.active_mask[static_cast<std::size_t>(system)] != 0u) {
+      result.terminal_iterations[static_cast<std::size_t>(system)] = 0u;
+    }
+  }
+  return result;
+}
+
+bool restore_crossover_fresh_checkpoint(ProductionFixture& fixture,
+                                        const std::vector<std::uint64_t>& terminal_iterations) {
+  Gfn2SccIterationInitializationReady ready{};
+  return fixture.initializer
+             .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                           fixture.handles.stream())
+             .success() &&
+         cudaMemcpyAsync(fixture.binding.state.scc.iterations, terminal_iterations.data(),
+                         terminal_iterations.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                         fixture.handles.stream()) == cudaSuccess &&
+         cudaStreamSynchronize(fixture.handles.stream()) == cudaSuccess;
+}
+
+int benchmark_restricted_crossover_component(std::int64_t requested_ao, std::int64_t batch_size,
+                                             std::int64_t active_denominator, int warmups,
+                                             int samples, std::uint64_t seed) {
+  const auto supported = [](std::int64_t value, std::initializer_list<std::int64_t> choices) {
+    return std::find(choices.begin(), choices.end(), value) != choices.end();
+  };
+  if (!supported(requested_ao, {40, 41, 62, 122, 180}) ||
+      !supported(batch_size, {1, 8, 32, 64, 128, 256}) ||
+      !supported(active_denominator, {1, 2, 4}) || warmups < 0 || warmups > 50 || samples <= 0 ||
+      samples > 200) {
+    std::fprintf(stderr, "invalid bounded restricted-crossover coordinate\n");
+    return 2;
+  }
+
+  const auto setup_started = std::chrono::steady_clock::now();
+  ProductionFixture fixture;
+  if (!create_crossover_fixture(fixture, requested_ao, batch_size)) {
+    return 1;
+  }
+  if (fixture.binding.plan.eigensolver_provider.capture_mode !=
+      Gfn2SccIterationProviderCaptureMode::kGraphSupported) {
+    std::printf(
+        "{\"record_type\":\"coordinate_summary\",\"coordinate_status\":\"unavailable\","
+        "\"reason\":\"eigensolver provider does not support graph capture\","
+        "\"ao_count\":%lld,\"batch_size\":%lld}\n",
+        static_cast<long long>(requested_ao), static_cast<long long>(batch_size));
+    return 0;
+  }
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+  Gfn2SccLoopCudaGraphOwner chain;
+  const auto chain_build =
+      chain.build(fixture.binding, Gfn2SccLoopGraphPreference::kDeviceDispatchChain);
+  if (!chain_build.device_dispatch_chain_ready()) {
+    std::printf(
+        "{\"record_type\":\"coordinate_summary\",\"coordinate_status\":\"unavailable\","
+        "\"reason\":\"forced dispatch-chain graph is unavailable\","
+        "\"ao_count\":%lld,\"batch_size\":%lld}\n",
+        static_cast<long long>(requested_ao), static_cast<long long>(batch_size));
+    return 0;
+  }
+  Gfn2SccLoopCudaGraphOwner monolithic;
+  const auto tail_build =
+      monolithic.build(fixture.binding, Gfn2SccLoopGraphPreference::kDeviceTailGraph);
+  if (!tail_build.device_tail_graph_ready()) {
+    std::printf(
+        "{\"record_type\":\"coordinate_summary\",\"coordinate_status\":\"unavailable\","
+        "\"reason\":\"forced monolithic-tail graph is unavailable\","
+        "\"ao_count\":%lld,\"batch_size\":%lld}\n",
+        static_cast<long long>(requested_ao), static_cast<long long>(batch_size));
+    return 0;
+  }
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+  const double setup_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - setup_started)
+          .count();
+
+  const CrossoverActivityMask crossover_mask =
+      derive_crossover_activity_mask(batch_size, active_denominator, seed);
+  const std::int64_t active_count = crossover_mask.active_count;
+  const std::vector<std::uint8_t>& active_mask = crossover_mask.active_mask;
+  const std::vector<std::uint64_t>& terminal_iterations = crossover_mask.terminal_iterations;
+
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+  const auto run_one = [&](const Gfn2SccLoopCudaGraphOwner& owner, CrossoverRun& run) -> bool {
+    Gfn2SccIterationInitializationReady ready{};
+    if (!fixture.initializer
+             .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                           fixture.handles.stream())
+             .success() ||
+        cudaMemcpyAsync(fixture.binding.state.scc.iterations, terminal_iterations.data(),
+                        terminal_iterations.size() * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
+                        fixture.handles.stream()) != cudaSuccess ||
+        cudaEventRecord(start, fixture.handles.stream()) != cudaSuccess) {
+      return false;
+    }
+    const Gfn2SccLoopLaunchResult launch = owner.launch(fixture.handles.stream());
+    if (!launch.success() || cudaEventRecord(stop, fixture.handles.stream()) != cudaSuccess ||
+        cudaEventSynchronize(stop) != cudaSuccess ||
+        cudaEventElapsedTime(&run.elapsed_ms, start, stop) != cudaSuccess ||
+        !download_crossover_snapshot(fixture, run.snapshot)) {
+      return false;
+    }
+    return std::isfinite(run.elapsed_ms);
+  };
+  const auto print_sample = [&](int pair_index, bool warmup, bool chain_first,
+                                const CrossoverRun& chain_run, const CrossoverRun& tail_run,
+                                const CrossoverParity& parity) {
+    std::printf(
+        "{\"record_type\":\"sample\",\"pair_index\":%d,\"sample_kind\":\"%s\","
+        "\"execution_order\":\"%s\",\"chain_ms\":%.9g,\"tail_ms\":%.9g,"
+        "\"state_parity\":%s,\"maximum_energy_delta_hartree\":%.17g,"
+        "\"maximum_charge_delta_e\":%.17g,\"maximum_state_delta\":%.17g,"
+        "\"chain_iterations\":",
+        pair_index, warmup ? "warmup" : "measurement",
+        chain_first ? "chain_then_tail" : "tail_then_chain", chain_run.elapsed_ms,
+        tail_run.elapsed_ms, parity.equal ? "true" : "false", parity.maximum_energy_delta,
+        parity.maximum_charge_delta, parity.maximum_state_delta);
+    print_json_array(chain_run.snapshot.iterations);
+    std::printf(",\"chain_statuses\":");
+    print_json_array(chain_run.snapshot.statuses);
+    std::printf(",\"chain_converged\":");
+    print_json_array(chain_run.snapshot.converged);
+    std::printf(",\"tail_iterations\":");
+    print_json_array(tail_run.snapshot.iterations);
+    std::printf(",\"tail_statuses\":");
+    print_json_array(tail_run.snapshot.statuses);
+    std::printf(",\"tail_converged\":");
+    print_json_array(tail_run.snapshot.converged);
+    std::puts("}");
+    std::fflush(stdout);
+  };
+
+  bool all_state_parity = true;
+  const int total_pairs = warmups + samples;
+  for (int pair_index = 0; pair_index < total_pairs; ++pair_index) {
+    const bool warmup = pair_index < warmups;
+    const bool chain_first = pair_index % 2 == 0;
+    CrossoverRun chain_run;
+    CrossoverRun tail_run;
+    const bool ran_first = chain_first ? run_one(chain, chain_run) : run_one(monolithic, tail_run);
+    const bool ran_second = chain_first ? run_one(monolithic, tail_run) : run_one(chain, chain_run);
+    if (!ran_first || !ran_second) {
+      (void)cudaEventDestroy(stop);
+      (void)cudaEventDestroy(start);
+      return 1;
+    }
+    const CrossoverParity parity =
+        compare_crossover_snapshots(chain_run.snapshot, tail_run.snapshot);
+    all_state_parity = all_state_parity && parity.equal;
+    print_sample(pair_index < warmups ? pair_index : pair_index - warmups, warmup, chain_first,
+                 chain_run, tail_run, parity);
+  }
+
+  (void)cudaEventDestroy(stop);
+  (void)cudaEventDestroy(start);
+  const std::size_t fixture_arena_bytes =
+      fixture.topology_arena.bytes() + fixture.input_arena.bytes() +
+      fixture.electric_field_arena.bytes() + fixture.iteration_arena.bytes() +
+      fixture.eigensolver_setup_arena.bytes();
+  /* The initializer owns a separate device checkpoint for FRESH replay.
+   * Graph-owner counts expose only control/table allocations, not CUDA's
+   * opaque graph/executable storage or the eigensolver provider's memory. */
+  const std::size_t fresh_checkpoint_bytes = fixture.initializer.image_bytes();
+  const std::size_t fixture_device_bytes = fixture_arena_bytes + fresh_checkpoint_bytes;
+  const std::size_t chain_known_control_table_bytes = chain.retained_device_bytes();
+  const std::size_t tail_known_control_table_bytes = monolithic.retained_device_bytes();
+  /* The chain family count excludes its host-launched root; the ready tail
+   * owns one root and one numerical-body executable. */
+  const std::size_t chain_family_executables = chain.dispatch_chain_executable_count();
+  const double requested_fraction = 1.0 / static_cast<double>(active_denominator);
+  std::printf(
+      "{\"record_type\":\"coordinate_summary\",\"coordinate_status\":\"%s\","
+      "\"qualification\":\"component_only\",\"fixture\":\"%s\","
+      "\"ao_count\":%lld,\"batch_size\":%lld,\"active_denominator\":%lld,"
+      "\"active_fraction_requested\":%.17g,\"active_system_count\":%lld,"
+      "\"effective_active_fraction\":%.17g,\"active_mask\":[",
+      all_state_parity ? "pass" : "failure", crossover_fixture_name(requested_ao),
+      static_cast<long long>(requested_ao), static_cast<long long>(batch_size),
+      static_cast<long long>(active_denominator), requested_fraction,
+      static_cast<long long>(active_count),
+      static_cast<double>(active_count) / static_cast<double>(batch_size));
+  for (std::size_t index = 0; index < active_mask.size(); ++index) {
+    std::printf(index == 0u ? "%u" : ",%u", static_cast<unsigned>(active_mask[index]));
+  }
+  std::printf(
+      "],\"maximum_iterations\":%llu,\"warmup_pairs\":%d,\"measured_pairs\":%d,"
+      "\"execution_counts\":{\"chain_calls\":%d,\"tail_calls\":%d,"
+      "\"total_calls\":%d},\"graph_executable_counts\":{\"chain_dispatch_family\":%llu,"
+      "\"chain_total\":%llu,\"tail_total\":2},\"setup_ms\":%.9g,\"fixture_arena_bytes\":%llu,"
+      "\"fresh_checkpoint_bytes\":%llu,\"fixture_device_bytes\":%llu,"
+      "\"chain_known_control_table_bytes\":%llu,\"tail_known_control_table_bytes\":%llu,"
+      "\"retained_device_bytes\":%llu,"
+      "\"retained_device_bytes_scope\":\"fixture arenas, FRESH checkpoint, and known graph "
+      "control/table bytes; opaque CUDA graph/executable and provider allocations excluded\","
+      "\"state_parity\":%s}\n",
+      static_cast<unsigned long long>(kCrossoverMaximumIterations), warmups, samples, total_pairs,
+      total_pairs, 2 * total_pairs, static_cast<unsigned long long>(chain_family_executables),
+      static_cast<unsigned long long>(chain_family_executables + 1u), setup_ms,
+      static_cast<unsigned long long>(fixture_arena_bytes),
+      static_cast<unsigned long long>(fresh_checkpoint_bytes),
+      static_cast<unsigned long long>(fixture_device_bytes),
+      static_cast<unsigned long long>(chain_known_control_table_bytes),
+      static_cast<unsigned long long>(tail_known_control_table_bytes),
+      static_cast<unsigned long long>(fixture_device_bytes + chain_known_control_table_bytes +
+                                      tail_known_control_table_bytes),
+      all_state_parity ? "true" : "false");
+  return all_state_parity ? 0 : 1;
+}
+
+void print_sanitizer_control_header(const char* mode, std::int64_t requested_ao,
+                                    std::int64_t batch_size, std::int64_t active_denominator,
+                                    const CrossoverActivityMask& mask, const char* status) {
+  std::printf(
+      "{\"record_type\":\"crossover_sanitizer_control\",\"mode\":\"%s\","
+      "\"fixture\":\"%s\",\"ao_count\":%lld,\"batch_size\":%lld,"
+      "\"active_denominator\":%lld,\"seed\":%llu,\"active_count\":%lld,"
+      "\"control_status\":\"%s\"",
+      mode, crossover_fixture_name(requested_ao), static_cast<long long>(requested_ao),
+      static_cast<long long>(batch_size), static_cast<long long>(active_denominator),
+      static_cast<unsigned long long>(kCrossoverSanitizerSeed),
+      static_cast<long long>(mask.active_count), status);
+}
+
+void print_sanitizer_launch_result(const char* name, const Gfn2SccIterationLaunchResult& result) {
+  std::printf(
+      "\"%s\":{\"success\":%s,\"status\":%u,\"stage\":%u,"
+      "\"cuda_status\":%d,\"cublas_status\":%d,\"cusolver_status\":%d,"
+      "\"binding_error\":%u,\"binding_field\":%u,\"binding_index\":%lld}",
+      name, result.success() ? "true" : "false", static_cast<unsigned>(result.status),
+      static_cast<unsigned>(result.stage), static_cast<int>(result.cuda_status),
+      static_cast<int>(result.cublas_status), static_cast<int>(result.cusolver_status),
+      static_cast<unsigned>(result.binding.error), static_cast<unsigned>(result.binding.field),
+      static_cast<long long>(result.binding.index));
+}
+
+void print_sanitizer_status_vectors(const char* prefix, const CrossoverSnapshot& snapshot) {
+  std::printf(",\"%s_active_mask\":", prefix);
+  print_json_array(snapshot.active_mask);
+  std::printf(",\"%s_iterations\":", prefix);
+  print_json_array(snapshot.iterations);
+  std::printf(",\"%s_statuses\":", prefix);
+  print_json_array(snapshot.statuses);
+  std::printf(",\"%s_converged\":", prefix);
+  print_json_array(snapshot.converged);
+}
+
+void print_sanitizer_control_error(const char* mode, std::int64_t requested_ao,
+                                   std::int64_t batch_size, std::int64_t active_denominator,
+                                   const CrossoverActivityMask& mask, const char* stage,
+                                   const char* message, int error_code) {
+  print_sanitizer_control_header(mode, requested_ao, batch_size, active_denominator, mask,
+                                 "failure");
+  std::printf(",\"stage\":\"%s\",\"error_code\":%d,\"error\":\"%s\"}\n", stage, error_code,
+              message);
+}
+
+bool supported_crossover_sanitizer_coordinate(std::int64_t ao_count, std::int64_t batch_size,
+                                              std::int64_t active_denominator) {
+  return (ao_count == 41 && batch_size == 1 && active_denominator == 1) ||
+         (ao_count == 122 && batch_size == 128 && active_denominator == 1) ||
+         (ao_count == 180 && batch_size == 256 && active_denominator == 4);
+}
+
+constexpr bool sanitizer_control_device_unavailable(cudaError_t status, int device_count) {
+  return status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver ||
+         (status == cudaSuccess && device_count == 0);
+}
+
+static_assert(sanitizer_control_device_unavailable(cudaSuccess, 0));
+static_assert(!sanitizer_control_device_unavailable(cudaSuccess, 1));
+static_assert(sanitizer_control_device_unavailable(cudaErrorNoDevice, 0));
+static_assert(sanitizer_control_device_unavailable(cudaErrorInsufficientDriver, 0));
+static_assert(!sanitizer_control_device_unavailable(cudaErrorInitializationError, 0));
+static_assert(!sanitizer_control_device_unavailable(cudaErrorUnknown, 0));
+
+int run_crossover_sanitizer_control(std::int64_t requested_ao, std::int64_t batch_size,
+                                    std::int64_t active_denominator, const char* mode) {
+  /* This one-body diagnostic replays a fixed iteration mask, not a convergence
+   * trajectory or an independent scientific reference. The Graph case first
+   * records the direct baseline, restores the same FRESH checkpoint, then
+   * compares all published state and per-peer status after host Graph launch. */
+  const CrossoverActivityMask mask =
+      derive_crossover_activity_mask(batch_size, active_denominator, kCrossoverSanitizerSeed);
+  ProductionFixture fixture;
+  if (!create_crossover_fixture(fixture, requested_ao, batch_size)) {
+    print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                  "fixture_setup", "crossover fixture setup failed", -1);
+    return 1;
+  }
+  if (std::strcmp(mode, "host-graph") == 0 &&
+      fixture.binding.plan.eigensolver_provider.capture_mode !=
+          Gfn2SccIterationProviderCaptureMode::kGraphSupported) {
+    print_sanitizer_control_header(mode, requested_ao, batch_size, active_denominator, mask,
+                                   "unavailable");
+    std::puts(",\"reason\":\"eigensolver provider does not support Graph capture\"}");
+    return 77;
+  }
+  if (cudaStreamSynchronize(fixture.handles.stream()) != cudaSuccess) {
+    const cudaError_t error = cudaGetLastError();
+    print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                  "fixture_sync", cudaGetErrorString(error),
+                                  static_cast<int>(error));
+    return 1;
+  }
+
+  GraphResources graph;
+  Gfn2SccIterationLaunchResult captured_result{};
+  if (std::strcmp(mode, "host-graph") == 0) {
+    cudaError_t capture_status =
+        cudaStreamBeginCapture(fixture.handles.stream(), cudaStreamCaptureModeThreadLocal);
+    if (capture_status != cudaSuccess) {
+      print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                    "capture_begin", cudaGetErrorString(capture_status),
+                                    static_cast<int>(capture_status));
+      return 1;
+    }
+    captured_result =
+        launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+    const cudaError_t end_capture_status =
+        cudaStreamEndCapture(fixture.handles.stream(), graph.graph_address());
+    if (!captured_result.success()) {
+      print_sanitizer_control_header(mode, requested_ao, batch_size, active_denominator, mask,
+                                     "failure");
+      std::printf(",\"stage\":\"captured_direct_launch\",\"launch_result\":{");
+      print_sanitizer_launch_result("captured", captured_result);
+      std::printf("},\"cuda_stream_end_capture_status\":%d}\n",
+                  static_cast<int>(end_capture_status));
+      return 1;
+    }
+    if (end_capture_status != cudaSuccess) {
+      print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                    "capture_end", cudaGetErrorString(end_capture_status),
+                                    static_cast<int>(end_capture_status));
+      return 1;
+    }
+    const cudaError_t instantiate_status =
+        cudaGraphInstantiate(graph.executable_address(), graph.graph(), nullptr, nullptr, 0u);
+    if (instantiate_status != cudaSuccess) {
+      print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                    "graph_instantiate", cudaGetErrorString(instantiate_status),
+                                    static_cast<int>(instantiate_status));
+      return 1;
+    }
+  }
+
+  CrossoverRun direct_run;
+  if (!restore_crossover_fresh_checkpoint(fixture, mask.terminal_iterations)) {
+    const cudaError_t error = cudaGetLastError();
+    print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                  "direct_fresh_restore", cudaGetErrorString(error),
+                                  static_cast<int>(error));
+    return 1;
+  }
+  const Gfn2SccIterationLaunchResult direct_result =
+      launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
+  if (!direct_result.success()) {
+    print_sanitizer_control_header(mode, requested_ao, batch_size, active_denominator, mask,
+                                   "failure");
+    std::printf(",\"stage\":\"direct_launch\",\"launch_result\":{");
+    print_sanitizer_launch_result("direct", direct_result);
+    std::puts("}}");
+    return 1;
+  }
+  if (!download_crossover_snapshot(fixture, direct_run.snapshot)) {
+    const cudaError_t error = cudaGetLastError();
+    print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                  "direct_snapshot", cudaGetErrorString(error),
+                                  static_cast<int>(error));
+    return 1;
+  }
+  const bool direct_mask_matches = direct_run.snapshot.active_mask == mask.active_mask;
+  if (!direct_mask_matches) {
+    print_sanitizer_control_header(mode, requested_ao, batch_size, active_denominator, mask,
+                                   "failure");
+    std::printf(",\"stage\":\"direct_active_mask\",\"launch_result\":{");
+    print_sanitizer_launch_result("direct", direct_result);
+    std::putchar('}');
+    print_sanitizer_status_vectors("direct", direct_run.snapshot);
+    std::puts("}");
+    return 1;
+  }
+
+  if (std::strcmp(mode, "direct") == 0) {
+    print_sanitizer_control_header(mode, requested_ao, batch_size, active_denominator, mask,
+                                   "pass");
+    std::printf(
+        ",\"maximum_iterations\":%llu,\"snapshot_parity\":\"not_compared\","
+        "\"launch_result\":{",
+        static_cast<unsigned long long>(kCrossoverMaximumIterations));
+    print_sanitizer_launch_result("direct", direct_result);
+    std::putchar('}');
+    print_sanitizer_status_vectors("direct", direct_run.snapshot);
+    std::puts("}");
+    return 0;
+  }
+
+  if (!restore_crossover_fresh_checkpoint(fixture, mask.terminal_iterations)) {
+    const cudaError_t error = cudaGetLastError();
+    print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                  "host_graph_fresh_restore", cudaGetErrorString(error),
+                                  static_cast<int>(error));
+    return 1;
+  }
+  const cudaError_t graph_launch_status =
+      cudaGraphLaunch(graph.executable(), fixture.handles.stream());
+  if (graph_launch_status != cudaSuccess ||
+      cudaStreamSynchronize(fixture.handles.stream()) != cudaSuccess) {
+    const cudaError_t error =
+        graph_launch_status != cudaSuccess ? graph_launch_status : cudaGetLastError();
+    print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                  "host_graph_launch_or_sync", cudaGetErrorString(error),
+                                  static_cast<int>(error));
+    return 1;
+  }
+  CrossoverRun graph_run;
+  if (!download_crossover_snapshot(fixture, graph_run.snapshot)) {
+    const cudaError_t error = cudaGetLastError();
+    print_sanitizer_control_error(mode, requested_ao, batch_size, active_denominator, mask,
+                                  "host_graph_snapshot", cudaGetErrorString(error),
+                                  static_cast<int>(error));
+    return 1;
+  }
+
+  const CrossoverParity parity =
+      compare_crossover_snapshots(direct_run.snapshot, graph_run.snapshot);
+  const bool graph_mask_matches = graph_run.snapshot.active_mask == mask.active_mask;
+  const bool all_state_parity = parity.equal && graph_mask_matches;
+  print_sanitizer_control_header(mode, requested_ao, batch_size, active_denominator, mask,
+                                 all_state_parity ? "pass" : "failure");
+  std::printf(
+      ",\"maximum_iterations\":%llu,\"snapshot_parity\":%s,"
+      "\"maximum_energy_delta_hartree\":%.17g,\"maximum_charge_delta_e\":%.17g,"
+      "\"maximum_state_delta\":%.17g,\"graph_launch_cuda_status\":%d,"
+      "\"launch_results\":{",
+      static_cast<unsigned long long>(kCrossoverMaximumIterations),
+      all_state_parity ? "true" : "false", parity.maximum_energy_delta, parity.maximum_charge_delta,
+      parity.maximum_state_delta, static_cast<int>(graph_launch_status));
+  print_sanitizer_launch_result("captured_direct", captured_result);
+  std::putchar(',');
+  print_sanitizer_launch_result("direct", direct_result);
+  std::printf("},\"inactive_peers_in_status_vectors\":true");
+  print_sanitizer_status_vectors("direct", direct_run.snapshot);
+  print_sanitizer_status_vectors("host_graph", graph_run.snapshot);
+  std::puts("}");
+  return all_state_parity ? 0 : 1;
+}
+
 int benchmark_conditional_graph_vs_bounded_fallback() {
   constexpr int kWarmup = 3;
   constexpr int kSamples = 20;
@@ -3859,6 +4552,48 @@ int test_loop_rejects_inconsistent_plan() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1 && std::strcmp(argv[1], "--crossover-sanitizer-control") == 0) {
+    const auto parse_integer = [](const char* text, std::int64_t& value) {
+      errno = 0;
+      char* end = nullptr;
+      const long long parsed = std::strtoll(text, &end, 10);
+      if (errno != 0 || end == text || *end != '\0') {
+        return false;
+      }
+      value = static_cast<std::int64_t>(parsed);
+      return true;
+    };
+    std::int64_t ao_count = 0;
+    std::int64_t batch_size = 0;
+    std::int64_t active_denominator = 0;
+    if (argc != 6 || !parse_integer(argv[2], ao_count) || !parse_integer(argv[3], batch_size) ||
+        !parse_integer(argv[4], active_denominator) ||
+        (std::strcmp(argv[5], "direct") != 0 && std::strcmp(argv[5], "host-graph") != 0) ||
+        !supported_crossover_sanitizer_coordinate(ao_count, batch_size, active_denominator)) {
+      std::fprintf(stderr,
+                   "--crossover-sanitizer-control expects AO B DEN direct|host-graph for "
+                   "41 1 1, 122 128 1, or 180 256 4\n");
+      return 2;
+    }
+
+    const char* mode = argv[5];
+    const CrossoverActivityMask mask =
+        derive_crossover_activity_mask(batch_size, active_denominator, kCrossoverSanitizerSeed);
+    int device_count = 0;
+    const cudaError_t count_status = cudaGetDeviceCount(&device_count);
+    if (sanitizer_control_device_unavailable(count_status, device_count)) {
+      (void)cudaGetLastError();
+      print_sanitizer_control_header(mode, ao_count, batch_size, active_denominator, mask,
+                                     "unavailable");
+      std::printf(",\"cuda_status\":%d,\"reason\":\"no CUDA device available\"}\n",
+                  static_cast<int>(count_status));
+      return 77;
+    }
+    CUDA_CHECK(count_status);
+    CUDA_CHECK(cudaSetDevice(0));
+    return run_crossover_sanitizer_control(ao_count, batch_size, active_denominator, mode);
+  }
+
   int device_count = 0;
   const cudaError_t count_status = cudaGetDeviceCount(&device_count);
   if (count_status == cudaErrorNoDevice || count_status == cudaErrorInsufficientDriver ||
@@ -3868,6 +4603,37 @@ int main(int argc, char** argv) {
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
+  if (argc == 8 && std::strcmp(argv[1], "--benchmark-crossover-one") == 0) {
+    const auto parse_integer = [](const char* text, std::int64_t& value) {
+      errno = 0;
+      char* end = nullptr;
+      const long long parsed = std::strtoll(text, &end, 10);
+      if (errno != 0 || end == text || *end != '\0') {
+        return false;
+      }
+      value = static_cast<std::int64_t>(parsed);
+      return true;
+    };
+    std::int64_t ao_count = 0;
+    std::int64_t batch_size = 0;
+    std::int64_t active_denominator = 0;
+    std::int64_t warmups = 0;
+    std::int64_t samples = 0;
+    std::int64_t seed = 0;
+    if (!parse_integer(argv[2], ao_count) || !parse_integer(argv[3], batch_size) ||
+        !parse_integer(argv[4], active_denominator) || !parse_integer(argv[5], warmups) ||
+        !parse_integer(argv[6], samples) || !parse_integer(argv[7], seed) || seed < 0 ||
+        warmups < 0 || warmups > 50 || samples < 1 || samples > 200) {
+      std::fprintf(stderr,
+                   "--benchmark-crossover-one expects integer AO, batch, denominator, warmups, "
+                   "samples, and nonnegative seed; warmups must be 0..50 and samples 1..200\n");
+      return 2;
+    }
+    /* Reject negative/out-of-range int64 values before narrowing sample counts. */
+    return benchmark_restricted_crossover_component(
+        ao_count, batch_size, active_denominator, static_cast<int>(warmups),
+        static_cast<int>(samples), static_cast<std::uint64_t>(seed));
+  }
 #ifdef XTBLOOM_SCC_LOOP_BENCHMARK_ONLY
   if (argc == 1) {
     return benchmark_conditional_graph_vs_bounded_fallback();
@@ -3999,7 +4765,9 @@ int main(int argc, char** argv) {
                  "[--benchmark|--unrestricted-smoke|--unrestricted-parity|--mixed-parity|"
                  "--mixed-acceptance|--mixed-bounded|--mixed-conditional|"
                  "--dispatch-chain|--finite-temperature-parity|--large-singleton-tridiagonal|"
-                 "--large-singleton-sanitizer|--deterministic-debug]\n",
+                 "--large-singleton-sanitizer|--deterministic-debug|"
+                 "--benchmark-crossover-one AO B DENOM WARMUPS SAMPLES SEED|"
+                 "--crossover-sanitizer-control AO B DEN direct|host-graph]\n",
                  argv[0]);
     return 2;
   }

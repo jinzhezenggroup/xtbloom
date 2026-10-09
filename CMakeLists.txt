@@ -200,6 +200,8 @@ else()
   message(STATUS "xtbloom PyTorch extension disabled: XTBLOOM_ENABLE_TORCH_EXT=OFF")
 endif()
 option(XTBLOOM_BUILD_TESTS "Build xtbloom tests" ${PROJECT_IS_TOP_LEVEL})
+option(XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+  "Allow frozen restricted public SCC graph preferences for isolated benchmarks" OFF)
 option(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE
   "Build the isolated external energy SCC callback smoke test (research only)" OFF)
 option(XTBLOOM_BUILD_WEB_DEMO
@@ -1817,6 +1819,9 @@ if(XTBLOOM_HAS_CUDA)
     # release builds.
     target_compile_definitions(xtbloom_cuda_backend PRIVATE XTBLOOM_CUDA_TEST_HOOKS=1)
   endif()
+  if(XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES)
+    target_compile_definitions(xtbloom_cuda_backend PRIVATE XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES=1)
+  endif()
   set_target_properties(xtbloom_cuda_backend PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_STANDARD 17
@@ -1953,7 +1958,8 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
-      benchmarks.test_run benchmarks.test_natoms_scaling
+      benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_cuda_crossover
+      benchmarks.test_cuda_crossover_summary
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   add_test(
@@ -2092,6 +2098,12 @@ if(XTBLOOM_BUILD_TESTS)
   if(XTBLOOM_CPU_LINALG_RUNTIME)
     xtbloom_configure_linalg_runtime_test(xtbloom_runtime_test xtbloom.runtime)
   endif()
+
+  add_executable(xtbloom_cuda_scc_benchmark_mode_test tests/cuda_scc_benchmark_mode_test.cpp)
+  target_include_directories(xtbloom_cuda_scc_benchmark_mode_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_features(xtbloom_cuda_scc_benchmark_mode_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.cuda_scc_benchmark_mode COMMAND xtbloom_cuda_scc_benchmark_mode_test)
 
   add_executable(xtbloom_cpu_isa_dispatch_test tests/cpu_isa_dispatch_test.cpp)
   target_link_libraries(xtbloom_cpu_isa_dispatch_test PRIVATE xtbloom_gfn2_cpu)
@@ -2970,6 +2982,10 @@ if(XTBLOOM_BUILD_TESTS)
     target_compile_definitions(xtbloom_cuda_gfn2_runtime_graph_test
       PRIVATE XTBLOOM_HAS_CUDA=1
     )
+    if(XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES)
+      target_compile_definitions(xtbloom_cuda_gfn2_runtime_graph_test PRIVATE
+        XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES=1)
+    endif()
     set_target_properties(xtbloom_cuda_gfn2_runtime_graph_test PROPERTIES
       CUDA_STANDARD 17
       CUDA_STANDARD_REQUIRED YES
@@ -2978,6 +2994,14 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.gfn2_runtime_graph
       COMMAND xtbloom_cuda_gfn2_runtime_graph_test
     )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_graph_benchmark_modes
+      COMMAND xtbloom_cuda_gfn2_runtime_graph_test --benchmark-modes-only)
+    set_tests_properties(xtbloom.cuda.gfn2_runtime_graph_benchmark_modes PROPERTIES
+      SKIP_RETURN_CODE 77)
+    add_test(NAME xtbloom.cuda.gfn2_runtime_graph_failure_exit
+      COMMAND ${CMAKE_COMMAND}
+        "-DTEST_BINARY=$<TARGET_FILE:xtbloom_cuda_gfn2_runtime_graph_test>"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cuda_gfn2_runtime_graph_failure_exit.cmake)
 
     add_executable(xtbloom_cuda_gfn2_runtime_cache_diagnostics_test
       tests/cuda_gfn2_runtime_cache_diagnostics_test.cu
@@ -3667,6 +3691,39 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.scc_iteration_production
       COMMAND xtbloom_cuda_scc_iteration_production_test
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao41_b1
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 41 1 1 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao41_b1
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 41 1 1 host-graph
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao122_b128
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 122 128 1 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao122_b128
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 122 128 1 host-graph
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao180_b256
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 180 256 4 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao180_b256
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 180 256 4 host-graph
+    )
+    set_tests_properties(
+      xtbloom.cuda.scc_iteration_crossover_direct_ao41_b1
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao41_b1
+      xtbloom.cuda.scc_iteration_crossover_direct_ao122_b128
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao122_b128
+      xtbloom.cuda.scc_iteration_crossover_direct_ao180_b256
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao180_b256
+      PROPERTIES SKIP_RETURN_CODE 77
     )
     add_test(NAME xtbloom.cuda.scc_iteration_large_singleton
       COMMAND xtbloom_cuda_scc_iteration_production_test --large-singleton-tridiagonal

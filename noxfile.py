@@ -296,6 +296,8 @@ def _run_python_tests(session: nox.Session) -> None:
         "benchmarks.test_natoms_cross_engine",
         "benchmarks.test_dxtb_adapter",
         "benchmarks.test_evidence_size",
+        "benchmarks.test_cuda_crossover",
+        "benchmarks.test_cuda_crossover_summary",
         env=test_environment,
     )
 

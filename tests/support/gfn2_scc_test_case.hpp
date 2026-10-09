@@ -30,6 +30,14 @@ enum class SmallSystemKind {
    * crosses the sparse pair-list dense-fallback crossover so the production
    * runtime path exercises the bucketed consistency gate. */
   kC20H42,
+  /* A deterministic C10H22 alkane built by benchmarks/natoms_scaling.py's
+   * matching geometry algorithm; its GFN2 basis contains exactly 62 AOs. */
+  kC10H22,
+  /* Component-only synthetic clusters for exact AO edges, not molecular
+   * endpoint geometries or scientifically qualified systems. */
+  kSyntheticC10,
+  kSyntheticC10HCation,
+  kSyntheticC45,
   /* A 272-atom C90H182 chain with 542 GFN2 orbitals. CUDA 12.9 switches the
    * vector eigensolver to a non-capturable provider path above 512 orbitals,
    * so this case exercises issue #264's large-singleton capture boundary. */
