@@ -1953,9 +1953,27 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
-      benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_convergence_grouping
+      benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_ao_grouping
+      benchmarks.test_convergence_grouping
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+    RESULT_VARIABLE xtbloom_benchmark_numpy_status
+    OUTPUT_QUIET
+    ERROR_QUIET
+  )
+  if(xtbloom_benchmark_numpy_status EQUAL 0)
+    add_test(
+      NAME xtbloom.benchmarks.omol25_inputs
+      COMMAND ${Python3_EXECUTABLE} -m unittest -v benchmarks.test_omol25_inputs
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+  else()
+    message(STATUS
+      "xtbloom.benchmarks.omol25_inputs NOT REGISTERED: selected Python lacks NumPy; locked project nox tests still require it"
+    )
+  endif()
   add_test(
     NAME xtbloom.cmake.cuda_toolkit_metadata
     COMMAND ${CMAKE_COMMAND} -P
