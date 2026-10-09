@@ -104,7 +104,7 @@ All three strategies can bind the same prior experiment checkpoint:
 python3 -m benchmarks.run --library /path/to/libxtbloom.so \
   --manifest /path/to/workload-manifest.json --engines xtbloom --backends cuda \
   --cuda-memory-modes host --case-ids-file /path/to/view-holdout-ids.txt \
-  --ao-grouping ao-risk --batch-sizes 64 256 --properties force \
+  --ao-grouping ao-risk --batch-sizes 64,256 --properties force \
   --convergence-manifest /path/to/input-only-manifest.json \
   --convergence-plan /path/to/issue-514-freeze-plan.json \
   --convergence-freeze-sha256 <prior-logical-freeze-sha256> \
