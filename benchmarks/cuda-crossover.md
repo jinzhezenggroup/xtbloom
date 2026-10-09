@@ -91,3 +91,60 @@ The hardware-independent integrity tests are:
 ```bash
 python3 -m unittest -v benchmarks.test_cuda_crossover
 ```
+
+## Matched sanitizer controls
+
+The native executable also accepts `--crossover-sanitizer-control AO B DEN MODE`
+for exactly `41 1 1`, `122 128 1`, and `180 256 4`, with `MODE` equal to `direct`
+or `host-graph`. These use the same fixture, seed515, FRESH checkpoint, static
+terminal mask and one-body maximum as the component matrix. The host-Graph
+control captures the existing restricted direct launcher, replays it from the
+same checkpoint, and checks the complete state and per-peer ledgers against
+direct execution. It does not use a device-launched tail. Both modes report a
+machine-readable diagnostic record; no GPU or unsupported provider capture is
+explicitly unavailable, not a pass.
+
+Six `xtbloom.cuda.scc_iteration_crossover_*` CTests register the controls. Run
+them and Compute Sanitizer on the assigned GPU through a finite scheduled job,
+preserving the scheduler's device visibility. These controls help distinguish
+ordinary execution/capture from device-tail instrumentation reports. They do
+not automatically waive an error, inherit an earlier tool disposition, or
+qualify forces, an independent oracle, a public endpoint or E2E performance.
+
+## Compact offline table
+
+Summarize the original matrix JSONL without retaining oversized raw samples in
+Git. The analyzer reuses the native record validator, requires the complete
+requested grid, retains failed/unavailable coordinates, cross-checks duplicate
+native records and wrapper outcomes, and excludes warmups from every statistic:
+
+```bash
+python3 -m benchmarks.cuda_crossover_summary \
+  --input /absolute/external/component-matrix.jsonl \
+  --json-output /absolute/external/component-summary.json \
+  --csv-output /absolute/external/component-summary.csv \
+  --table-csv-output /absolute/external/component-table.csv
+python3 -m unittest -v benchmarks.test_cuda_crossover_summary
+```
+
+The summary records producing source/binary/cache identities, raw byte count
+and SHA-256, analyzer source/dirty identity, static fixture/mask identity,
+per-coordinate outcome/ledger counts, setup and known memory/executable
+subtotals. It does not infer a materialized geometry hash or native GPU/NVML
+association that the producer did not record. Pair ratios are descriptive
+`chain_ms/tail_ms` quantiles, not confidence intervals or an adoption decision.
+The producing revision remains unchanged when a later clean analyzer processes
+an older raw artifact. `claim_eligible` remains false even with complete replay
+parity; the real public endpoint, oracle, E2E, declining-activity and sanitizer
+gates still own qualification.
+
+The optional table projection retains every requested coordinate and outcome,
+with six-significant-digit display floats; exact values, failure reasons,
+limitations and producing/analyzer/raw identities remain in the full external
+JSON/CSV. The JSON pins the projection's byte count and SHA-256. Projection is
+rejected before writing any output if it exceeds 20,000 bytes; it never drops
+coordinates to fit. This local table bound does not replace the repository's
+1MiB-per-file and 16MiB-total evidence gates. Native integer fields reject
+boolean/integral-float aliases, and every paired iteration ledger must respect
+the declared one-body bound before any timing pair is usable. Malformed failed
+rows retain their diagnostics but contribute no usable statistics.

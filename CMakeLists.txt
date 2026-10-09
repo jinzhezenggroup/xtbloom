@@ -1954,6 +1954,7 @@ if(XTBLOOM_BUILD_TESTS)
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
       benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_cuda_crossover
+      benchmarks.test_cuda_crossover_summary
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   add_test(
@@ -3667,6 +3668,39 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.scc_iteration_production
       COMMAND xtbloom_cuda_scc_iteration_production_test
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao41_b1
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 41 1 1 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao41_b1
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 41 1 1 host-graph
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao122_b128
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 122 128 1 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao122_b128
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 122 128 1 host-graph
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao180_b256
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 180 256 4 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao180_b256
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 180 256 4 host-graph
+    )
+    set_tests_properties(
+      xtbloom.cuda.scc_iteration_crossover_direct_ao41_b1
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao41_b1
+      xtbloom.cuda.scc_iteration_crossover_direct_ao122_b128
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao122_b128
+      xtbloom.cuda.scc_iteration_crossover_direct_ao180_b256
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao180_b256
+      PROPERTIES SKIP_RETURN_CODE 77
     )
     add_test(NAME xtbloom.cuda.scc_iteration_large_singleton
       COMMAND xtbloom_cuda_scc_iteration_production_test --large-singleton-tridiagonal
