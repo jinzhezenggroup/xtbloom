@@ -5,6 +5,52 @@ restricted CUDA SCC dispatch-chain versus monolithic-tail comparison. It
 produces diagnostic crossover measurements; no component result decides a
 production AO guard or demonstrates a benefit at real public endpoints.
 
+## Isolated public-path graph override
+
+For prospective public endpoint/E2E controls, an independent, default-OFF
+`-DXTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES=ON` build accepts
+`XTBLOOM_CUDA_SCC_BENCHMARK_MODE=auto|tail|chain`. Unlike #512's optional
+`XTBLOOM_CUDA_SCC_DIAGNOSTICS` device ledger, this option does not instrument
+each SCC iteration. Both forced modes use the existing SCC Graph families in
+the same native binary and still enter through `xtbloom_compute`. They do not
+change equations, provider precision, initial guesses, mixing, tolerances,
+spin policy, or the production 40-AO/singleton selector.
+
+The CUDA execution-cache owner captures a value-only preference once at its
+creation. Later environment changes do not alter that owner's topology, Graph,
+or strict-WARM identity; create a separate owner/context before comparing
+another mode. No replay reads the environment or makes a host-side per-iteration
+dispatch choice. Default-OFF builds ignore this variable completely. An unset
+variable or `auto` in an opt-in build preserves the ordinary selector.
+
+Explicit `tail`/`chain` is restricted to molecular GFN2 with one shared spin
+channel, without point charges, periodic charge-response/native-lattice
+operators, or an external energy callback. Malformed modes and out-of-scope
+requests fail before candidate or caller-output commit. A requested family
+that cannot be built returns `NOT_IMPLEMENTED` with its fallback reason rather
+than silently measuring the bounded or other Graph family.
+The native-periodic strain and host-callback CPU compatibility bridges check
+the same frozen owner selection before execution; they cannot bypass these
+restrictions to produce a falsely labeled forced-mode result.
+
+Only synchronous `xtbloom_compute`/`xtbloom_plan_compute` may use a forced
+family. Public asynchronous enqueue uses a different conditional request Graph
+that intentionally captures bounded SCC; explicit forced modes reject that
+route with `NOT_SUPPORTED`, before request/caller-output publication, rather
+than mislabeling it as chain or tail. `auto` and default-OFF builds retain the
+ordinary asynchronous API. The internal asynchronous stage launcher is not the
+public enqueue API and still launches its prepared SCC family.
+
+This override is a research prototype, not an accepted dispatch contract or
+permission to remove the 40-AO guard. Forced-mode outputs still require
+independent oracle, state/status/failure, memory-mode, cache/WARM, and applicable
+Graph/sanitizer validation. Keep public setup/preparation/publication costs in
+E2E; static artificial masks remain component probes, not declining real SCC
+workload throughput. Existing component records and reference failures are not
+superseded by enabling the option.
+
+## Component matrix
+
 The fixed matrix contains exact basis AO counts `40, 41, 62, 122, 180`, batch
 sizes `1, 8, 32, 64, 128, 256`, and requested active fractions `1, 0.5, 0.25`.
 Each coordinate runs from one compiled native executable. AO40, AO41, and AO180
