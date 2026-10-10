@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -371,8 +372,16 @@ bool download(const T* device, std::int64_t elements, std::vector<T>& host, cuda
 
 template <typename T>
 bool download_value(const T* device, T& host, cudaStream_t stream) {
-  return device != nullptr &&
-         cudaMemcpyAsync(&host, device, sizeof(T), cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+  if (device == nullptr) {
+    return false;
+  }
+  const cudaError_t status =
+      cudaMemcpyAsync(&host, device, sizeof(T), cudaMemcpyDeviceToHost, stream);
+  if (status != cudaSuccess) {
+    std::fprintf(stderr, "SCC scalar download failed: %s (%d): %s\n", cudaGetErrorName(status),
+                 static_cast<int>(status), cudaGetErrorString(status));
+  }
+  return status == cudaSuccess;
 }
 
 template <typename T>
@@ -383,6 +392,51 @@ bool upload_fill(T* device, std::int64_t elements, T value) {
   std::vector<T> host(static_cast<std::size_t>(elements), value);
   return elements == 0 || cudaMemcpy(device, host.data(), host.size() * sizeof(T),
                                      cudaMemcpyHostToDevice) == cudaSuccess;
+}
+
+int check_loop_diagnostics(const Gfn2SccLoopCudaGraphOwner& owner,
+                           const Gfn2SccIterationBinding& binding, cudaStream_t stream,
+                           std::uint64_t expected_iterations) {
+  const auto diagnostics = owner.diagnostics_device();
+  if (diagnostics.header == nullptr) {
+    CHECK(diagnostics.iterations == nullptr && diagnostics.rows == nullptr &&
+          diagnostics.buckets == nullptr);
+    return 0;
+  }
+  xtbloom::detail::cuda::Gfn2SccDiagnosticHeader header{};
+  CHECK(download_value(diagnostics.header, header, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(header.overflow == 0u);
+  CHECK(header.iteration_count == expected_iterations);
+  std::vector<xtbloom::detail::cuda::Gfn2SccDiagnosticIteration> iterations;
+  std::vector<xtbloom::detail::cuda::Gfn2SccDiagnosticBucket> rows;
+  CHECK(download(diagnostics.iterations, header.iteration_count, iterations, stream));
+  CHECK(
+      download(diagnostics.rows, header.iteration_count * diagnostics.bucket_count, rows, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (std::uint64_t iteration = 0u; iteration < header.iteration_count; ++iteration) {
+    CHECK(iterations[iteration].start_ns <= iterations[iteration].end_ns);
+    CHECK(iterations[iteration].plan_failure_record == 0u);
+    if (iteration != 0u) CHECK(iterations[iteration - 1u].end_ns <= iterations[iteration].start_ns);
+    for (std::int64_t bucket_index = 0; bucket_index < diagnostics.bucket_count; ++bucket_index) {
+      const auto bucket = binding.plan.eigensolver_provider.buckets[bucket_index];
+      const auto row = rows[iteration * diagnostics.bucket_count + bucket_index];
+      const auto channels = bucket.solve_count > 0 ? bucket.solve_count : bucket.system_count;
+      CHECK(row.active_systems <= static_cast<std::uint64_t>(bucket.system_count));
+      CHECK(row.active_channels >= row.active_systems);
+      CHECK(row.active_channels <= 2u * row.active_systems);
+      CHECK(row.converged_systems + row.failed_systems + row.exhausted_systems <=
+            static_cast<std::uint64_t>(bucket.system_count));
+      if (owner.device_dispatch_chain_ready()) {
+        CHECK(row.submitted_solver_slots <= row.active_channels);
+        CHECK(row.submitted_backtransform_slots <= row.submitted_solver_slots);
+      } else {
+        CHECK(row.submitted_solver_slots == static_cast<std::uint64_t>(channels));
+        CHECK(row.submitted_backtransform_slots == static_cast<std::uint64_t>(channels));
+      }
+    }
+  }
+  return 0;
 }
 
 bool near(double first, double second, double tolerance) noexcept {
@@ -2012,6 +2066,9 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
     CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
           0);
 
+    CHECK(check_loop_diagnostics(graph, fixture.binding, fixture.handles.stream(), body_count) ==
+          0);
+
     /* A terminal replay must execute no numerical body, proving that the root
      * activity gate suppresses the device-tail body rather than merely gating
      * publication inside an otherwise unconditional iteration. */
@@ -2021,6 +2078,7 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
         download_value(graph.numerical_body_count_device(), body_count, fixture.handles.stream()));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
     CHECK(body_count == 0u);
+    CHECK(check_loop_diagnostics(graph, fixture.binding, fixture.handles.stream(), 0u) == 0);
     return 0;
   };
 
@@ -2396,6 +2454,9 @@ int test_dispatch_chain_forced_build_and_parity(std::int64_t batch_size) {
     CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
           0);
 
+    CHECK(check_loop_diagnostics(graph, fixture.binding, fixture.handles.stream(), body_count) ==
+          0);
+
     /* A terminal replay must execute no numerical body: the root activity gate
      * suppresses the dispatch-chain pre-executable just as it does the
      * monolithic device-tail body. */
@@ -2405,6 +2466,7 @@ int test_dispatch_chain_forced_build_and_parity(std::int64_t batch_size) {
         download_value(graph.numerical_body_count_device(), body_count, fixture.handles.stream()));
     CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
     CHECK(body_count == 0u);
+    CHECK(check_loop_diagnostics(graph, fixture.binding, fixture.handles.stream(), 0u) == 0);
     return 0;
   };
 
@@ -2703,6 +2765,10 @@ int test_dispatch_chain_owner_whole_pipeline_capture() {
                                static_cast<std::size_t>(fixture.host.batch_size()) * sizeof(double),
                                cudaMemcpyDeviceToDevice, fixture.handles.stream()));
     CUDA_CHECK(cudaStreamEndCapture(fixture.handles.stream(), pipeline.graph_address()));
+    std::ostringstream unavailable_diagnostics;
+    CHECK(owner.write_diagnostics_json(unavailable_diagnostics, fixture.handles.stream()) ==
+          cudaErrorNotSupported);
+    CHECK(unavailable_diagnostics.str().empty());
     owner.reset();
     CHECK(!owner.ready());
   }
@@ -3945,6 +4011,14 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--unrestricted-parity") == 0) {
     return test_production_iteration_cpu_parity(false, 1, true, true);
   }
+  /* Separate processes keep clean sanitizer controls independent of a
+   * device-Graph finding and its potentially poisoned CUDA context. */
+  if (argc == 2 && std::strcmp(argv[1], "--host-capture-control") == 0) {
+    return test_device_tail_owner_whole_pipeline_capture();
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--device-tail-count") == 0) {
+    return test_conditional_graph_exact_body_count(1);
+  }
   if (argc == 2 && std::strcmp(argv[1], "--mixed-parity") == 0) {
     return test_mixed_spin_batch_one_step_cpu_parity();
   }
@@ -3997,6 +4071,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr,
                  "usage: %s "
                  "[--benchmark|--unrestricted-smoke|--unrestricted-parity|--mixed-parity|"
+                 "--host-capture-control|--device-tail-count|"
                  "--mixed-acceptance|--mixed-bounded|--mixed-conditional|"
                  "--dispatch-chain|--finite-temperature-parity|--large-singleton-tridiagonal|"
                  "--large-singleton-sanitizer|--deterministic-debug]\n",

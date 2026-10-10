@@ -200,6 +200,8 @@ else()
   message(STATUS "xtbloom PyTorch extension disabled: XTBLOOM_ENABLE_TORCH_EXT=OFF")
 endif()
 option(XTBLOOM_BUILD_TESTS "Build xtbloom tests" ${PROJECT_IS_TOP_LEVEL})
+option(XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  "Instrument CUDA SCC with a setup-owned device ledger (not for performance claims)" OFF)
 option(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE
   "Build the isolated external energy SCC callback smoke test (research only)" OFF)
 option(XTBLOOM_BUILD_WEB_DEMO
@@ -1817,6 +1819,10 @@ if(XTBLOOM_HAS_CUDA)
     # release builds.
     target_compile_definitions(xtbloom_cuda_backend PRIVATE XTBLOOM_CUDA_TEST_HOOKS=1)
   endif()
+  if(XTBLOOM_CUDA_SCC_DIAGNOSTICS)
+    target_sources(xtbloom_cuda_backend PRIVATE src/backends/cuda/gfn2_scc_diagnostics.cu)
+    target_compile_definitions(xtbloom_cuda_backend PRIVATE XTBLOOM_CUDA_SCC_DIAGNOSTICS=1)
+  endif()
   set_target_properties(xtbloom_cuda_backend PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_STANDARD 17
@@ -1953,7 +1959,9 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
-      benchmarks.test_run benchmarks.test_natoms_scaling
+      benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_cuda_diagnostics
+      benchmarks.test_historical_alkane_inputs
+      benchmarks.test_historical_alkane_capture
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   add_test(
@@ -3645,6 +3653,37 @@ if(XTBLOOM_BUILD_TESTS)
       COMMAND xtbloom_cuda_scc_setup_inputs_test
     )
 
+    add_executable(xtbloom_cuda_scc_diagnostics_test tests/cuda_scc_diagnostics_test.cu)
+    if(NOT XTBLOOM_CUDA_SCC_DIAGNOSTICS)
+      target_sources(xtbloom_cuda_scc_diagnostics_test PRIVATE
+        src/backends/cuda/gfn2_scc_diagnostics.cu
+      )
+    endif()
+    target_link_libraries(xtbloom_cuda_scc_diagnostics_test PRIVATE xtbloom_cuda_backend)
+    target_include_directories(xtbloom_cuda_scc_diagnostics_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    set_target_properties(xtbloom_cuda_scc_diagnostics_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.scc_diagnostics COMMAND xtbloom_cuda_scc_diagnostics_test)
+    set_tests_properties(xtbloom.cuda.scc_diagnostics PROPERTIES SKIP_RETURN_CODE 77)
+    if(XTBLOOM_CUDA_SCC_DIAGNOSTICS AND BUILD_SHARED_LIBS)
+      foreach(diagnostic_memory_mode IN ITEMS host device mixed)
+        add_test(NAME xtbloom.cuda.scc_diagnostics_public_${diagnostic_memory_mode}
+          COMMAND ${Python3_EXECUTABLE} -m benchmarks.check_cuda_diagnostics
+            --library $<TARGET_FILE:xtbloom> --memory-mode ${diagnostic_memory_mode}
+        )
+        set_tests_properties(xtbloom.cuda.scc_diagnostics_public_${diagnostic_memory_mode} PROPERTIES
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          SKIP_RETURN_CODE 77
+          LABELS "cuda;public-api;diagnostics"
+        )
+      endforeach()
+    endif()
+
     add_executable(xtbloom_cuda_scc_iteration_production_test
       tests/cuda_scc_iteration_production_test.cu
       tests/support/gfn2_scc_test_case.cpp
@@ -3667,6 +3706,15 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.scc_iteration_production
       COMMAND xtbloom_cuda_scc_iteration_production_test
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_direct_control
+      COMMAND xtbloom_cuda_scc_iteration_production_test --unrestricted-parity
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_host_capture_control
+      COMMAND xtbloom_cuda_scc_iteration_production_test --host-capture-control
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_device_tail_count
+      COMMAND xtbloom_cuda_scc_iteration_production_test --device-tail-count
     )
     add_test(NAME xtbloom.cuda.scc_iteration_large_singleton
       COMMAND xtbloom_cuda_scc_iteration_production_test --large-singleton-tridiagonal

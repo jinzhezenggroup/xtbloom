@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "xTBloom CUDA SCC diagnostics v1",
+  "description": "One instrumented public CUDA call. JSONL contains one object per emitted call. Cross-field capacity, iteration, timing, and mode rules are additionally enforced by the parser. This diagnostic does not make a performance claim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "instrumented",
+    "execution_mode",
+    "fallback_reason",
+    "batch_size",
+    "maximum_iterations",
+    "buckets",
+    "iterations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "xtbloom.cuda.scc_diagnostics.v1"
+    },
+    "instrumented": {
+      "const": true
+    },
+    "execution_mode": {
+      "type": "string",
+      "enum": [
+        "device_dispatch_chain",
+        "device_tail_graph",
+        "bounded_fallback"
+      ],
+      "description": "Actual public execution mode, not the prepared graph family or requested preference."
+    },
+    "fallback_reason": {
+      "type": "integer",
+      "description": "Actual graph fallback reason; 15 denotes RuntimeBoundedOverride. Distinct from static chain-selection constraints."
+    },
+    "batch_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "maximum_iterations": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "plan_token": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "wavefunction_layout_fingerprint": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "start_policy": {
+      "type": "integer",
+      "enum": [0, 1, 2],
+      "description": "0 is unknown white-box, 1 is FRESH, and 2 is WARM."
+    },
+    "graph_preference": {
+      "type": "integer",
+      "enum": [0, 1, 2],
+      "description": "0 is auto, 1 is tail, and 2 is chain; this does not establish runtime benefit."
+    },
+    "chain_measured_ao_bound": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Native v1 currently reports 40."
+    },
+    "diagnostic_device_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "chain_selection_constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Static non-selection guards, separate from fallback_reason."
+    },
+    "buckets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/bucket"
+      }
+    },
+    "iterations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/iteration"
+      },
+      "description": "Numerical-body records only. Positive-batch bounded_fallback emits maximum_iterations full-capacity bodies even at zero activity; graph root exits may emit no body records."
+    },
+    "terminal_buckets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/terminal_bucket"
+      },
+      "description": "Optional final grouped SCC-state snapshot from canonical state readback, including requests with no numerical-body rows."
+    },
+    "terminal_systems": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/terminal_system"
+      },
+      "description": "Optional final per-system SCC-state snapshot from the same canonical readback, in system-index order."
+    }
+  },
+  "$defs": {
+    "bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bucket_index",
+        "ao",
+        "system_capacity",
+        "channel_capacity"
+      ],
+      "properties": {
+        "bucket_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ao": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "system_capacity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "channel_capacity": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Cross-field bounds are system_capacity through twice system_capacity."
+        }
+      }
+    },
+    "iteration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "iteration",
+        "start_ns",
+        "end_ns",
+        "plan_failure_record",
+        "buckets"
+      ],
+      "properties": {
+        "iteration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "start_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "CUDA %globaltimer after begin-side diagnostic tally."
+        },
+        "end_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "CUDA %globaltimer before finish-side terminal tally; interval includes graph scheduling and instrumentation perturbation, not additive phase timing."
+        },
+        "plan_failure_record": {
+          "type": "integer",
+          "description": "A nonzero value requires null submitted-slot counts in every bucket row."
+        },
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/iteration_bucket"
+          }
+        }
+      }
+    },
+    "iteration_bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bucket_index",
+        "active_systems",
+        "active_channels",
+        "submitted_solver_slots",
+        "submitted_backtransform_slots",
+        "converged_systems",
+        "failed_systems",
+        "exhausted_systems"
+      ],
+      "properties": {
+        "bucket_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_systems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_channels": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "submitted_solver_slots": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "submitted_backtransform_slots": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "converged_systems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed_systems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exhausted_systems": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "terminal_bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bucket_index",
+        "converged_systems",
+        "failed_systems",
+        "exhausted_systems",
+        "unfinished_systems"
+      ],
+      "properties": {
+        "bucket_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "converged_systems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed_systems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exhausted_systems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unfinished_systems": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "description": "The four disjoint outcome counts must sum to that bucket's system_capacity."
+    },
+    "terminal_system": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system_index",
+        "iterations",
+        "status",
+        "converged"
+      ],
+      "properties": {
+        "system_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-system status code; 0 is SUCCESS, 7 is SCC_NOT_CONVERGED, and other nonzero values classify as failed."
+        },
+        "converged": {
+          "type": "integer",
+          "enum": [0, 1]
+        }
+      }
+    }
+  }
+}
