@@ -1961,6 +1961,7 @@ if(XTBLOOM_BUILD_TESTS)
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
       benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_cuda_diagnostics
       benchmarks.test_historical_alkane_inputs
+      benchmarks.test_historical_alkane_capture
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   add_test(

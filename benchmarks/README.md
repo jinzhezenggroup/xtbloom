@@ -15,6 +15,7 @@ the scripts and method pages here define how evidence is produced and audited.
 | Dense 62-atom complete-Hessian batch throughput | `hessian.py` | Script module documentation and issue evidence README | `benchmarks.test_hessian` |
 | Opt-in CUDA SCC activity and actual execution-path diagnosis | `cuda_diagnostics.py` | [CUDA SCC diagnostics](cuda-diagnostics.md) | `benchmarks.test_cuda_diagnostics` |
 | Offline preservation of saved 32/62-atom alkane inputs, not timing or qualification | `historical_alkane_inputs.py` | [Historical input assembly](historical-alkane-inputs.md) | `benchmarks.test_historical_alkane_inputs` |
+| Diagnostic-only paired native observations on those saved inputs | `historical_alkane_capture.py` | [Historical CUDA capture](historical-alkane-capture.md) | `benchmarks.test_historical_alkane_capture` |
 
 These protocols answer different questions. In particular, the public
 cross-engine figure and the FRESH/WARM study use different SCC settings,
@@ -118,6 +119,7 @@ python3 -m unittest -v benchmarks.test_dlpack_result_memory
 python3 -m unittest -v benchmarks.test_hessian
 python3 -m unittest -v benchmarks.test_evidence_size
 python3 -m unittest -v benchmarks.test_historical_alkane_inputs
+python3 -m unittest -v benchmarks.test_historical_alkane_capture
 ```
 
 The plotting test is opt-in because Matplotlib is a publication-only
