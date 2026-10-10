@@ -14,6 +14,7 @@ the scripts and method pages here define how evidence is produced and audited.
 | Cost of xTBloom-owned CUDA DLPack result arenas | `dlpack_result_memory.py` | [DLPack result memory](dlpack-result-memory.md) | `benchmarks.test_dlpack_result_memory` |
 | Dense 62-atom complete-Hessian batch throughput | `hessian.py` | Script module documentation and issue evidence README | `benchmarks.test_hessian` |
 | Opt-in CUDA SCC activity and actual execution-path diagnosis | `cuda_diagnostics.py` | [CUDA SCC diagnostics](cuda-diagnostics.md) | `benchmarks.test_cuda_diagnostics` |
+| Offline preservation of saved 32/62-atom alkane inputs, not timing or qualification | `historical_alkane_inputs.py` | [Historical input assembly](historical-alkane-inputs.md) | `benchmarks.test_historical_alkane_inputs` |
 
 These protocols answer different questions. In particular, the public
 cross-engine figure and the FRESH/WARM study use different SCC settings,
@@ -116,6 +117,7 @@ python3 -m unittest -v benchmarks.test_natoms_scaling
 python3 -m unittest -v benchmarks.test_dlpack_result_memory
 python3 -m unittest -v benchmarks.test_hessian
 python3 -m unittest -v benchmarks.test_evidence_size
+python3 -m unittest -v benchmarks.test_historical_alkane_inputs
 ```
 
 The plotting test is opt-in because Matplotlib is a publication-only
