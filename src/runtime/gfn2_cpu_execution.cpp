@@ -1,6 +1,10 @@
 #include "runtime/gfn2_cpu_execution.hpp"
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+#include "runtime/gfn2_cpu_scc_snapshot.hpp"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -2416,6 +2420,262 @@ xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& 
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
 }
+
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+xtbloom_status_t snapshot_gfn2_cpu_scc_for_testing(Gfn2CpuExecutionCache& cache,
+                                                   Gfn2CpuSccSnapshot& snapshot,
+                                                   std::string& error) {
+  try {
+    std::lock_guard<std::mutex> lock(cache.impl_->mutex);
+    const auto& implementation = *cache.impl_;
+    const std::size_t system_count = implementation.systems.size();
+    const auto reject = [&error](const char* message, xtbloom_status_t status) {
+      error = message;
+      return status;
+    };
+    if (system_count == 0u || implementation.request.batch_size <= 0 ||
+        static_cast<std::uint64_t>(implementation.request.batch_size) !=
+            static_cast<std::uint64_t>(system_count)) {
+      return reject("CPU SCC snapshot has no completed system state",
+                    XTBLOOM_STATUS_INVALID_ARGUMENT);
+    }
+    if (implementation.keys.size() != system_count ||
+        implementation.outputs.size() != system_count ||
+        implementation.inference_statuses.size() != system_count ||
+        implementation.task_failures.size() != system_count ||
+        implementation.system_statuses.size() != system_count ||
+        implementation.iterations.size() != system_count ||
+        implementation.converged.size() != system_count ||
+        implementation.request.atom_offsets.size() != system_count + 1u ||
+        implementation.request.total_atoms <= 0) {
+      return reject("CPU SCC snapshot system and output counts do not match",
+                    XTBLOOM_STATUS_INTERNAL_ERROR);
+    }
+
+    const std::uint64_t total_atoms_u64 =
+        static_cast<std::uint64_t>(implementation.request.total_atoms);
+    if (total_atoms_u64 >
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / 3u)) {
+      return reject("CPU SCC snapshot atom count exceeds host addressable storage",
+                    XTBLOOM_STATUS_INTERNAL_ERROR);
+    }
+    const std::size_t total_atoms = static_cast<std::size_t>(total_atoms_u64);
+    const std::size_t total_force_elements = 3u * total_atoms;
+    if (implementation.request.atom_offsets.front() != 0 ||
+        implementation.request.atom_offsets.back() != implementation.request.total_atoms ||
+        !std::is_sorted(implementation.request.atom_offsets.begin(),
+                        implementation.request.atom_offsets.end()) ||
+        implementation.energies.size() != system_count ||
+        implementation.forces.size() != total_force_elements ||
+        implementation.atomic_charges.size() != total_atoms) {
+      return reject("CPU SCC snapshot is missing a complete public energy/force/charge result",
+                    XTBLOOM_STATUS_INVALID_ARGUMENT);
+    }
+
+    const auto copy_field = [](std::vector<double>& destination, const double* source,
+                               std::int64_t element_count) {
+      if (element_count <= 0 || source == nullptr ||
+          static_cast<std::uint64_t>(element_count) >
+              static_cast<std::uint64_t>(destination.max_size())) {
+        return false;
+      }
+      const std::size_t count = static_cast<std::size_t>(element_count);
+      destination.assign(source, source + count);
+      return true;
+    };
+    const auto copy_sized_vector = [](std::vector<double>& destination,
+                                      const std::vector<double>& source, std::size_t expected) {
+      if (source.size() != expected) return false;
+      destination.assign(source.begin(), source.end());
+      return true;
+    };
+
+    std::vector<Gfn2CpuSccSystemSnapshot> captured(system_count);
+    for (std::size_t index = 0u; index < system_count; ++index) {
+      if (implementation.systems[index] == nullptr) {
+        return reject("CPU SCC snapshot contains an absent system execution",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+      const SystemExecution& system = *implementation.systems[index];
+      const SystemOutput& actual_output = implementation.outputs[index];
+      if (implementation.system_statuses[index] != XTBLOOM_STATUS_SUCCESS ||
+          implementation.inference_statuses[index] != XTBLOOM_STATUS_SUCCESS ||
+          implementation.task_failures[index] != Gfn2CpuExecutionCache::Impl::TaskFailure::kNone ||
+          implementation.converged[index] == 0u ||
+          implementation.iterations[index] != actual_output.iterations ||
+          actual_output.status != XTBLOOM_STATUS_SUCCESS || actual_output.converged == 0u) {
+        return reject("CPU SCC snapshot requires every system to have a successful terminal result",
+                      XTBLOOM_STATUS_INVALID_ARGUMENT);
+      }
+
+      const gfn2::WavefunctionLayout& layout = system.wavefunction_layout;
+      const std::int64_t atom_count_i64 = layout.total_atoms;
+      const std::int64_t shell_count_i64 = layout.total_shells;
+      const std::int64_t orbital_count_i64 = layout.total_orbitals;
+      const std::int64_t matrix_count_i64 = system.integrals.total_matrix_elements;
+      if (layout.batch_size != 1 || atom_count_i64 <= 0 || shell_count_i64 <= 0 ||
+          orbital_count_i64 <= 0 || matrix_count_i64 <= 0 || system.geometry_generation == 0u ||
+          system.geometry.geometry_generation != system.geometry_generation) {
+        return reject("CPU SCC snapshot contains an incomplete terminal layout or geometry",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+      const std::uint64_t atom_count_u64 = static_cast<std::uint64_t>(atom_count_i64);
+      const std::uint64_t shell_count_u64 = static_cast<std::uint64_t>(shell_count_i64);
+      const std::uint64_t orbital_count_u64 = static_cast<std::uint64_t>(orbital_count_i64);
+      const std::uint64_t matrix_count_u64 = static_cast<std::uint64_t>(matrix_count_i64);
+      const std::size_t maximum_size = std::numeric_limits<std::size_t>::max();
+      if (atom_count_u64 > static_cast<std::uint64_t>(maximum_size / 3u) ||
+          atom_count_u64 > static_cast<std::uint64_t>(maximum_size - 1u) ||
+          shell_count_u64 > static_cast<std::uint64_t>(maximum_size - 1u) ||
+          orbital_count_u64 > static_cast<std::uint64_t>(maximum_size) ||
+          matrix_count_u64 > static_cast<std::uint64_t>(maximum_size)) {
+        return reject("CPU SCC snapshot layout exceeds host addressable storage",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+      const std::size_t atom_count = static_cast<std::size_t>(atom_count_u64);
+      const std::size_t shell_count = static_cast<std::size_t>(shell_count_u64);
+      const std::size_t orbital_count = static_cast<std::size_t>(orbital_count_u64);
+      const std::size_t matrix_count = static_cast<std::size_t>(matrix_count_u64);
+      const std::int64_t atom_begin_i64 = implementation.request.atom_offsets[index];
+      const std::int64_t atom_end_i64 = implementation.request.atom_offsets[index + 1u];
+      if (atom_begin_i64 < 0 || atom_end_i64 < atom_begin_i64 ||
+          atom_end_i64 - atom_begin_i64 != atom_count_i64 ||
+          system.basis.atom_shell_offsets.size() != atom_count + 1u ||
+          system.basis.shell_orbital_offsets.size() != shell_count + 1u ||
+          system.basis.atom_shell_offsets.front() != 0 ||
+          system.basis.atom_shell_offsets.back() != shell_count_i64 ||
+          system.basis.shell_orbital_offsets.front() != 0 ||
+          system.basis.shell_orbital_offsets.back() != orbital_count_i64 ||
+          !std::is_sorted(system.basis.atom_shell_offsets.begin(),
+                          system.basis.atom_shell_offsets.end()) ||
+          !std::is_sorted(system.basis.shell_orbital_offsets.begin(),
+                          system.basis.shell_orbital_offsets.end()) ||
+          system.overlap.size() != matrix_count || system.core_hamiltonian.size() != matrix_count) {
+        return reject("CPU SCC snapshot basis mapping or AO matrices do not match its layout",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+
+      const auto& driver_state = system.driver_state;
+      const auto& mixer_state = system.mixer_state;
+      if (!system.driver.sealed() || system.driver.batch_size() != 1 ||
+          driver_state.plan_identity != system.driver.identity() ||
+          driver_state.iterations == nullptr || driver_state.system_statuses == nullptr ||
+          driver_state.initialized == nullptr || driver_state.converged == nullptr ||
+          driver_state.free_energies == nullptr || driver_state.free_energy_changes == nullptr ||
+          driver_state.initialized[0] == 0u || driver_state.converged[0] == 0u ||
+          driver_state.system_statuses[0] != XTBLOOM_STATUS_SUCCESS || !system.mixer.sealed() ||
+          system.mixer.batch_size() != 1 || system.mixer.total_vector_elements() <= 0 ||
+          mixer_state.plan_identity != system.mixer.identity() ||
+          mixer_state.current_inputs == nullptr || mixer_state.previous_inputs == nullptr ||
+          mixer_state.previous_residuals == nullptr || mixer_state.residual_rms == nullptr ||
+          mixer_state.residual_maximum == nullptr || mixer_state.iterations == nullptr ||
+          mixer_state.system_statuses == nullptr || mixer_state.initialized == nullptr ||
+          mixer_state.converged == nullptr || mixer_state.initialized[0] == 0u ||
+          mixer_state.converged[0] == 0u ||
+          mixer_state.system_statuses[0] != XTBLOOM_STATUS_SUCCESS ||
+          driver_state.iterations[0] == 0u ||
+          mixer_state.iterations[0] != driver_state.iterations[0] ||
+          implementation.iterations[index] !=
+              static_cast<std::int32_t>(std::min<std::uint64_t>(
+                  driver_state.iterations[0],
+                  static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))) ||
+          !std::isfinite(driver_state.free_energies[0]) ||
+          !std::isfinite(driver_state.free_energy_changes[0]) ||
+          !std::isfinite(mixer_state.residual_rms[0]) ||
+          !std::isfinite(mixer_state.residual_maximum[0])) {
+        return reject("CPU SCC snapshot requires converged driver and mixer state",
+                      XTBLOOM_STATUS_INVALID_ARGUMENT);
+      }
+
+      const std::size_t force_offset = static_cast<std::size_t>(atom_begin_i64) * 3u;
+      const std::size_t force_elements = atom_count * 3u;
+      if (!std::isfinite(implementation.energies[index]) || !std::isfinite(actual_output.energy) ||
+          actual_output.energy != implementation.energies[index] ||
+          actual_output.forces.size() != force_elements ||
+          actual_output.atomic_charges.size() != atom_count ||
+          !std::equal(actual_output.forces.begin(), actual_output.forces.end(),
+                      implementation.forces.begin() + static_cast<std::ptrdiff_t>(force_offset)) ||
+          !std::equal(actual_output.atomic_charges.begin(), actual_output.atomic_charges.end(),
+                      implementation.atomic_charges.begin() +
+                          static_cast<std::ptrdiff_t>(atom_begin_i64)) ||
+          !std::all_of(actual_output.forces.begin(), actual_output.forces.end(),
+                       [](double value) { return std::isfinite(value); }) ||
+          !std::all_of(actual_output.atomic_charges.begin(), actual_output.atomic_charges.end(),
+                       [](double value) { return std::isfinite(value); })) {
+        return reject("CPU SCC snapshot public energy, force, or charge output is incomplete",
+                      XTBLOOM_STATUS_INVALID_ARGUMENT);
+      }
+
+      Gfn2CpuSccSystemSnapshot& output = captured[index];
+      output.layout = layout;
+      output.atom_shell_offsets = system.basis.atom_shell_offsets;
+      output.shell_orbital_offsets = system.basis.shell_orbital_offsets;
+      output.geometry_generation = system.geometry_generation;
+      output.status = static_cast<xtbloom_status_t>(implementation.system_statuses[index]);
+      output.iterations = implementation.iterations[index];
+      output.public_energy = implementation.energies[index];
+      output.public_forces.assign(
+          implementation.forces.begin() + static_cast<std::ptrdiff_t>(force_offset),
+          implementation.forces.begin() +
+              static_cast<std::ptrdiff_t>(force_offset + force_elements));
+      output.public_atomic_charges.assign(
+          implementation.atomic_charges.begin() + static_cast<std::ptrdiff_t>(atom_begin_i64),
+          implementation.atomic_charges.begin() +
+              static_cast<std::ptrdiff_t>(atom_begin_i64 + atom_count));
+      if (!copy_sized_vector(output.overlap, system.overlap, matrix_count) ||
+          !copy_sized_vector(output.core_hamiltonian, system.core_hamiltonian, matrix_count) ||
+          !copy_field(output.coefficients, system.wavefunction.coefficients,
+                      layout.coefficients.element_count) ||
+          !copy_field(output.eigenvalues, system.wavefunction.eigenvalues,
+                      layout.eigenvalues.element_count) ||
+          !copy_field(output.occupations, system.wavefunction.occupations,
+                      layout.occupations.element_count) ||
+          !copy_field(output.density, system.wavefunction.density, layout.density.element_count) ||
+          !copy_field(output.energy_weighted_density, system.wavefunction.energy_weighted_density,
+                      layout.energy_weighted_density.element_count) ||
+          !copy_field(output.qsh, system.wavefunction.qsh, layout.qsh.element_count) ||
+          !copy_field(output.qat, system.wavefunction.qat, layout.qat.element_count) ||
+          !copy_field(output.dipoles, system.wavefunction.dipole, layout.dipole.element_count) ||
+          !copy_field(output.quadrupoles, system.wavefunction.quadrupole,
+                      layout.quadrupole.element_count)) {
+        return reject("CPU SCC snapshot wavefunction or AO storage is incomplete",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+
+      const std::int64_t mixer_elements = system.mixer.total_vector_elements();
+      if (mixer_elements <= 0 ||
+          !copy_field(output.mixer_current_inputs, mixer_state.current_inputs, mixer_elements) ||
+          !copy_field(output.mixer_previous_inputs, mixer_state.previous_inputs, mixer_elements) ||
+          !copy_field(output.mixer_previous_residuals, mixer_state.previous_residuals,
+                      mixer_elements)) {
+        return reject("CPU SCC snapshot mixer storage is incomplete",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+
+      /* These are the terminal mixer buffers as stored: previous_residuals is
+       * retained history, not a newly evaluated fixed-point map or proof. */
+      output.mixer_residual_rms = mixer_state.residual_rms[0];
+      output.mixer_residual_maximum = mixer_state.residual_maximum[0];
+      output.mixer_iterations = mixer_state.iterations[0];
+      output.scc_free_energy = driver_state.free_energies[0];
+      output.scc_free_energy_change = driver_state.free_energy_changes[0];
+    }
+
+    snapshot.systems = std::move(captured);
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the CPU SCC state snapshot";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    error = "unknown failure while capturing the CPU SCC state snapshot";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+}
+#endif
 
 Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa)
     : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa)) {}

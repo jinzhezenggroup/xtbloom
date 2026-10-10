@@ -4,6 +4,11 @@ Validation follows the changed surface and issue acceptance criteria. Record
 the exact command, configuration, test count, backend, provider, and result.
 An absent or skipped test is not a pass.
 
+For branch-sensitive unrestricted calculations, distinguish a frozen-state
+transition check from agreement of independently converged SCC solutions; see
+[spin SCC branch sensitivity](spin-scc-branch-sensitivity.md) for the #509
+reproducer, replay gate, and remaining limitations.
+
 ## Toolchain prerequisites
 
 Repository validation requires Python 3.11 or newer, CMake 3.24 or newer,
