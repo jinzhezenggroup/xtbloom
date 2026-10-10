@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -228,6 +229,84 @@ class RuntimeObservationCLITests(unittest.TestCase):
                 load.assert_not_called()
                 verify.assert_not_called()
 
+    def test_convergence_options_fail_before_policy_workload_or_native_io(
+        self,
+    ) -> None:
+        """Mapping pins never authorize convergence inputs or holdout access."""
+        conflicting_flags = [
+            ["--convergence-manifest", "/tmp/unread-scheduling.json"],
+            ["--convergence-plan", "/tmp/unread-freeze.json"],
+            ["--convergence-freeze-sha256", "a" * 64],
+            ["--convergence-workload-sha256", "b" * 64],
+            ["--convergence-cohort-sha256", "c" * 64],
+            ["--convergence-partition", "calibration"],
+            ["--convergence-partition", "holdout"],
+        ]
+        conflicting_flags.append(
+            [value for option in conflicting_flags[:5] for value in option]
+            + ["--convergence-partition", "holdout"]
+        )
+        for case_flag, case_value in (
+            ("--case-ids", "a"),
+            ("--case-ids-file", "/tmp/unread-case-ids.txt"),
+        ):
+            base = self.base.copy()
+            offset = base.index("--case-ids")
+            base[offset : offset + 2] = [case_flag, case_value]
+            for flags in conflicting_flags:
+                with (
+                    self.subTest(case_flag=case_flag, flags=flags),
+                    mock.patch.object(run.sys, "platform", "linux"),
+                    mock.patch.object(run, "read_case_id_file") as read_ids,
+                    mock.patch.object(run, "controlled_receipt_check") as receipt,
+                    mock.patch.object(run.conformance, "load_json") as workload,
+                    mock.patch.object(
+                        run.convergence_grouping, "load_json_document"
+                    ) as policy,
+                    mock.patch.object(run.frozen_inputs, "capture_workload") as capture,
+                    mock.patch.object(run, "XTBloomAdapter") as adapter,
+                    mock.patch.object(run, "runtime_image_check") as observe,
+                    mock.patch("sys.stderr") as stderr,
+                ):
+                    self.assertEqual(run.main(base + self.flags + flags), 1)
+                    stderr.write.assert_any_call(
+                        "error: paired mode is AO-only and cannot use "
+                        "convergence inputs or partitions"
+                    )
+                    for boundary in (
+                        read_ids,
+                        receipt,
+                        workload,
+                        policy,
+                        capture,
+                        adapter,
+                        observe,
+                    ):
+                        boundary.assert_not_called()
+
+    def test_case_file_contents_are_revalidated_before_setup(self) -> None:
+        """Early option validation must not bypass empty or duplicate ID checks."""
+        base = self.base.copy()
+        offset = base.index("--case-ids")
+        base[offset : offset + 2] = ["--case-ids-file", "/tmp/fake-case-ids.txt"]
+        for case_ids in ((), ("a", "a")):
+            with (
+                self.subTest(case_ids=case_ids),
+                mock.patch.object(run.sys, "platform", "linux"),
+                mock.patch.object(
+                    run, "read_case_id_file", return_value=case_ids
+                ) as read_ids,
+                mock.patch.object(run, "controlled_receipt_check") as receipt,
+                mock.patch.object(run.conformance, "load_json") as workload,
+                mock.patch.object(run, "XTBloomAdapter") as adapter,
+                mock.patch("sys.stderr"),
+            ):
+                self.assertEqual(run.main(base + self.flags), 1)
+                read_ids.assert_called_once_with(Path("/tmp/fake-case-ids.txt"))
+                receipt.assert_not_called()
+                workload.assert_not_called()
+                adapter.assert_not_called()
+
     def main_with_observation(
         self, integrity_passed: bool
     ) -> tuple[int, dict[str, object]]:
@@ -326,6 +405,84 @@ class RuntimeObservationCLITests(unittest.TestCase):
             self.assertEqual(output["runtime_image_integrity_passed"], "False")
             self.assertEqual(output["runtime_image_postflight_status"], "FAIL")
             self.assertEqual(output["runtime_image_validation_ms"], "5.0")
+
+    def test_mixed_csv_preserves_convergence_columns_and_appends_mapping(self) -> None:
+        """Synthetic frozen and observed rows retain distinct boolean encodings."""
+        base = run.base_row(run.Cell("xtbloom", "cpu", "host", "gas", "energy", 1))
+        base["availability"] = "available"
+        frozen = dict(
+            base,
+            ao_grouping="ao-risk",
+            convergence_binding={"freeze_plan_sha256": "c" * 64},
+            risk_band_by_case_id={"a": "high"},
+            timing={
+                "input_snapshot_release_ms": 1.0,
+                "planning_inclusive_end_to_end_ms": {"median_ms": 7.0},
+            },
+            claim_eligible=False,
+            independent_reference_qualified=False,
+        )
+        observed = dict(
+            base,
+            ao_grouping="paired",
+            claim_eligible=False,
+            independent_reference_qualified=False,
+            producer_provenance={
+                "runtime_mapped_images": {
+                    "integrity_passed": False,
+                    "preflight": {"status": "PASS", "validation_ms": 2.0},
+                    "postflight": {"status": "FAIL", "validation_ms": 3.0},
+                }
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mixed.csv"
+            run.write_csv(path, [base, frozen])
+            with path.open(newline="", encoding="utf-8") as handle:
+                convergence_fields = csv.DictReader(handle).fieldnames
+            run.write_csv(path, [base, observed, frozen])
+            with path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                fields = reader.fieldnames
+                records = list(reader)
+        self.assertEqual(
+            convergence_fields[-5:],
+            [
+                "planning_inclusive_end_to_end_median_ms",
+                "convergence_binding_json",
+                "risk_band_by_case_id_json",
+                "input_snapshot_release_ms",
+                "claim_eligibility_scope",
+            ],
+        )
+        self.assertEqual(fields[:-4], convergence_fields)
+        self.assertEqual(
+            fields[-4:],
+            [
+                "runtime_image_integrity_passed",
+                "runtime_image_preflight_status",
+                "runtime_image_postflight_status",
+                "runtime_image_validation_ms",
+            ],
+        )
+        self.assertEqual(len(fields), len(set(fields)))
+        self.assertEqual(records[0]["claim_eligible"], "")
+        self.assertEqual(records[1]["claim_eligible"], "False")
+        self.assertEqual(records[1]["independent_reference_qualified"], "False")
+        self.assertEqual(records[1]["runtime_image_postflight_status"], "FAIL")
+        self.assertEqual(records[1]["runtime_image_validation_ms"], "5.0")
+        self.assertEqual(records[2]["claim_eligible"], "false")
+        self.assertEqual(records[2]["independent_reference_qualified"], "false")
+        self.assertEqual(
+            json.loads(records[2]["convergence_binding_json"]),
+            frozen["convergence_binding"],
+        )
+        self.assertEqual(
+            json.loads(records[2]["risk_band_by_case_id_json"]),
+            frozen["risk_band_by_case_id"],
+        )
+        self.assertEqual(records[2]["input_snapshot_release_ms"], "1.0")
+        self.assertEqual(records[2]["planning_inclusive_end_to_end_median_ms"], "7.0")
 
 
 if __name__ == "__main__":
