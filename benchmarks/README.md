@@ -76,6 +76,13 @@ read-only checker bind retained source/artifact bytes without promoting this
 gate. Paired mode can archive externally pinned preflight/postflight checks;
 actual mapped-image/dependency/scientific/runtime/performance admission remains
 separate, and every performance flag stays false.
+The explicit Linux-only `--runtime-mapped-images` option additionally binds
+live paired adapters' public entrypoints to the selected file at pre/post
+endpoints and retains mapped ELF inventories. It requires a pinned receipt,
+fails closed on integrity errors, and does not establish transient dependency
+closure, resident-code attestation, science or performance eligibility. Its
+separately reported observation costs and instrumented memory effects must
+not be presented as uninstrumented performance evidence.
 
 The existing `original` and `exact-ao` single-layout modes remain available
 for diagnostic runs. They do not provide interleaved paired evidence.
