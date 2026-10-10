@@ -4554,7 +4554,12 @@ int main(int argc, char** argv) {
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
-  if (two_origin_probe) return spin_two_origin_replay(argc == 3 ? argv[2] : nullptr);
+  if (two_origin_probe) {
+    /* CHECK returns a source line number. Normalize failures so truncating a
+     * large line number to the shell's exit byte can never turn it into PASS. */
+    const int replay_status = spin_two_origin_replay(argc == 3 ? argv[2] : nullptr);
+    return replay_status == 0 ? 0 : 1;
+  }
   if (argc == 2 && std::strcmp(argv[1], "--spin-branch-probe") == 0)
     return spin_diagnostic_probe(false);
   if (argc == 2 && std::strcmp(argv[1], "--spin-frozen-replay") == 0)
