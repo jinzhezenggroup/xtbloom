@@ -14,6 +14,7 @@ import csv
 import ctypes
 import hashlib
 import json
+import math
 import os
 import platform
 import resource
@@ -22,6 +23,7 @@ import statistics
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +39,13 @@ sys.path.insert(0, str(CONFORMANCE_TOOLS))
 import xtbloom_conformance as conformance
 import xtbloom_public_api as public_api
 from xtbloom_public_api import PublicBatchStorage
+
+try:
+    from . import ao_grouping, build_receipt, runtime_mapped_images
+except ImportError:  # Direct ``python benchmarks/run.py`` execution.
+    import ao_grouping
+    import build_receipt
+    import runtime_mapped_images
 
 try:
     from .xtb_adapter import XtbAdapter, XtbError, XtbState
@@ -56,6 +65,8 @@ except ImportError:  # Direct ``python benchmarks/run.py`` execution.
     from dxtb_adapter import timed_invoke as timed_dxtb_invoke
 
 SCHEMA_VERSION = 1
+NONFINITE_JSON_TAG = "__xtbloom_nonfinite_float__"
+NONFINITE_JSON_VALUES = ("NaN", "Infinity", "-Infinity")
 DEFAULT_BATCH_SIZES = (1, 8, 32, 128)
 DEFAULT_PROPERTIES = ("energy", "force")
 DEFAULT_WORKLOADS = ("gas", "qmmm")
@@ -271,6 +282,7 @@ class Cell:
     workload: str
     property: str
     batch_size: int
+    case_ids: tuple[str, ...] | None = None
 
 
 def workload_case_ids(workload: str, batch_size: int) -> tuple[str, ...]:
@@ -313,27 +325,51 @@ class XTBloomAdapter:
         cell: Cell,
         device_id: int,
         cpu_threads: int,
+        *,
+        strict_fresh: bool = False,
+        request_charges: bool = False,
+        allow_system_failures: bool = False,
     ) -> None:
         self.cell = cell
         self.library_path = library_path
         self.library = public_api._configure_library(library_path)
-        if len(case_sequence) != cell.batch_size:
+        if cell.case_ids is None and len(case_sequence) != cell.batch_size:
             raise BenchmarkError("case sequence length must equal the requested batch")
+        if cell.case_ids is not None and (
+            len(case_sequence) != len(cell.case_ids)
+            or len(case_sequence) > cell.batch_size
+            or tuple(case["id"] for case in case_sequence) != cell.case_ids
+        ):
+            raise BenchmarkError("finite case sequence does not match its batch plan")
         self.storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
-        self.context = public_api._make_context(
-            self.library, cell.backend, device_id, cpu_threads
-        )
-        self.memory = public_api.DescriptorMemory(cell.memory_mode, device_id)
-        # Host descriptors still execute on CUDA.  Keep a control runtime even
-        # when DescriptorMemory did not need one so every CUDA timing has an
-        # explicit completion boundary and device-memory sample.
-        self.cuda_control = self.memory.cuda
-        self.owns_cuda_control = False
-        if cell.backend == "cuda" and self.cuda_control is None:
-            self.cuda_control = public_api.CudaRuntime(device_id)
-            self.owns_cuda_control = True
-        if self.cuda_control is not None:
-            configure_cuda_runtime(self.cuda_control)
+        self.allow_system_failures = allow_system_failures
+        self.systems = len(case_sequence)
+        # Register rollback immediately: a failed constructor never reaches close().
+        with ExitStack() as rollback:
+            self.context = public_api._make_context(
+                self.library, cell.backend, device_id, cpu_threads
+            )
+            rollback.callback(self.library.xtbloom_context_destroy, self.context)
+            self.memory = public_api.DescriptorMemory(cell.memory_mode, device_id)
+            rollback.callback(self.memory.close)
+            # Host descriptors still need a CUDA completion/control owner.
+            self.cuda_control = self.memory.cuda
+            self.owns_cuda_control = False
+            if cell.backend == "cuda" and self.cuda_control is None:
+                self.cuda_control = public_api.CudaRuntime(device_id)
+                self.owns_cuda_control = True
+                rollback.callback(self.cuda_control.close)
+            if self.cuda_control is not None:
+                configure_cuda_runtime(self.cuda_control)
+            self._initialize_batch_and_results(
+                cell, strict_fresh=strict_fresh, request_charges=request_charges
+            )
+            rollback.pop_all()
+
+    def _initialize_batch_and_results(
+        self, cell: Cell, *, strict_fresh: bool, request_charges: bool
+    ) -> None:
+        """Initialize borrowed views while constructor rollback still owns resources."""
         # Both backends consume the same explicit ABI-v2 one/two-channel
         # selection; benchmark cells therefore exercise the production suffix.
         self.batch = public_api._make_batch(
@@ -358,13 +394,23 @@ class XTBloomAdapter:
                 # A QM/MM force workload covers the complete public force
                 # contract: both QM atoms and caller-owned external sites.
                 self.options.flags |= public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+        if request_charges:
+            self.options.flags |= public_api.XTBLOOM_COMPUTE_ATOMIC_CHARGES
+        if strict_fresh:
+            self.options.scc_start_mode = public_api.XTBLOOM_SCC_START_FRESH
+            self.options.max_scc_iterations = 500
+            self.options.charge_tolerance = 1.0e-10
+            self.options.energy_tolerance = 1.0e-12
+            self.options.electronic_temperature = (
+                300.0 * public_api.XTBLOOM_KELVIN_TO_HARTREE
+            )
         # These public defaults are recorded in every row and match normal API use.
-        self.systems = cell.batch_size
         self.atoms = len(self.storage.atomic_numbers)
         self.energies = (ctypes.c_double * self.systems)()
         self.forces = (
             (ctypes.c_double * (3 * self.atoms))() if cell.property == "force" else None
         )
+        self.charges = (ctypes.c_double * self.atoms)() if request_charges else None
         self.point_forces = (
             (ctypes.c_double * (3 * len(self.storage.point_charge_values)))()
             if cell.property == "force" and self.storage.point_charge_values
@@ -384,6 +430,10 @@ class XTBloomAdapter:
         self.result.energies = self.memory.output(self.energies, "energies")
         if self.forces is not None:
             self.result.forces = self.memory.output(self.forces, "forces")
+        if self.charges is not None:
+            self.result.atomic_charges = self.memory.output(
+                self.charges, "atomic_charges"
+            )
         if self.point_forces is not None:
             self.result.point_charge_forces = self.memory.output(
                 self.point_forces, "point_charge_forces"
@@ -439,14 +489,18 @@ class XTBloomAdapter:
             if self.statuses[index] != public_api.XTBLOOM_STATUS_SUCCESS
             or self.converged[index] != 1
         ]
-        if failures:
+        if failures and not self.allow_system_failures:
             raise BenchmarkError("; ".join(failures))
         output: dict[str, Any] = {
             "energies_hartree": [float(value) for value in self.energies],
             "scc_iterations": [int(value) for value in self.iterations],
+            "scc_converged": [int(value) for value in self.converged],
+            "per_system_status": [int(value) for value in self.statuses],
         }
         if self.forces is not None:
             output["forces_hartree_per_bohr"] = [float(value) for value in self.forces]
+        if self.charges is not None:
+            output["atomic_charges_e"] = [float(value) for value in self.charges]
         if self.point_forces is not None:
             output["point_charge_forces_hartree_per_bohr"] = [
                 float(value) for value in self.point_forces
@@ -624,6 +678,1811 @@ def benchmark_xtbloom_cell(
     finally:
         if adapter is not None:
             adapter.close()
+
+
+def case_atomic_numbers(
+    manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any]
+) -> tuple[int, ...]:
+    """Read QM atom identities using the same input parsers as the public runner."""
+    input_path = canonical_case_input_path(manifest_path, case)
+    if public_api.is_periodic_manifest(manifest):
+        document = public_api.periodic_gfn2.parse_turbomole(input_path)
+        symbol_numbers = {
+            symbol.lower(): number
+            for number, symbol in enumerate(conformance.ELEMENT_SYMBOLS)
+            if symbol
+        }
+        try:
+            return tuple(
+                symbol_numbers[symbol.lower()] for symbol in document["symbols"]
+            )
+        except KeyError as exc:
+            raise BenchmarkError(
+                f"case {case['id']} has an element absent from the GFN2 basis"
+            ) from exc
+    if case.get("input_schema") == "qmmm-v1":
+        hardness = (
+            manifest.get("reference_engines", {})
+            .get("xtb", {})
+            .get("point_charge_hardness_hartree")
+        )
+        if hardness is None:
+            raise BenchmarkError(
+                "point-charge case lacks the pinned GFN2 hardness table"
+            )
+        document = conformance.load_qmmm_input(input_path, case, hardness)
+        return tuple(int(number) for number in document["qm"]["atomic_numbers"])
+    document = conformance.load_turbomole_coord(input_path, case)
+    return tuple(int(number) for number in document["atomic_numbers"])
+
+
+def canonical_resolved_path(path: Path, description: str) -> Path:
+    """Resolve one provenance/input path to an existing canonical file path."""
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BenchmarkError(f"cannot resolve {description} {path}: {exc}") from exc
+
+
+def canonical_case_input_path(manifest_path: Path, case: dict[str, Any]) -> Path:
+    """Resolve a manifest input with the same repository-root rule as adapters."""
+    return canonical_resolved_path(
+        conformance.resolve_manifest_path(manifest_path, case["input"]),
+        f"input for case {case['id']}",
+    )
+
+
+def canonical_path_label(path: Path) -> str:
+    """Use a repository-relative provenance label when the file is in-tree."""
+    try:
+        return path.relative_to(REPOSITORY_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def provenance_file_record(path: Path, description: str) -> dict[str, Any]:
+    """Hash a resolved file incrementally without retaining its contents."""
+    resolved = canonical_resolved_path(path, description)
+    try:
+        digest = sha256_file(resolved)
+        if digest is None:
+            raise BenchmarkError(f"{description} is not a regular file: {resolved}")
+        size_bytes = resolved.stat().st_size
+    except OSError as exc:
+        raise BenchmarkError(
+            f"cannot hash or stat {description} {resolved}: {exc}"
+        ) from exc
+    return {
+        "path": canonical_path_label(resolved),
+        "size_bytes": size_bytes,
+        "sha256": digest,
+    }
+
+
+def provenance_case_ids(args: argparse.Namespace) -> tuple[str, ...]:
+    """Return each input identity selected by the finite list or matrix once."""
+    if args.case_ids is not None:
+        return tuple(dict.fromkeys(args.case_ids))
+    return tuple(
+        dict.fromkeys(
+            case_id
+            for workload in args.workloads
+            for batch_size in args.batch_sizes
+            for case_id in workload_case_ids(workload, batch_size)
+        )
+    )
+
+
+def input_provenance(
+    manifest_path: Path,
+    case_ids: Sequence[str],
+    cases: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build archival manifest/input digests outside all measured intervals."""
+    manifest_record = provenance_file_record(manifest_path, "manifest")
+    selected_inputs = []
+    for case_id in case_ids:
+        case = cases.get(case_id)
+        if case is None:
+            raise BenchmarkError(
+                f"selected case {case_id!r} is absent from the manifest"
+            )
+        input_path = canonical_case_input_path(manifest_path, case)
+        selected_inputs.append(
+            {
+                "case_id": case_id,
+                "manifest_input": case["input"],
+                **provenance_file_record(input_path, f"input for case {case_id}"),
+            }
+        )
+    return {
+        "manifest": manifest_record,
+        "selected_inputs": selected_inputs,
+        "hashing_scope": (
+            "SHA-256 provenance only; computed before benchmark cells and excluded "
+            "from planning_ms and all sweep timings"
+        ),
+    }
+
+
+def finite_case_plan(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    case_ids: tuple[str, ...],
+    batch_cap: int,
+    strategy: str | None = None,
+) -> tuple[ao_grouping.AOGroupingPlan, float]:
+    """Plan one finite list and account for input inspection and AO analysis."""
+    started = time.perf_counter_ns()
+    basis_sha256 = None
+    counts: dict[str, int] | None = None
+    selected_strategy = strategy or args.ao_grouping
+    if selected_strategy == "exact-ao":
+        if public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB:
+            raise BenchmarkError("exact-AO grouping requires a GFN2 manifest")
+        basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
+            REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
+        )
+        counts = {
+            case_id: ao_grouping.count_gfn2_aos(
+                case_atomic_numbers(args.manifest, manifest, cases[case_id]),
+                basis_counts,
+            )
+            for case_id in case_ids
+        }
+    plan = ao_grouping.make_plan(
+        case_ids,
+        batch_cap,
+        strategy=selected_strategy,
+        ao_counts_by_case_id=counts,
+        basis_sha256=basis_sha256,
+    )
+    planning_ms = (time.perf_counter_ns() - started) * 1.0e-6
+    return plan, planning_ms
+
+
+def _max_abs_error(actual: object, expected: object) -> float | None:
+    """Return a finite vector error, or ``None`` when shape/data are unusable."""
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            return None
+        values = list(zip(actual, expected, strict=True))
+    else:
+        values = [(actual, expected)]
+    errors = []
+    for actual_value, expected_value in values:
+        try:
+            actual_float = float(actual_value)
+            expected_float = float(expected_value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(actual_float) or not math.isfinite(expected_float):
+            return None
+        errors.append(abs(actual_float - expected_float))
+    return max(errors, default=0.0)
+
+
+def finite_case_correctness(
+    case: dict[str, Any],
+    expected: dict[str, Any],
+    result: dict[str, Any],
+    manifest: dict[str, Any],
+    property_name: str,
+) -> dict[str, Any]:
+    """Compare available per-ID outputs with the pinned public conformance oracle."""
+    comparisons = {
+        "energy_hartree": ("energy_hartree", "energy"),
+        "forces_hartree_per_bohr": (
+            "forces_hartree_per_bohr",
+            "forces",
+        ),
+        "atomic_charges_e": ("partial_charges_e", "charges"),
+        "point_charge_forces_hartree_per_bohr": (
+            "point_charge_forces_hartree_per_bohr",
+            "point_charge_forces",
+        ),
+    }
+    tolerances = manifest.get("tolerances", {})
+    errors: dict[str, float | None] = {}
+    skipped: list[str] = []
+    passed = (
+        result["status"] == public_api.XTBLOOM_STATUS_SUCCESS
+        and result["scc_converged"] == 1
+    )
+    for key in (
+        "energy_hartree",
+        "forces_hartree_per_bohr",
+        "atomic_charges_e",
+        "point_charge_forces_hartree_per_bohr",
+    ):
+        value = result.get(key)
+        if value is None:
+            continue
+        values = value if isinstance(value, list) else [value]
+        if any(not math.isfinite(float(component)) for component in values):
+            passed = False
+    diagnostic_only = case.get("oracle_role") in {
+        "diagnostic-unbackgrounded-charged",
+        "diagnostic-no-independent-reference",
+    }
+    required_reference_properties = {
+        "energy_hartree",
+        "partial_charges_e",
+    }
+    if property_name == "force":
+        required_reference_properties.add("forces_hartree_per_bohr")
+        if result.get("point_charge_forces_hartree_per_bohr"):
+            required_reference_properties.add("point_charge_forces_hartree_per_bohr")
+    oracle_properties = case.get("xtbloom_oracle_properties")
+    for actual_key, (expected_key, tolerance_key) in comparisons.items():
+        requested = actual_key == "energy_hartree" or actual_key == "atomic_charges_e"
+        requested = requested or (
+            property_name == "force"
+            and actual_key
+            in {
+                "forces_hartree_per_bohr",
+                "point_charge_forces_hartree_per_bohr",
+            }
+        )
+        if not requested or expected_key not in expected:
+            continue
+        if diagnostic_only or (
+            oracle_properties is not None and expected_key not in oracle_properties
+        ):
+            skipped.append(expected_key)
+            continue
+        actual_value = result.get(actual_key)
+        error = _max_abs_error(actual_value, expected[expected_key])
+        errors[expected_key] = error
+        tolerance = case.get("tolerances", {}).get(expected_key)
+        if tolerance is None:
+            tolerance = tolerances[tolerance_key]["atol"]
+        if error is None or error > float(tolerance):
+            passed = False
+
+    if case.get("oracle_role") == "diagnostic-no-independent-reference":
+        reference_validation = "no independent reference; status/finite outputs checked"
+    elif diagnostic_only:
+        reference_validation = "diagnostic-only oracle; finite status checked"
+    elif errors:
+        reference_validation = "committed independent conformance golden"
+    else:
+        reference_validation = "no applicable independent reference property"
+    return {
+        "status": "pass" if passed else "fail",
+        "reference_validation": reference_validation,
+        "independent_reference_pass": (
+            passed and required_reference_properties.issubset(errors)
+        ),
+        "missing_reference_properties": sorted(
+            required_reference_properties - errors.keys()
+        ),
+        "max_abs_errors": errors,
+        "skipped_oracle_properties": skipped,
+    }
+
+
+def finite_sweep_outcome(
+    sweep_index: int, results: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """Retain per-ID convergence and correctness for one measured sweep."""
+    case_results = []
+    successful_ids = []
+    failed_system_ids = []
+    correctness_failure_ids = []
+    for result in results:
+        case_id = result["case_id"]
+        system_failed = (
+            result["status"] != public_api.XTBLOOM_STATUS_SUCCESS
+            or result["scc_converged"] != 1
+        )
+        correctness = result["correctness"]
+        if system_failed:
+            failed_system_ids.append(case_id)
+        else:
+            successful_ids.append(case_id)
+        if correctness["status"] != "pass":
+            correctness_failure_ids.append(case_id)
+        case_results.append(
+            {
+                "case_id": case_id,
+                "original_index": result["original_index"],
+                "status": result["status"],
+                "scc_converged": result["scc_converged"],
+                "scc_iterations": result["scc_iterations"],
+                "correctness": correctness,
+            }
+        )
+    correctness_status = (
+        "fail" if failed_system_ids or correctness_failure_ids else "pass"
+    )
+    return {
+        "sweep_index": sweep_index,
+        "case_results": case_results,
+        "correctness": {
+            "status": correctness_status,
+            "case_count": len(case_results),
+            "successful_system_ids": successful_ids,
+            "failed_system_ids": failed_system_ids,
+            "correctness_failure_ids": correctness_failure_ids,
+        },
+    }
+
+
+def benchmark_finite_xtbloom_cell(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    plan: ao_grouping.AOGroupingPlan,
+    planning_ms: float,
+    property_name: str,
+) -> dict[str, Any]:
+    """Measure complete strict-FRESH host-descriptor sweeps over planned batches."""
+    cell = Cell(
+        "xtbloom",
+        args.backends[0],
+        "host",
+        "finite-list",
+        property_name,
+        plan.max_batch_size,
+        plan.original_case_ids,
+    )
+    row = base_row(cell)
+    row.update(
+        {
+            "availability": "available",
+            "ao_grouping": plan.strategy,
+            "plan_sha256": plan.plan_sha256,
+            "planning_ms": planning_ms,
+            "total_systems": len(plan.original_case_ids),
+            "batch_count": len(plan.batches),
+            "actual_batch_sizes": [len(batch.case_ids) for batch in plan.batches],
+            "planned_case_order": list(plan.ordered_case_ids),
+            "canonical_index_by_case_id": plan.canonical_index_by_case_id,
+            "basis_sha256": plan.basis_sha256,
+            "ao_count_by_case_id": dict(plan.ao_counts_by_case_id),
+            "ao_batches": [
+                {
+                    "ao_count": batch.ao_count,
+                    "case_ids": list(batch.case_ids),
+                    "canonical_indices": list(batch.canonical_indices),
+                    "size": len(batch.case_ids),
+                }
+                for batch in plan.batches
+            ],
+            "grouping_contract": {
+                "key": "exact GFN2 spatial AO count"
+                if plan.strategy == "exact-ao"
+                else None,
+                "tie_break": "canonical input index",
+                "spin_policy": (
+                    "whole systems retain manifest spin metadata; "
+                    "spin is not a grouping key"
+                ),
+                "outcome_policy": (
+                    "planning does not read SCC results or convergence outcomes"
+                ),
+                "tail_policy": (
+                    "retain a final batch smaller than the cap; never pad or drop cases"
+                ),
+                "batch_size_cap": plan.max_batch_size,
+            },
+        }
+    )
+    sweep_samples: list[dict[str, Any]] = []
+    warmup_samples: list[dict[str, Any]] = []
+    memory_snapshots: list[dict[str, Any]] = []
+    measurement_sweeps: list[dict[str, Any]] = []
+    row["measurement_sweeps"] = measurement_sweeps
+    final_results: tuple[dict[str, Any], ...] = ()
+    rss_before = current_rss_bytes()
+
+    def run_sweep(
+        capture_results: bool,
+    ) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+        sweep_start = time.perf_counter_ns()
+        preparation_ms = 0.0
+        compute_ms = 0.0
+        publication_ms = 0.0
+        batch_outputs: list[dict[str, Any]] = []
+        batch_case_correctness: dict[str, Any] = {}
+        sweep_memory: list[dict[str, Any]] = []
+        for batch in plan.batches:
+            prep_start = time.perf_counter_ns()
+            batch_cell = Cell(
+                cell.engine,
+                cell.backend,
+                cell.memory_mode,
+                cell.workload,
+                cell.property,
+                plan.max_batch_size,
+                batch.case_ids,
+            )
+            case_sequence = tuple(cases[case_id] for case_id in batch.case_ids)
+            adapter = XTBloomAdapter(
+                args.library,
+                args.manifest,
+                manifest,
+                case_sequence,
+                batch_cell,
+                args.device_id,
+                args.cpu_threads,
+                strict_fresh=True,
+                request_charges=True,
+                allow_system_failures=True,
+            )
+            preparation_ms += (time.perf_counter_ns() - prep_start) * 1.0e-6
+            try:
+                compute_ms += timed_invoke(adapter)
+                publish_start = time.perf_counter_ns()
+                output = adapter.results()
+                required_outputs = ["atomic_charges_e"]
+                if property_name == "force":
+                    required_outputs.append("forces_hartree_per_bohr")
+                    if adapter.storage.point_charge_values:
+                        required_outputs.append("point_charge_forces_hartree_per_bohr")
+                batch_outputs.extend(
+                    ao_grouping.split_batch_results(
+                        batch.case_ids,
+                        adapter.storage.atom_offsets,
+                        adapter.storage.point_charge_offsets,
+                        output,
+                        tuple(required_outputs),
+                    )
+                )
+                for case_slice in adapter.storage.slices:
+                    batch_case_correctness[case_slice.case["id"]] = (
+                        case_slice.case,
+                        case_slice.expected,
+                    )
+                publication_ms += (time.perf_counter_ns() - publish_start) * 1.0e-6
+                sweep_memory.append(
+                    {
+                        "case_ids": list(batch.case_ids),
+                        "ao_count": batch.ao_count,
+                        "snapshot": adapter.memory_snapshot(),
+                    }
+                )
+            finally:
+                adapter.close()
+
+        scatter_start = time.perf_counter_ns()
+        restored = ao_grouping.scatter_case_results(plan, batch_outputs)
+        scatter_ms = (time.perf_counter_ns() - scatter_start) * 1.0e-6
+        sweep_ms = (time.perf_counter_ns() - sweep_start) * 1.0e-6
+        correctness_validation_ms = 0.0
+        if capture_results:
+            correctness_start = time.perf_counter_ns()
+            for result in restored:
+                case, expected = batch_case_correctness[result["case_id"]]
+                result["correctness"] = finite_case_correctness(
+                    case, expected, result, manifest, property_name
+                )
+            correctness_validation_ms = (
+                time.perf_counter_ns() - correctness_start
+            ) * 1.0e-6
+        return (
+            {
+                "preparation_ms": preparation_ms,
+                "compute_ms": compute_ms,
+                "publication_ms": publication_ms,
+                "scatter_ms": scatter_ms,
+                "correctness_validation_ms": correctness_validation_ms,
+                "end_to_end_ms": sweep_ms,
+                "memory_snapshots": sweep_memory,
+            },
+            restored if capture_results else (),
+        )
+
+    try:
+        for _ in range(args.warmups):
+            timing, _ = run_sweep(capture_results=False)
+            timing.pop("memory_snapshots", None)
+            warmup_samples.append(timing)
+        for sweep_index in range(1, args.repetitions + 1):
+            timing, results = run_sweep(capture_results=True)
+            sweep_memory = timing.pop("memory_snapshots", [])
+            memory_snapshots.extend(sweep_memory)
+            sweep_samples.append(timing)
+            final_results = results
+            sweep_outcome = finite_sweep_outcome(sweep_index, results)
+            sweep_outcome["memory_snapshots"] = sweep_memory
+            measurement_sweeps.append(sweep_outcome)
+            row["case_results"] = list(final_results)
+    except public_api.BackendUnavailable as exc:
+        row.update({"availability": "unavailable", "unavailable_reason": str(exc)})
+        return row
+    except (
+        BenchmarkError,
+        ao_grouping.AOGroupingError,
+        conformance.ConformanceError,
+        OSError,
+    ) as exc:
+        row.update({"availability": "error", "error": str(exc)})
+        return row
+
+    # Keep output slices from the final measured sweep, but retain context-held
+    # memory snapshots from every measured sweep before context destruction.
+    row["case_results"] = list(final_results)
+    row["case_results_scope"] = "full output slices from the final measured sweep"
+    row["memory"] = {
+        "host_rss_before_setup_bytes": rss_before,
+        "host_peak_rss_bytes": max(
+            (entry["snapshot"]["host_process_hwm_bytes"] for entry in memory_snapshots),
+            default=process_hwm_bytes(),
+        ),
+        "batch_context_snapshots": memory_snapshots,
+        "scope": (
+            "all measured sweeps, one batch context at a time; "
+            "samples taken before context destruction"
+        ),
+    }
+    row["timing"] = {
+        "warmups": warmup_samples,
+        "samples": sweep_samples,
+        "preparation_ms_median": statistics.median(
+            item["preparation_ms"] for item in sweep_samples
+        ),
+        "compute_ms_median": statistics.median(
+            item["compute_ms"] for item in sweep_samples
+        ),
+        "publication_ms_median": statistics.median(
+            item["publication_ms"] for item in sweep_samples
+        ),
+        "scatter_ms_median": statistics.median(
+            item["scatter_ms"] for item in sweep_samples
+        ),
+        "correctness_validation_ms_median": statistics.median(
+            item["correctness_validation_ms"] for item in sweep_samples
+        ),
+        "end_to_end_ms": timing_summary(
+            [item["end_to_end_ms"] for item in sweep_samples],
+            len(plan.original_case_ids),
+        ),
+        "one_shot_total_ms": planning_ms + sweep_samples[0]["end_to_end_ms"],
+        "reusable_plan_mean_total_ms_per_sweep": (
+            planning_ms / args.repetitions
+            + statistics.mean(item["end_to_end_ms"] for item in sweep_samples)
+        ),
+        "plan_amortization": (
+            "plan_ms / number_of_reuses is added per sweep only when the same ordered "
+            "case IDs, input bytes, GFN2 parameter hash, and batch cap remain valid"
+        ),
+        "scope": (
+            "end-to-end includes per-batch input assembly, context and descriptor "
+            "setup, synchronous strict-FRESH compute with CUDA completion sync "
+            "when applicable, output publication, context-held memory sampling, "
+            "context destruction, and canonical scatter; oracle comparisons are "
+            "reported separately"
+        ),
+    }
+    correctness_failures = {
+        case_id
+        for sweep in measurement_sweeps
+        for case_id in sweep["correctness"]["correctness_failure_ids"]
+    }
+    failed_systems = {
+        case_id
+        for sweep in measurement_sweeps
+        for case_id in sweep["correctness"]["failed_system_ids"]
+    }
+    successful_every_sweep = set(plan.original_case_ids)
+    for sweep in measurement_sweeps:
+        successful_every_sweep.intersection_update(
+            sweep["correctness"]["successful_system_ids"]
+        )
+    ordered_correctness_failures = [
+        case_id for case_id in plan.original_case_ids if case_id in correctness_failures
+    ]
+    ordered_failed_systems = [
+        case_id for case_id in plan.original_case_ids if case_id in failed_systems
+    ]
+    row["correctness"] = {
+        "status": (
+            "fail"
+            if any(
+                sweep["correctness"]["status"] != "pass" for sweep in measurement_sweeps
+            )
+            else "pass"
+        ),
+        "reference": "per-ID independent property comparisons where applicable",
+        "case_count": len(final_results),
+        "sweep_count": len(measurement_sweeps),
+        "successful_system_ids": [
+            case_id
+            for case_id in plan.original_case_ids
+            if case_id in successful_every_sweep
+        ],
+        "failed_system_ids": ordered_failed_systems,
+        "correctness_failure_ids": ordered_correctness_failures,
+    }
+    unqualified_reference_ids = {
+        result["case_id"]
+        for sweep in measurement_sweeps
+        for result in sweep["case_results"]
+        if not result["correctness"].get("independent_reference_pass", False)
+    }
+    row["correctness"]["unqualified_reference_ids"] = [
+        case_id
+        for case_id in plan.original_case_ids
+        if case_id in unqualified_reference_ids
+    ]
+    row["independent_reference_qualified"] = (
+        row["correctness"]["status"] == "pass" and not unqualified_reference_ids
+    )
+    if not row["independent_reference_qualified"]:
+        row["claim_eligible"] = False
+    return row
+
+
+def finite_pair_plan_metadata(plan: ao_grouping.AOGroupingPlan) -> dict[str, Any]:
+    """Describe one persistent layout plan and its exact inverse mapping."""
+    return {
+        "strategy": plan.strategy,
+        "plan_sha256": plan.plan_sha256,
+        "basis_sha256": plan.basis_sha256,
+        "ao_count_by_case_id": dict(plan.ao_counts_by_case_id),
+        "planned_case_order": list(plan.ordered_case_ids),
+        "canonical_index_by_case_id": plan.canonical_index_by_case_id,
+        "total_systems": len(plan.original_case_ids),
+        "batch_count": len(plan.batches),
+        "actual_batch_sizes": [len(batch.case_ids) for batch in plan.batches],
+        "batches": [
+            {
+                "case_ids": list(batch.case_ids),
+                "canonical_indices": list(batch.canonical_indices),
+                "ao_count": batch.ao_count,
+            }
+            for batch in plan.batches
+        ],
+    }
+
+
+def finite_pair_engine_options(
+    adapter: XTBloomAdapter, args: argparse.Namespace
+) -> dict[str, Any]:
+    """Snapshot initialized values, not a reconstructed strict-FRESH template."""
+    return {
+        "compute_options": {
+            field: getattr(adapter.options, field)
+            for field, _ in public_api.ComputeOptions._fields_
+            if not field.startswith("reserved")
+        },
+        "backend": adapter.cell.backend,
+        "memory_mode": adapter.cell.memory_mode,
+        "requested_device_id": args.device_id,
+        "requested_cpu_threads": args.cpu_threads,
+        "point_charge_count": len(adapter.storage.point_charge_values),
+    }
+
+
+def finite_pair_missing_result(
+    case_id: str,
+    original_index: int,
+    case: dict[str, Any],
+    property_name: str,
+    execution_state: str,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """Keep an unexecuted coordinate and its full requested NaN output slices."""
+    atom_count = int(case["atom_count"])
+    point_count = int(case.get("point_charge_count", 0))
+    record: dict[str, Any] = {
+        "case_id": case_id,
+        "original_index": original_index,
+        "status": None,
+        "scc_converged": None,
+        "scc_iterations": None,
+        "energy_hartree": math.nan,
+        "atomic_charges_e": [math.nan] * atom_count,
+        "execution_state": execution_state,
+    }
+    if property_name == "force":
+        record["forces_hartree_per_bohr"] = [math.nan] * (3 * atom_count)
+        if point_count:
+            record["point_charge_forces_hartree_per_bohr"] = [math.nan] * (
+                3 * point_count
+            )
+    if detail:
+        record["execution_detail"] = detail
+    return record
+
+
+def finite_pair_layout_comparison(
+    case: dict[str, Any],
+    original: dict[str, Any],
+    exact_ao: dict[str, Any],
+    manifest: dict[str, Any],
+    property_name: str,
+) -> dict[str, Any]:
+    """Compare paired outputs using the same manifest tolerances as oracle checks."""
+    comparisons = [
+        ("energy_hartree", "energy_hartree", "energy"),
+        ("atomic_charges_e", "partial_charges_e", "charges"),
+    ]
+    if property_name == "force":
+        comparisons.append(
+            ("forces_hartree_per_bohr", "forces_hartree_per_bohr", "forces")
+        )
+        if int(case.get("point_charge_count", 0)):
+            comparisons.append(
+                (
+                    "point_charge_forces_hartree_per_bohr",
+                    "point_charge_forces_hartree_per_bohr",
+                    "point_charge_forces",
+                )
+            )
+
+    errors: dict[str, float | None] = {}
+    tolerances: dict[str, float | None] = {}
+    output_pass = True
+    case_tolerances = case.get("tolerances", {})
+    manifest_tolerances = manifest.get("tolerances", {})
+    for actual_key, report_key, tolerance_key in comparisons:
+        error = _max_abs_error(original.get(actual_key), exact_ao.get(actual_key))
+        tolerance = case_tolerances.get(report_key)
+        if tolerance is None:
+            tolerance = manifest_tolerances.get(tolerance_key, {}).get("atol")
+        errors[report_key] = error
+        tolerances[report_key] = float(tolerance) if tolerance is not None else None
+        if error is None or tolerance is None or error > float(tolerance):
+            output_pass = False
+
+    discrete_differences = {}
+    for key in ("execution_state", "status", "scc_converged", "scc_iterations"):
+        original_value = original.get(key)
+        exact_value = exact_ao.get(key)
+        if original_value != exact_value:
+            discrete_differences[key] = {
+                "original": original_value,
+                "exact_ao": exact_value,
+            }
+    both_successful = all(
+        result.get("status") == public_api.XTBLOOM_STATUS_SUCCESS
+        and result.get("scc_converged") == 1
+        for result in (original, exact_ao)
+    )
+    return {
+        "status": "pass" if output_pass and both_successful else "fail",
+        "reference_validation": (
+            "paired-layout diagnostic only; this is not an independent reference"
+        ),
+        "independent_reference_pass": False,
+        "max_abs_errors": errors,
+        "absolute_tolerances": tolerances,
+        "discrete_state_differences": discrete_differences,
+    }
+
+
+def _finite_pair_arm_sweep(
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    expected_by_id: dict[str, dict[str, Any]],
+    plan: ao_grouping.AOGroupingPlan,
+    owners: Sequence[dict[str, Any]],
+    property_name: str,
+) -> dict[str, Any]:
+    """Run a layout once over its retained owners, preserving every ID."""
+    sweep_start = time.perf_counter_ns()
+    compute_ms = 0.0
+    compute_attempted_ms = 0.0
+    compute_attempt_count = 0
+    compute_success_count = 0
+    compute_complete = True
+    download_ms = 0.0
+    download_attempted_ms = 0.0
+    download_attempt_count = 0
+    download_success_count = 0
+    download_complete = True
+    publication_ms = 0.0
+    publication_attempted_ms = 0.0
+    publication_attempt_count = 0
+    publication_success_count = 0
+    publication_complete = True
+    memory_snapshots = []
+    batch_results: list[dict[str, Any]] = []
+    errors = []
+
+    def append_missing(
+        batch: ao_grouping.AOBatch,
+        execution_state: str,
+        detail: str,
+    ) -> None:
+        batch_results.extend(
+            finite_pair_missing_result(
+                case_id,
+                canonical_index,
+                cases[case_id],
+                property_name,
+                execution_state,
+                detail,
+            )
+            for case_id, canonical_index in zip(
+                batch.case_ids, batch.canonical_indices, strict=True
+            )
+        )
+
+    for owner in owners:
+        batch = owner["batch"]
+        adapter = owner["adapter"]
+        if adapter is None or owner["setup_state"] != "ready":
+            compute_complete = download_complete = publication_complete = False
+            append_missing(batch, "not_run", owner["setup_error"] or "")
+            for result in batch_results[-len(batch.case_ids) :]:
+                result["availability"] = owner["setup_state"]
+            memory_snapshots.append(
+                {
+                    "case_ids": list(batch.case_ids),
+                    "ao_count": batch.ao_count,
+                    "status": owner["setup_state"],
+                    "error": owner["setup_error"],
+                }
+            )
+            continue
+
+        stage = "compute"
+        try:
+            compute_attempt_count += 1
+            compute_start = time.perf_counter_ns()
+            try:
+                compute_ms += timed_invoke(adapter)
+                compute_success_count += 1
+            finally:
+                compute_attempted_ms += (
+                    time.perf_counter_ns() - compute_start
+                ) * 1.0e-6
+
+            stage = "download"
+            download_attempt_count += 1
+            download_start = time.perf_counter_ns()
+            try:
+                output = adapter.results()
+                download_success_count += 1
+            finally:
+                elapsed = (time.perf_counter_ns() - download_start) * 1.0e-6
+                download_ms += elapsed
+                download_attempted_ms += elapsed
+
+            stage = "publication"
+            publication_attempt_count += 1
+            publication_start = time.perf_counter_ns()
+            try:
+                required_outputs = ["atomic_charges_e"]
+                if property_name == "force":
+                    required_outputs.append("forces_hartree_per_bohr")
+                    if adapter.storage.point_charge_values:
+                        required_outputs.append("point_charge_forces_hartree_per_bohr")
+                records = ao_grouping.split_batch_results(
+                    batch.case_ids,
+                    adapter.storage.atom_offsets,
+                    adapter.storage.point_charge_offsets,
+                    output,
+                    tuple(required_outputs),
+                )
+                for result in records:
+                    result["execution_state"] = (
+                        "completed"
+                        if result["status"] == public_api.XTBLOOM_STATUS_SUCCESS
+                        and result["scc_converged"] == 1
+                        else "system-failure"
+                    )
+                batch_results.extend(records)
+                publication_success_count += 1
+            finally:
+                elapsed = (time.perf_counter_ns() - publication_start) * 1.0e-6
+                publication_ms += elapsed
+                publication_attempted_ms += elapsed
+        except public_api.BackendUnavailable as exc:
+            errors.append(str(exc))
+            if stage == "compute":
+                compute_complete = False
+            if stage in {"compute", "download"}:
+                download_complete = False
+            publication_complete = False
+            append_missing(batch, "unavailable", str(exc))
+        except Exception as exc:  # noqa: BLE001 - retain failed-batch evidence
+            errors.append(str(exc))
+            if stage == "compute":
+                compute_complete = False
+            if stage in {"compute", "download"}:
+                download_complete = False
+            publication_complete = False
+            append_missing(batch, "error", str(exc))
+
+        try:
+            memory_snapshots.append(
+                {
+                    "case_ids": list(batch.case_ids),
+                    "ao_count": batch.ao_count,
+                    "snapshot": adapter.memory_snapshot(),
+                    "resident_layouts": ["original", "exact-ao"],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - archive unavailable memory
+            errors.append(f"memory snapshot failed: {exc}")
+            memory_snapshots.append(
+                {
+                    "case_ids": list(batch.case_ids),
+                    "ao_count": batch.ao_count,
+                    "status": "unavailable",
+                    "error": str(exc),
+                    "resident_layouts": ["original", "exact-ao"],
+                }
+            )
+
+    scatter_start = time.perf_counter_ns()
+    try:
+        restored = list(ao_grouping.scatter_case_results(plan, batch_results))
+    except Exception as exc:  # noqa: BLE001 - retain all requested IDs
+        errors.append(f"canonical scatter failed: {exc}")
+        results_by_id = {}
+        for result in batch_results:
+            results_by_id.setdefault(result.get("case_id"), result)
+        restored = []
+        for index, case_id in enumerate(plan.original_case_ids):
+            result = results_by_id.get(case_id)
+            if result is None:
+                result = finite_pair_missing_result(
+                    case_id,
+                    index,
+                    cases[case_id],
+                    property_name,
+                    "not_run",
+                    str(exc),
+                )
+            result = dict(result)
+            result["original_index"] = index
+            restored.append(result)
+    scatter_ms = (time.perf_counter_ns() - scatter_start) * 1.0e-6
+
+    end_to_end_ms = (time.perf_counter_ns() - sweep_start) * 1.0e-6
+    correctness_start = time.perf_counter_ns()
+    for result in restored:
+        case_id = result["case_id"]
+        try:
+            result["correctness"] = finite_case_correctness(
+                cases[case_id],
+                expected_by_id.get(case_id, {}),
+                result,
+                manifest,
+                property_name,
+            )
+        except Exception as exc:  # noqa: BLE001 - record failed reference checks
+            result["correctness"] = {
+                "status": "fail",
+                "reference_validation": f"correctness comparison failed: {exc}",
+                "independent_reference_pass": False,
+                "missing_reference_properties": [
+                    "energy_hartree",
+                    "partial_charges_e",
+                ],
+            }
+    correctness_validation_ms = (time.perf_counter_ns() - correctness_start) * 1.0e-6
+    timing = {
+        "compute_ms": compute_ms if compute_complete else None,
+        "compute_complete": compute_complete,
+        "compute_attempted_time_ms": compute_attempted_ms,
+        "compute_attempt_count": compute_attempt_count,
+        "compute_success_count": compute_success_count,
+        "download_ms": download_ms if download_complete else None,
+        "download_complete": download_complete,
+        "download_attempted_time_ms": download_attempted_ms,
+        "download_attempt_count": download_attempt_count,
+        "download_success_count": download_success_count,
+        "publication_ms": publication_ms if publication_complete else None,
+        "publication_complete": publication_complete,
+        "publication_attempted_time_ms": publication_attempted_ms,
+        "publication_attempt_count": publication_attempt_count,
+        "publication_success_count": publication_success_count,
+        "scatter_ms": scatter_ms,
+        "correctness_validation_ms": correctness_validation_ms,
+        "end_to_end_ms": end_to_end_ms,
+    }
+    # Archival fallback may retain valid slices after a mapping or memory error.
+    failed = bool(errors) or any(
+        result.get("execution_state") != "completed"
+        or result.get("correctness", {}).get("status") != "pass"
+        for result in restored
+    )
+    unqualified = any(
+        not result.get("correctness", {}).get("independent_reference_pass", False)
+        for result in restored
+    )
+    return {
+        "timing": timing,
+        "case_results": restored,
+        "finite_output_status": "fail" if failed else "pass",
+        "status": "fail" if failed else "unqualified" if unqualified else "pass",
+        "sweep_errors": errors,
+        "memory_snapshots": memory_snapshots,
+    }
+
+
+def _finite_pair_timing_field(
+    rounds: Sequence[dict[str, Any]], layout: str, field: str
+) -> dict[str, Any]:
+    """Summarize a timing field while retaining requested missing samples."""
+    samples = [item["arms"][layout]["timing"].get(field) for item in rounds]
+    numeric = [value for value in samples if isinstance(value, (int, float))]
+    summary: dict[str, Any] = {
+        "samples_ms": samples,
+        "sample_count": len(numeric),
+        "requested_count": len(samples),
+        "median_ms": statistics.median(numeric) if numeric else None,
+    }
+    if field == "end_to_end_ms" and numeric:
+        summary.update(
+            timing_summary(numeric, len(rounds[0]["arms"][layout]["case_results"]))
+        )
+        summary["samples_ms"] = samples
+        summary["sample_count"] = len(numeric)
+        summary["requested_count"] = len(samples)
+    return summary
+
+
+def runtime_image_check(
+    args: argparse.Namespace,
+    owners_by_layout: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Observe every live paired owner outside sweep timing, retaining failures.
+
+    File receipts and endpoint mappings are different evidence. In particular,
+    an inventory of observed images cannot certify transient dependencies or
+    the bytes actually resident in executable private mappings.
+    """
+    started = time.perf_counter_ns()
+    observer_source = None
+    try:
+        observer_source = build_receipt.file_record(
+            Path(runtime_mapped_images.__file__)
+        )
+        owners = [
+            owner
+            for layout in ("original", "exact-ao")
+            for owner in owners_by_layout[layout]
+        ]
+        if not owners or any(owner["setup_state"] != "ready" for owner in owners):
+            raise BenchmarkError("runtime image observation requires all paired owners")
+        libraries = [owner["adapter"].library for owner in owners]
+        observation = runtime_mapped_images.capture(
+            args.library,
+            runtime_mapped_images.library_entrypoints(libraries),
+            args.runtime_images_expected_sha256,
+        )
+        result = {"status": "PASS", "observation": observation, "error": None}
+    except Exception as exc:  # noqa: BLE001 - retain instrumentation failures
+        result = {"status": "FAIL", "observation": None, "error": str(exc)}
+    result["observer_source"] = observer_source
+    result["validation_ms"] = (time.perf_counter_ns() - started) * 1.0e-6
+    return result
+
+
+def benchmark_finite_xtbloom_pair(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    plans: dict[str, ao_grouping.AOGroupingPlan],
+    planning_ms_by_layout: dict[str, float],
+    property_name: str,
+) -> dict[str, Any]:
+    """Interleave two strict-FRESH layouts while keeping both owner sets alive."""
+    original_plan = plans["original"]
+    cell = Cell(
+        "xtbloom",
+        args.backends[0],
+        "host",
+        "finite-list",
+        property_name,
+        original_plan.max_batch_size,
+        original_plan.original_case_ids,
+    )
+    row = base_row(cell)
+    row["ao_grouping"] = "paired-original-vs-exact-ao"
+    layouts = ("original", "exact-ao")
+    owners_by_layout: dict[str, list[dict[str, Any]]] = {
+        layout: [] for layout in layouts
+    }
+    setup_ms_by_layout = dict.fromkeys(layouts, 0.0)
+    setup_order = []
+    expected_by_id: dict[str, dict[str, Any]] = {}
+    paired_rounds: list[dict[str, Any]] = []
+    cleanup_errors = []
+    rss_before = current_rss_bytes()
+    mapping_evidence = None
+    if getattr(args, "runtime_mapped_images", False):
+        mapping_evidence = {
+            "preflight": None,
+            "postflight": {"status": "NOT_RUN", "error": "preflight did not pass"},
+            "integrity_passed": False,
+            "performance_admission": False,
+            "cost_scope": "endpoint observation outside sweep timings; costs retained",
+            "complete_runtime_dependency_closure": "NOT_ESTABLISHED",
+        }
+
+    try:
+        max_batches = max(len(plans[layout].batches) for layout in layouts)
+        for batch_index in range(max_batches):
+            order = layouts if batch_index % 2 == 0 else tuple(reversed(layouts))
+            setup_order.append(
+                {"batch_index": batch_index, "layout_order": list(order)}
+            )
+            for layout in order:
+                plan = plans[layout]
+                if batch_index >= len(plan.batches):
+                    continue
+                batch = plan.batches[batch_index]
+                owner: dict[str, Any] = {
+                    "batch": batch,
+                    "adapter": None,
+                    "setup_state": "ready",
+                    "setup_error": None,
+                    "engine_options": None,
+                }
+                owners_by_layout[layout].append(owner)
+                batch_cell = Cell(
+                    cell.engine,
+                    cell.backend,
+                    cell.memory_mode,
+                    cell.workload,
+                    cell.property,
+                    plan.max_batch_size,
+                    batch.case_ids,
+                )
+                case_sequence = tuple(cases[case_id] for case_id in batch.case_ids)
+                setup_start = time.perf_counter_ns()
+                try:
+                    owner["adapter"] = XTBloomAdapter(
+                        args.library,
+                        args.manifest,
+                        manifest,
+                        case_sequence,
+                        batch_cell,
+                        args.device_id,
+                        args.cpu_threads,
+                        strict_fresh=True,
+                        request_charges=True,
+                        allow_system_failures=True,
+                    )
+                    owner["engine_options"] = finite_pair_engine_options(
+                        owner["adapter"], args
+                    )
+                    for case_slice in owner["adapter"].storage.slices:
+                        expected_by_id[case_slice.case["id"]] = case_slice.expected
+                except public_api.BackendUnavailable as exc:
+                    owner["setup_state"] = "unavailable"
+                    owner["setup_error"] = str(exc)
+                except Exception as exc:  # noqa: BLE001 - isolate owner setup
+                    owner["setup_state"] = "error"
+                    owner["setup_error"] = str(exc)
+                finally:
+                    setup_ms_by_layout[layout] += (
+                        time.perf_counter_ns() - setup_start
+                    ) * 1.0e-6
+
+        engine_snapshots = [
+            owner["engine_options"]
+            for layout in layouts
+            for owner in owners_by_layout[layout]
+            if owner["engine_options"] is not None
+        ]
+        # PC-force requests legitimately vary with each owner's embedding extents.
+        option_snapshots = []
+        point_force_requests_match = True
+        for snapshot in engine_snapshots:
+            actual_options = dict(snapshot["compute_options"])
+            point_force_requests_match &= bool(
+                actual_options["flags"] & public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+            ) == (property_name == "force" and snapshot["point_charge_count"] > 0)
+            actual_options["flags"] &= ~public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+            option_snapshots.append(actual_options)
+        compute_options_match = (
+            bool(option_snapshots)
+            and len(option_snapshots)
+            == sum(len(owners) for owners in owners_by_layout.values())
+            and all(snapshot == option_snapshots[0] for snapshot in option_snapshots)
+            and point_force_requests_match
+        )
+        if mapping_evidence is not None:
+            mapping_evidence["preflight"] = runtime_image_check(args, owners_by_layout)
+            if mapping_evidence["preflight"]["status"] != "PASS":
+                for owners in owners_by_layout.values():
+                    for owner in owners:
+                        if owner["setup_state"] == "ready":
+                            owner["setup_state"] = "error"
+                            owner["setup_error"] = (
+                                "runtime image preflight failed: "
+                                + mapping_evidence["preflight"]["error"]
+                            )
+        round_specs = [("cold", None)]
+        round_specs.extend(("warmup", index) for index in range(1, args.warmups + 1))
+        round_specs.extend(
+            ("measured", index) for index in range(1, args.repetitions + 1)
+        )
+        for round_index, (phase, phase_index) in enumerate(round_specs):
+            order = layouts if round_index % 2 == 0 else tuple(reversed(layouts))
+            arm_results = {}
+            for layout in order:
+                try:
+                    arm_results[layout] = _finite_pair_arm_sweep(
+                        manifest,
+                        cases,
+                        expected_by_id,
+                        plans[layout],
+                        owners_by_layout[layout],
+                        property_name,
+                    )
+                except Exception as exc:  # noqa: BLE001, PERF203
+                    # One failed arm must not discard its partner or later rounds.
+                    results = []
+                    for index, case_id in enumerate(plans[layout].original_case_ids):
+                        result = finite_pair_missing_result(
+                            case_id,
+                            index,
+                            cases[case_id],
+                            property_name,
+                            "not_run",
+                            str(exc),
+                        )
+                        result["correctness"] = finite_case_correctness(
+                            cases[case_id], {}, result, manifest, property_name
+                        )
+                        results.append(result)
+                    arm_results[layout] = {
+                        "timing": dict.fromkeys(
+                            (
+                                "compute_ms",
+                                "download_ms",
+                                "publication_ms",
+                                "scatter_ms",
+                                "correctness_validation_ms",
+                                "end_to_end_ms",
+                            )
+                        ),
+                        "case_results": results,
+                        "finite_output_status": "fail",
+                        "status": "fail",
+                        "sweep_errors": [str(exc)],
+                        "memory_snapshots": [],
+                    }
+            original_results = {
+                item["case_id"]: item
+                for item in arm_results["original"]["case_results"]
+            }
+            exact_results = {
+                item["case_id"]: item
+                for item in arm_results["exact-ao"]["case_results"]
+            }
+            per_case_comparison = []
+            branch_differences = []
+            for case_id in original_plan.original_case_ids:
+                try:
+                    comparison = finite_pair_layout_comparison(
+                        cases[case_id],
+                        original_results[case_id],
+                        exact_results[case_id],
+                        manifest,
+                        property_name,
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain failed pairs
+                    comparison = {
+                        "status": "fail",
+                        "reference_validation": f"paired comparison failed: {exc}",
+                        "independent_reference_pass": False,
+                        "max_abs_errors": {},
+                        "absolute_tolerances": {},
+                        "discrete_state_differences": {},
+                    }
+                per_case_comparison.append({"case_id": case_id, **comparison})
+                if comparison["discrete_state_differences"]:
+                    branch_differences.append(
+                        {
+                            "case_id": case_id,
+                            "differences": comparison["discrete_state_differences"],
+                        }
+                    )
+            equivalence_status = (
+                "pass"
+                if all(item["status"] == "pass" for item in per_case_comparison)
+                else "fail"
+            )
+            all_independently_qualified = all(
+                result["correctness"].get("independent_reference_pass", False)
+                for layout in layouts
+                for result in arm_results[layout]["case_results"]
+            )
+            arms_performance_complete = all(
+                arm_results[layout]["status"] == "pass" for layout in layouts
+            )
+            memory_complete = all(
+                len(arm_results[layout]["memory_snapshots"])
+                == len(owners_by_layout[layout])
+                and all(
+                    "snapshot" in snapshot
+                    for snapshot in arm_results[layout]["memory_snapshots"]
+                )
+                for layout in layouts
+            )
+            paired_rounds.append(
+                {
+                    "pair_round_id": (
+                        f"{property_name}-b{original_plan.max_batch_size}-r{round_index}"
+                    ),
+                    "pair_round_index": round_index,
+                    "phase": phase,
+                    "phase_index": phase_index,
+                    "execution_order": list(order),
+                    "arms": arm_results,
+                    "layout_equivalence": {
+                        "status": equivalence_status,
+                        "reference_validation": (
+                            "diagnostic only; paired equality is not an independent "
+                            "scientific reference"
+                        ),
+                        "case_results": per_case_comparison,
+                        "branch_differences": branch_differences,
+                    },
+                    "numerical_comparison_eligible": (
+                        all_independently_qualified
+                        and arms_performance_complete
+                        and memory_complete
+                        and equivalence_status == "pass"
+                        and not branch_differences
+                        and compute_options_match
+                    ),
+                    "performance_comparison_eligible": False,
+                }
+            )
+        if (
+            mapping_evidence is not None
+            and mapping_evidence["preflight"]["status"] == "PASS"
+        ):
+            postflight = runtime_image_check(args, owners_by_layout)
+            mapping_evidence["postflight"] = postflight
+            if postflight["status"] == "PASS":
+                before = mapping_evidence["preflight"]["observation"]
+                after = postflight["observation"]
+                if any(
+                    before[key] != after[key]
+                    for key in ("selected_library", "entrypoints")
+                ):
+                    postflight["status"] = "FAIL"
+                    postflight["error"] = (
+                        "selected image or live entrypoints changed between endpoints"
+                    )
+                elif (
+                    mapping_evidence["preflight"]["observer_source"]
+                    != postflight["observer_source"]
+                ):
+                    postflight["status"] = "FAIL"
+                    postflight["error"] = (
+                        "runtime image observer source changed between endpoints"
+                    )
+                else:
+                    mapping_evidence["integrity_passed"] = True
+    finally:
+        for layout in layouts:
+            for owner in owners_by_layout[layout]:
+                adapter = owner["adapter"]
+                if adapter is None:
+                    continue
+                try:
+                    adapter.close()
+                except Exception as exc:  # noqa: BLE001 - close remaining owners
+                    cleanup_errors.append(
+                        {
+                            "layout": layout,
+                            "case_ids": list(owner["batch"].case_ids),
+                            "error": str(exc),
+                        }
+                    )
+
+    measured_rounds = [item for item in paired_rounds if item["phase"] == "measured"]
+    cold_rounds = [item for item in paired_rounds if item["phase"] == "cold"]
+    warmup_rounds = [item for item in paired_rounds if item["phase"] == "warmup"]
+    layout_timing = {}
+    for layout in layouts:
+        layout_timing[layout] = {
+            "plan_ms": planning_ms_by_layout[layout],
+            "owner_setup_ms": setup_ms_by_layout[layout],
+            "cold": cold_rounds[0]["arms"][layout]["timing"],
+            "warmups": [item["arms"][layout]["timing"] for item in warmup_rounds],
+            "measured": [item["arms"][layout]["timing"] for item in measured_rounds],
+            "measured_end_to_end": _finite_pair_timing_field(
+                measured_rounds, layout, "end_to_end_ms"
+            ),
+            "one_shot_total_ms": (
+                planning_ms_by_layout[layout]
+                + setup_ms_by_layout[layout]
+                + cold_rounds[0]["arms"][layout]["timing"]["end_to_end_ms"]
+                if cold_rounds[0]["arms"][layout]["timing"]["end_to_end_ms"] is not None
+                else None
+            ),
+            "plan_setup_amortized_ms_per_measured_sweep": (
+                planning_ms_by_layout[layout] + setup_ms_by_layout[layout]
+            )
+            / args.repetitions,
+            "owner_lifecycle": (
+                "one adapter/context per planned batch, retained for cold, all "
+                "warmups, and all measured rounds; closed after the final pair"
+            ),
+        }
+
+    measured_numeric_rounds = [
+        item
+        for item in measured_rounds
+        if all(
+            isinstance(
+                item["arms"][layout]["timing"].get("end_to_end_ms"), (int, float)
+            )
+            for layout in layouts
+        )
+    ]
+    paired_samples = []
+    for item in measured_rounds:
+        original_ms = item["arms"]["original"]["timing"].get("end_to_end_ms")
+        exact_ms = item["arms"]["exact-ao"]["timing"].get("end_to_end_ms")
+        paired_samples.append(
+            {
+                "pair_round_id": item["pair_round_id"],
+                "execution_order": item["execution_order"],
+                "original_ms": original_ms,
+                "exact_ao_ms": exact_ms,
+                "exact_ao_minus_original_ms": (
+                    exact_ms - original_ms
+                    if isinstance(original_ms, (int, float))
+                    and isinstance(exact_ms, (int, float))
+                    else None
+                ),
+                "exact_ao_over_original_ratio": (
+                    exact_ms / original_ms
+                    if isinstance(original_ms, (int, float))
+                    and isinstance(exact_ms, (int, float))
+                    and original_ms > 0.0
+                    else None
+                ),
+                "performance_comparison_eligible": item[
+                    "performance_comparison_eligible"
+                ],
+            }
+        )
+    paired_ratios = [
+        item["exact_ao_over_original_ratio"]
+        for item in paired_samples
+        if item["exact_ao_over_original_ratio"] is not None
+    ]
+
+    correctness_failure_ids_by_layout = {}
+    failed_ids_by_layout = {}
+    coordinate_states_by_layout = {}
+    unqualified_ids_by_layout = {}
+    successful_every_sweep_by_layout = {}
+    for layout in layouts:
+        all_results = [
+            result
+            for item in measured_rounds
+            for result in item["arms"][layout]["case_results"]
+        ]
+        correctness_failure_ids = {
+            result["case_id"]
+            for result in all_results
+            if result.get("correctness", {}).get("status") != "pass"
+        }
+        failed_ids = {
+            result["case_id"]
+            for result in all_results
+            if result.get("execution_state") != "completed"
+        }
+        unqualified_ids = {
+            result["case_id"]
+            for result in all_results
+            if not result.get("correctness", {}).get(
+                "independent_reference_pass", False
+            )
+        }
+        successful_every_sweep = set(original_plan.original_case_ids)
+        for item in measured_rounds:
+            successful_every_sweep.intersection_update(
+                result["case_id"]
+                for result in item["arms"][layout]["case_results"]
+                if result.get("execution_state") == "completed"
+                and result.get("status") == public_api.XTBLOOM_STATUS_SUCCESS
+                and result.get("scc_converged") == 1
+            )
+        correctness_failure_ids_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in correctness_failure_ids
+        ]
+        failed_ids_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in failed_ids
+        ]
+        ids_by_state = {
+            state: set()
+            for state in ("system-failure", "unavailable", "error", "not_run")
+        }
+        for result in all_results:
+            state = result.get("execution_state")
+            if state in ids_by_state:
+                ids_by_state[state].add(result["case_id"])
+        coordinate_states_by_layout[layout] = {
+            state: [
+                case_id
+                for case_id in original_plan.original_case_ids
+                if case_id in state_ids
+            ]
+            for state, state_ids in ids_by_state.items()
+        }
+        unqualified_ids_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in unqualified_ids
+        ]
+        successful_every_sweep_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in successful_every_sweep
+        ]
+
+    measured_layout_equivalence_pass = all(
+        item["layout_equivalence"]["status"] == "pass" for item in measured_rounds
+    )
+    measured_branch_differences = [
+        {
+            "pair_round_id": item["pair_round_id"],
+            **difference,
+        }
+        for item in measured_rounds
+        for difference in item["layout_equivalence"]["branch_differences"]
+    ]
+    independent_reference_qualified = all(
+        not unqualified_ids_by_layout[layout] for layout in layouts
+    )
+    finite_output_status = (
+        "pass"
+        if all(
+            not correctness_failure_ids_by_layout[layout]
+            and not failed_ids_by_layout[layout]
+            for layout in layouts
+        )
+        else "fail"
+    )
+    correctness_status = (
+        "fail"
+        if finite_output_status == "fail"
+        else "pass"
+        if independent_reference_qualified
+        else "unqualified"
+    )
+    numerical_comparison_eligible = (
+        independent_reference_qualified
+        and not cleanup_errors
+        and correctness_status == "pass"
+        and measured_layout_equivalence_pass
+        and not measured_branch_differences
+        and all(item["numerical_comparison_eligible"] for item in paired_rounds)
+    )
+    claim_reasons = []
+    if not independent_reference_qualified:
+        claim_reasons.append(
+            "one or more layout results lack required independent references"
+        )
+    if cleanup_errors:
+        claim_reasons.append("one or more persistent owners failed during cleanup")
+    if any(
+        not item["numerical_comparison_eligible"]
+        for item in (*cold_rounds, *warmup_rounds)
+    ):
+        claim_reasons.append("cold or warmup qualification failed or was incomplete")
+    if not compute_options_match:
+        claim_reasons.append("initialized owner compute options differ or are missing")
+    if correctness_status != "pass":
+        if correctness_status == "fail":
+            claim_reasons.append("one or more measured system or oracle checks failed")
+        else:
+            claim_reasons.append(
+                "independent references are missing for one or more IDs"
+            )
+    if not measured_layout_equivalence_pass:
+        claim_reasons.append(
+            "paired layouts exceed or cannot establish existing tolerances"
+        )
+    if measured_branch_differences:
+        claim_reasons.append(
+            "layout-dependent status, convergence, or SCC iteration differences"
+        )
+    claim_reasons.append("selected-library producer/source binding is UNVERIFIED")
+
+    setup_failures = [
+        {
+            "layout": layout,
+            "case_ids": list(owner["batch"].case_ids),
+            "state": owner["setup_state"],
+            "error": owner["setup_error"],
+        }
+        for layout in layouts
+        for owner in owners_by_layout[layout]
+        if owner["adapter"] is None
+    ]
+    execution_states = {
+        result.get("execution_state")
+        for item in paired_rounds
+        for layout in layouts
+        for result in item["arms"][layout]["case_results"]
+    }
+    if (
+        cleanup_errors
+        or any(item["state"] == "error" for item in setup_failures)
+        or "error" in execution_states
+        or ("not_run" in execution_states and not setup_failures)
+    ):
+        availability = "error"
+    elif setup_failures or "unavailable" in execution_states:
+        availability = "unavailable"
+    else:
+        availability = "available"
+
+    snapshot_entries = [
+        snapshot
+        for item in paired_rounds
+        for layout in layouts
+        for snapshot in item["arms"][layout]["memory_snapshots"]
+        if "snapshot" in snapshot
+    ]
+    row.update(
+        {
+            "availability": availability,
+            "pair_status": "complete" if not setup_failures else "partial",
+            "planning_ms": sum(planning_ms_by_layout.values()),
+            "planning_ms_by_layout": planning_ms_by_layout,
+            "setup_ms": sum(setup_ms_by_layout.values()),
+            "setup_ms_by_layout": setup_ms_by_layout,
+            "layouts": {
+                layout: finite_pair_plan_metadata(plans[layout]) for layout in layouts
+            },
+            "plan_sha256_by_layout": {
+                layout: plans[layout].plan_sha256 for layout in layouts
+            },
+            "owner_setup_order": setup_order,
+            "owner_setup_failures": setup_failures,
+            "owner_engine_options": {
+                layout: [
+                    {
+                        "case_ids": list(owner["batch"].case_ids),
+                        "setup_state": owner["setup_state"],
+                        "engine_options": owner["engine_options"],
+                    }
+                    for owner in owners_by_layout[layout]
+                ]
+                for layout in layouts
+            },
+            "compute_options_match": compute_options_match,
+            "owner_lifecycle": (
+                "both layout owner sets remain resident together for every round; "
+                "one owner is created per planned batch and none are recreated "
+                "per sample"
+            ),
+            "paired_rounds": paired_rounds,
+            "paired_timing": {
+                "layout_samples": layout_timing,
+                "measured_pair_samples": paired_samples,
+                "paired_one_shot_total_ms": (
+                    sum(planning_ms_by_layout.values())
+                    + sum(setup_ms_by_layout.values())
+                    + sum(
+                        item["arms"][layout]["timing"]["end_to_end_ms"]
+                        for item in cold_rounds
+                        for layout in layouts
+                        if item["arms"][layout]["timing"]["end_to_end_ms"] is not None
+                    )
+                    if all(
+                        item["arms"][layout]["timing"]["end_to_end_ms"] is not None
+                        for item in cold_rounds
+                        for layout in layouts
+                    )
+                    else None
+                ),
+                "measured_round_count": len(measured_rounds),
+                "requested_round_count": len(paired_rounds),
+                "paired_ratio_median": (
+                    statistics.median(paired_ratios) if paired_ratios else None
+                ),
+                "paired_numeric_round_count": len(measured_numeric_rounds),
+                "scope": (
+                    "each arm E2E includes its synchronous strict-FRESH compute, "
+                    "result download, per-system publication, memory sampling, and "
+                    "canonical scatter; persistent owner setup and planning are "
+                    "reported separately and amortized explicitly; cleanup and "
+                    "oracle comparisons are outside E2E"
+                ),
+                "round_policy": (
+                    "cold is original then exact-AO; each subsequent warmup and "
+                    "measured pair alternates AB/BA continuously; all requested "
+                    "rounds, including failed coordinates, remain in paired_rounds"
+                ),
+            },
+            "memory": {
+                "host_rss_before_setup_bytes": rss_before,
+                "host_peak_rss_bytes": max(
+                    (
+                        snapshot["snapshot"]["host_process_hwm_bytes"]
+                        for snapshot in snapshot_entries
+                        if snapshot["snapshot"].get("host_process_hwm_bytes")
+                        is not None
+                    ),
+                    default=process_hwm_bytes(),
+                ),
+                "snapshot_count": len(snapshot_entries),
+                "snapshots_location": (
+                    "paired_rounds[*].arms[*].memory_snapshots; snapshots are taken "
+                    "while both layout owner sets remain alive"
+                ),
+                "device_memory_scope": (
+                    "cudaMemGetInfo device-global samples when CUDA is selected"
+                ),
+            },
+            "correctness": {
+                "status": correctness_status,
+                "finite_output_status": finite_output_status,
+                "reference": "per-ID committed independent oracle where available",
+                "sweep_count": len(measured_rounds),
+                "successful_system_ids_by_layout": successful_every_sweep_by_layout,
+                "failed_system_ids_by_layout": failed_ids_by_layout,
+                "correctness_failure_ids_by_layout": correctness_failure_ids_by_layout,
+                "coordinate_states_by_layout": coordinate_states_by_layout,
+                "unqualified_reference_ids_by_layout": unqualified_ids_by_layout,
+                "layout_equivalence_status": (
+                    "pass" if measured_layout_equivalence_pass else "fail"
+                ),
+                "layout_equivalence_is_scientific_qualification": False,
+            },
+            "independent_reference_qualified": independent_reference_qualified,
+            "numerical_comparison_eligible": numerical_comparison_eligible,
+            "claim_eligible": False,
+            "producer_provenance": {
+                "status": "UNVERIFIED",
+                "selected_library_source_binding": "NOT_ESTABLISHED",
+                "scope": (
+                    "archival source/library hashes do not verify producer identity; "
+                    "clean or dirty runner states remain diagnostic until an "
+                    "admissible exact-binary provenance contract is implemented"
+                ),
+            },
+            "claim_ineligibility_reasons": claim_reasons,
+            "branch_differences": measured_branch_differences,
+            "cleanup_errors": cleanup_errors,
+        }
+    )
+    if mapping_evidence is not None:
+        row["producer_provenance"]["runtime_mapped_images"] = mapping_evidence
+        row["timing_excludes_runtime_image_observation"] = True
+        if not mapping_evidence["integrity_passed"]:
+            row["claim_ineligibility_reasons"].append(
+                "runtime mapped-image observation failed"
+            )
+    if availability == "error":
+        row["error"] = next(
+            (
+                item["error"]
+                for item in setup_failures
+                if item["state"] == "error" and item["error"]
+            ),
+            cleanup_errors[0]["error"]
+            if cleanup_errors
+            else "paired arm execution failed",
+        )
+    elif availability == "unavailable":
+        row["unavailable_reason"] = next(
+            (
+                item["error"]
+                for item in setup_failures
+                if item["state"] == "unavailable" and item["error"]
+            ),
+            "one or more paired layout coordinates were unavailable",
+        )
+    return row
 
 
 def point_source_atomic_numbers(
@@ -1042,7 +2901,6 @@ def dxtb_cells(args: argparse.Namespace) -> Iterable[Cell]:
 
 def base_row(cell: Cell) -> dict[str, Any]:
     """Create stable identity fields shared by available and unavailable rows."""
-    identifiers = workload_case_ids(cell.workload, cell.batch_size)
     row = {
         "engine": cell.engine,
         "backend": cell.backend,
@@ -1051,9 +2909,14 @@ def base_row(cell: Cell) -> dict[str, Any]:
         "property": cell.property,
         "batch_size": cell.batch_size,
     }
-    if cell.workload in WORKLOAD_CASES:
+    if cell.case_ids is not None:
+        row["case_ids"] = list(cell.case_ids)
+        row["case_count"] = len(cell.case_ids)
+    elif cell.workload in WORKLOAD_CASES:
+        identifiers = workload_case_ids(cell.workload, cell.batch_size)
         row["case_id"] = identifiers[0]
     else:
+        identifiers = workload_case_ids(cell.workload, cell.batch_size)
         row["case_ids"] = list(identifiers)
     return row
 
@@ -1246,12 +3109,45 @@ def xtbloom_cells(args: argparse.Namespace) -> Iterable[Cell]:
                     )
 
 
+def json_safe_value(value: object) -> object:
+    """Encode non-finite floats as tagged objects accepted by strict JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        marker = (
+            "NaN" if math.isnan(value) else "Infinity" if value > 0 else "-Infinity"
+        )
+        return {NONFINITE_JSON_TAG: marker}
+    if isinstance(value, dict):
+        return {key: json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe_value(item) for item in value]
+    return value
+
+
+def restore_json_safe_value(value: dict[str, object]) -> object:
+    """Decode a tagged non-finite float object created by :func:`json_safe_value`."""
+    if len(value) == 1 and value.get(NONFINITE_JSON_TAG) in NONFINITE_JSON_VALUES:
+        marker = value[NONFINITE_JSON_TAG]
+        if marker == "NaN":
+            return float("nan")
+        if marker == "Infinity":
+            return float("inf")
+        return float("-inf")
+    return value
+
+
 def write_json(path: Path, document: dict[str, Any]) -> None:
-    """Atomically replace one reviewable JSON artifact."""
+    """Atomically replace one standards-compliant JSON artifact."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
-        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(
+            json_safe_value(document),
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     temporary.replace(path)
 
@@ -1281,7 +3177,37 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "max_abs_point_charge_force_error_hartree_per_bohr",
         "warm_samples_ms",
         "memory_json",
+        "ao_grouping",
+        "plan_sha256",
+        "planning_ms",
+        "batch_count",
+        "preparation_ms_median",
+        "compute_ms_median",
+        "publication_ms_median",
+        "scatter_ms_median",
+        "end_to_end_median_ms",
+        "end_to_end_samples_ms",
+        "one_shot_total_ms",
+        "paired_original_end_to_end_median_ms",
+        "paired_exact_ao_end_to_end_median_ms",
+        "paired_ratio_median",
+        "paired_rounds_json",
+        "paired_plan_sha256_json",
+        "independent_reference_qualified",
+        "claim_eligible",
     ]
+    observed_rows = any(
+        "runtime_mapped_images" in row.get("producer_provenance", {}) for row in rows
+    )
+    if observed_rows:
+        fields.extend(
+            (
+                "runtime_image_integrity_passed",
+                "runtime_image_preflight_status",
+                "runtime_image_postflight_status",
+                "runtime_image_validation_ms",
+            )
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="") as handle:
@@ -1290,6 +3216,14 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         for row in rows:
             warm = row.get("warm", {})
             correct = row.get("correctness", {})
+            finite_timing = row.get("timing", {})
+            end_to_end = finite_timing.get("end_to_end_ms", {})
+            paired_timing = row.get("paired_timing", {})
+            paired_layouts = paired_timing.get("layout_samples", {})
+            paired_rounds = row.get("paired_rounds", [])
+            mapping_evidence = row.get("producer_provenance", {}).get(
+                "runtime_mapped_images", {}
+            )
             writer.writerow(
                 {
                     "engine": row["engine"],
@@ -1298,7 +3232,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     "workload": row["workload"],
                     "case_id": row.get("case_id"),
                     "case_ids": (
-                        json.dumps(row["case_ids"]) if "case_ids" in row else None
+                        json.dumps(json_safe_value(row["case_ids"]), allow_nan=False)
+                        if "case_ids" in row
+                        else None
                     ),
                     "property": row["property"],
                     "batch_size": row["batch_size"],
@@ -1320,8 +3256,105 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     "max_abs_point_charge_force_error_hartree_per_bohr": correct.get(
                         "max_abs_point_charge_force_error_hartree_per_bohr"
                     ),
-                    "warm_samples_ms": json.dumps(warm.get("samples_ms")),
-                    "memory_json": json.dumps(row.get("memory"), sort_keys=True),
+                    "warm_samples_ms": json.dumps(
+                        json_safe_value(warm.get("samples_ms")), allow_nan=False
+                    ),
+                    "memory_json": json.dumps(
+                        json_safe_value(row.get("memory")),
+                        allow_nan=False,
+                        sort_keys=True,
+                    ),
+                    "ao_grouping": row.get("ao_grouping"),
+                    "plan_sha256": row.get("plan_sha256"),
+                    "planning_ms": row.get("planning_ms"),
+                    "batch_count": row.get("batch_count"),
+                    "preparation_ms_median": finite_timing.get("preparation_ms_median"),
+                    "compute_ms_median": finite_timing.get("compute_ms_median"),
+                    "publication_ms_median": finite_timing.get("publication_ms_median"),
+                    "scatter_ms_median": finite_timing.get("scatter_ms_median"),
+                    "end_to_end_median_ms": end_to_end.get("median_ms"),
+                    "end_to_end_samples_ms": json.dumps(
+                        json_safe_value(end_to_end.get("samples_ms")),
+                        allow_nan=False,
+                    ),
+                    "one_shot_total_ms": finite_timing.get("one_shot_total_ms"),
+                    "paired_original_end_to_end_median_ms": (
+                        paired_layouts.get("original", {})
+                        .get("measured_end_to_end", {})
+                        .get("median_ms")
+                    ),
+                    "paired_exact_ao_end_to_end_median_ms": (
+                        paired_layouts.get("exact-ao", {})
+                        .get("measured_end_to_end", {})
+                        .get("median_ms")
+                    ),
+                    "paired_ratio_median": paired_timing.get("paired_ratio_median"),
+                    "paired_rounds_json": json.dumps(
+                        json_safe_value(
+                            [
+                                {
+                                    "pair_round_id": item["pair_round_id"],
+                                    "phase": item["phase"],
+                                    "phase_index": item["phase_index"],
+                                    "execution_order": item["execution_order"],
+                                    "end_to_end_ms": {
+                                        layout: item["arms"][layout]["timing"].get(
+                                            "end_to_end_ms"
+                                        )
+                                        for layout in ("original", "exact-ao")
+                                    },
+                                    "timing": {
+                                        layout: item["arms"][layout]["timing"]
+                                        for layout in ("original", "exact-ao")
+                                    },
+                                    "layout_equivalence_status": item[
+                                        "layout_equivalence"
+                                    ]["status"],
+                                    "branch_differences": item["layout_equivalence"][
+                                        "branch_differences"
+                                    ],
+                                    "performance_comparison_eligible": item[
+                                        "performance_comparison_eligible"
+                                    ],
+                                    "numerical_comparison_eligible": item[
+                                        "numerical_comparison_eligible"
+                                    ],
+                                }
+                                for item in paired_rounds
+                            ]
+                        ),
+                        allow_nan=False,
+                    ),
+                    "paired_plan_sha256_json": json.dumps(
+                        json_safe_value(row.get("plan_sha256_by_layout")),
+                        allow_nan=False,
+                        sort_keys=True,
+                    ),
+                    "independent_reference_qualified": row.get(
+                        "independent_reference_qualified"
+                    ),
+                    "claim_eligible": row.get("claim_eligible"),
+                    **(
+                        {
+                            "runtime_image_integrity_passed": mapping_evidence.get(
+                                "integrity_passed"
+                            ),
+                            "runtime_image_preflight_status": (
+                                mapping_evidence.get("preflight") or {}
+                            ).get("status"),
+                            "runtime_image_postflight_status": (
+                                mapping_evidence.get("postflight") or {}
+                            ).get("status"),
+                            "runtime_image_validation_ms": sum(
+                                (mapping_evidence.get(phase) or {}).get(
+                                    "validation_ms", 0.0
+                                )
+                                for phase in ("preflight", "postflight")
+                            ),
+                        }
+                        if observed_rows
+                        else {}
+                    ),
                 }
             )
     temporary.replace(path)
@@ -1331,6 +3364,24 @@ def build_parser() -> argparse.ArgumentParser:
     """Define one command that can expand from smoke tests to the full matrix."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
+    parser.add_argument(
+        "--build-receipt",
+        type=Path,
+        help=(
+            "record-only controlled-build receipt; paired mode only, "
+            "no performance admission"
+        ),
+    )
+    parser.add_argument("--build-receipt-sha256")
+    parser.add_argument("--build-source-revision")
+    parser.add_argument(
+        "--runtime-mapped-images",
+        action="store_true",
+        help=(
+            "Linux endpoint image observation; requires paired mode "
+            "and pinned build receipt"
+        ),
+    )
     parser.add_argument("--manifest", type=Path, default=conformance.DEFAULT_MANIFEST)
     parser.add_argument(
         "--output-json",
@@ -1371,6 +3422,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch-sizes",
         type=lambda value: parse_csv_values(value, int),
         default=DEFAULT_BATCH_SIZES,
+    )
+    finite_cases = parser.add_mutually_exclusive_group()
+    finite_cases.add_argument(
+        "--case-ids",
+        type=lambda value: parse_csv_values(value),
+        help="finite manifest case IDs in canonical input order",
+    )
+    finite_cases.add_argument(
+        "--case-ids-file",
+        type=Path,
+        help="UTF-8 file with one manifest case ID per line",
+    )
+    parser.add_argument(
+        "--ao-grouping",
+        choices=("original", "exact-ao", "paired"),
+        default="original",
+        help=(
+            "finite-list layout; original is the default, exact-ao runs one "
+            "grouped layout, and paired interleaves original with exact-ao"
+        ),
     )
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repetitions", type=int, default=5)
@@ -1429,6 +3500,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dxtb-cpu-threads", type=int, default=1)
     parser.add_argument("--fail-on-correctness", action="store_true")
+    parser.add_argument(
+        "--require-available",
+        action="store_true",
+        help="exit nonzero if any requested benchmark coordinate is unavailable",
+    )
     return parser
 
 
@@ -1455,20 +3531,245 @@ def validate_args(args: argparse.Namespace) -> None:
         raise BenchmarkError("batch sizes must be positive")
     if args.dxtb_cpu_threads <= 0:
         raise BenchmarkError("dxtb CPU threads must be positive")
+    finite_list_requested = args.case_ids is not None or args.case_ids_file is not None
+    receipt_inputs = (
+        getattr(args, "build_receipt", None),
+        getattr(args, "build_receipt_sha256", None),
+        getattr(args, "build_source_revision", None),
+    )
+    if getattr(args, "runtime_mapped_images", False):
+        if not sys.platform.startswith("linux"):
+            raise BenchmarkError("runtime mapped-image observation requires Linux")
+        if not all(value is not None for value in receipt_inputs):
+            raise BenchmarkError(
+                "runtime mapped-image observation requires a pinned build receipt"
+            )
+    if any(value is not None for value in receipt_inputs):
+        if not all(value is not None for value in receipt_inputs):
+            raise BenchmarkError(
+                "build receipt, external SHA-256 and source revision "
+                "are required together"
+            )
+        if args.ao_grouping != "paired":
+            raise BenchmarkError(
+                "controlled build receipts are record-only in paired mode"
+            )
+        if not build_receipt.SHA256_PATTERN.fullmatch(args.build_receipt_sha256):
+            raise BenchmarkError("build receipt requires a lowercase SHA-256 pin")
+        if not build_receipt.REVISION_PATTERN.fullmatch(args.build_source_revision):
+            raise BenchmarkError("build receipt requires a full source revision")
+    if not finite_list_requested and args.ao_grouping != "original":
+        raise BenchmarkError("--ao-grouping requires --case-ids or --case-ids-file")
+    if finite_list_requested:
+        if args.case_ids is not None:
+            if not args.case_ids:
+                raise BenchmarkError("finite case list must not be empty")
+            if len(set(args.case_ids)) != len(args.case_ids):
+                raise BenchmarkError("finite case IDs must be unique")
+        if args.engines != ("xtbloom",):
+            raise BenchmarkError("finite-list grouping requires --engines xtbloom")
+        if len(args.backends) != 1:
+            raise BenchmarkError(
+                "finite-list grouping requires exactly one backend: cpu or cuda"
+            )
+        if args.backends == ("cuda",) and args.cuda_memory_modes != ("host",):
+            raise BenchmarkError("finite-list CUDA grouping requires host descriptors")
+        if args.ao_grouping == "paired" and args.cuda_memory_modes != ("host",):
+            raise BenchmarkError(
+                "paired finite-list grouping requires --cuda-memory-modes host"
+            )
+
+
+def read_case_id_file(path: Path) -> tuple[str, ...]:
+    """Read a finite ordered manifest selection, ignoring blank and comment lines."""
+    try:
+        return tuple(
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    except OSError as exc:
+        raise BenchmarkError(f"cannot read finite case ID file {path}: {exc}") from exc
+
+
+def controlled_receipt_check(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Check pinned files outside timing, without asserting mapped-image identity.
+
+    The controlled artifact/source check is deliberately not a performance
+    admission gate. Loaded-image identity, dependency closure and independent
+    scientific/runtime qualification remain separate incomplete requirements.
+    """
+    if getattr(args, "build_receipt", None) is None:
+        return None
+    started = time.perf_counter_ns()
+    try:
+        verified = build_receipt.verify_receipt(
+            args.build_receipt,
+            args.build_receipt_sha256,
+            args.library,
+            args.build_source_revision,
+        )
+    except build_receipt.ReceiptError as exc:
+        raise BenchmarkError(
+            f"controlled build receipt verification failed: {exc}"
+        ) from exc
+    if verified["backend"] != args.backends[0]:
+        raise BenchmarkError(
+            "controlled build receipt backend differs from the requested benchmark"
+        )
+    return {
+        "verification": verified,
+        "validation_ms": (time.perf_counter_ns() - started) * 1e-6,
+        "runtime_loaded_image_binding": "NOT_ESTABLISHED",
+        "performance_admission": False,
+        "cost_scope": (
+            "one preflight/postflight file check outside measured sweeps; "
+            "costs retained separately"
+        ),
+    }
+
+
+def receipt_postflight(
+    args: argparse.Namespace,
+    preflight: dict[str, Any] | None,
+    metadata: dict[str, Any],
+    rows: Sequence[dict[str, Any]],
+) -> bool:
+    """Retain computed coordinates when evidence integrity fails after execution."""
+    if preflight is None:
+        return True
+    started = time.perf_counter_ns()
+    postflight = None
+    try:
+        postflight = controlled_receipt_check(args)
+        if (
+            postflight is None
+            or postflight["verification"] != preflight["verification"]
+        ):
+            raise BenchmarkError("controlled receipt identity changed during execution")
+        passed = True
+    except BenchmarkError as exc:
+        postflight = {
+            "verification": postflight.get("verification") if postflight else None,
+            "error": str(exc),
+            "validation_ms": (time.perf_counter_ns() - started) * 1e-6,
+            "performance_admission": False,
+            "runtime_loaded_image_binding": "NOT_ESTABLISHED",
+        }
+        passed = False
+    evidence = {
+        "status": "LOCAL_RECEIPT_MATCHES" if passed else "POSTFLIGHT_FAILED",
+        "preflight": preflight,
+        "postflight": postflight,
+        "performance_admission": False,
+    }
+    metadata["controlled_build_receipt"] = evidence
+    for row in rows:
+        if "producer_provenance" in row:
+            row["producer_provenance"]["controlled_build_receipt"] = evidence
+            row["producer_provenance"]["runtime_loaded_image_binding"] = (
+                "NOT_ESTABLISHED"
+            )
+            row["claim_ineligibility_reasons"].append(
+                "local receipt does not establish loaded-image/dependency/"
+                "performance admission"
+                if passed
+                else "controlled build receipt postflight failed"
+            )
+    return passed
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run requested cells and always retain both machine-readable artifacts."""
     args = build_parser().parse_args(argv)
     try:
+        if args.case_ids_file is not None:
+            args.case_ids = read_case_id_file(args.case_ids_file)
         validate_args(args)
+        receipt_preflight = controlled_receipt_check(args)
+        if args.runtime_mapped_images:
+            args.runtime_images_expected_sha256 = receipt_preflight["verification"][
+                "library"
+            ]["sha256"]
         manifest = conformance.load_json(args.manifest)
-        cases = {
-            case["id"]: case for case in conformance.selected_cases(manifest, None)
-        }
+        if (
+            args.ao_grouping == "paired"
+            and public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB
+        ):
+            raise BenchmarkError("paired exact-AO grouping requires a GFN2 manifest")
+        manifest_cases = conformance.selected_cases(manifest, None)
+        cases: dict[str, dict[str, Any]] = {}
+        for case in manifest_cases:
+            case_id = case["id"]
+            if case_id in cases:
+                raise BenchmarkError(f"manifest contains duplicate case ID {case_id!r}")
+            cases[case_id] = case
+        if args.case_ids is not None:
+            missing = [case_id for case_id in args.case_ids if case_id not in cases]
+            if missing:
+                raise BenchmarkError(
+                    "finite case IDs are absent from the manifest: "
+                    + ", ".join(missing)
+                )
         metadata = environment_metadata(args)
+        provenance = input_provenance(args.manifest, provenance_case_ids(args), cases)
         rows: list[dict[str, Any]] = []
-        if "xtbloom" in args.engines:
+        if args.case_ids is not None:
+            for property_name in args.properties:
+                for batch_cap in args.batch_sizes:
+                    if args.ao_grouping == "paired":
+                        plans = {}
+                        planning_ms_by_layout = {}
+                        for strategy in ("original", "exact-ao"):
+                            plan, planning_ms = finite_case_plan(
+                                args,
+                                manifest,
+                                cases,
+                                args.case_ids,
+                                batch_cap,
+                                strategy=strategy,
+                            )
+                            plans[strategy] = plan
+                            planning_ms_by_layout[strategy] = planning_ms
+                        print(  # noqa: T201 - preserve benchmark CLI progress output
+                            "RUN xtbloom "
+                            f"{args.backends[0]}/host finite-list paired "
+                            f"{property_name} cap={batch_cap} "
+                            f"systems={len(args.case_ids)}",
+                            flush=True,
+                        )
+                        row = benchmark_finite_xtbloom_pair(
+                            args,
+                            manifest,
+                            cases,
+                            plans,
+                            planning_ms_by_layout,
+                            property_name,
+                        )
+                    else:
+                        plan, planning_ms = finite_case_plan(
+                            args, manifest, cases, args.case_ids, batch_cap
+                        )
+                        print(  # noqa: T201 - preserve benchmark CLI progress output
+                            "RUN xtbloom "
+                            f"{args.backends[0]}/host finite-list {plan.strategy} "
+                            f"{property_name} cap={batch_cap} "
+                            f"systems={len(args.case_ids)}",
+                            flush=True,
+                        )
+                        row = benchmark_finite_xtbloom_cell(
+                            args,
+                            manifest,
+                            cases,
+                            plan,
+                            planning_ms,
+                            property_name,
+                        )
+                    rows.append(row)
+                    print(  # noqa: T201 - preserve benchmark CLI progress output
+                        f"  {row['availability']}", flush=True
+                    )
+        if args.case_ids is None and "xtbloom" in args.engines:
             for cell in xtbloom_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1485,7 +3786,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
-        if "xtb" in args.engines:
+        if args.case_ids is None and "xtb" in args.engines:
             for cell in xtb_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1502,7 +3803,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
-        if "tblite" in args.engines:
+        if args.case_ids is None and "tblite" in args.engines:
             for cell in tblite_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1519,7 +3820,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
-        if "dxtb" in args.engines:
+        if args.case_ids is None and "dxtb" in args.engines:
             for cell in dxtb_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"RUN {cell.engine} {cell.backend}/{cell.memory_mode} "
@@ -1536,11 +3837,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
+        receipt_integrity_passed = receipt_postflight(
+            args, receipt_preflight, metadata, rows
+        )
+        mapping_integrity_passed = True
+        if args.runtime_mapped_images:
+            mapping_integrity_passed = bool(rows) and all(
+                row.get("producer_provenance", {})
+                .get("runtime_mapped_images", {})
+                .get("integrity_passed", False)
+                for row in rows
+            )
+            metadata["runtime_mapped_image_observation"] = {
+                "requested": True,
+                "integrity_passed": mapping_integrity_passed,
+                "cost_scope": "endpoint-only observation outside sweep timings",
+                "performance_admission": False,
+            }
         document = {
             "schema_version": SCHEMA_VERSION,
             "metadata": metadata,
+            "provenance": provenance,
+            "nonfinite_json_encoding": {
+                "tag": NONFINITE_JSON_TAG,
+                "values": list(NONFINITE_JSON_VALUES),
+            },
             "protocol": {
                 "batch_sizes": list(args.batch_sizes),
+                "finite_case_ids": (
+                    list(args.case_ids) if args.case_ids is not None else None
+                ),
+                "ao_grouping": args.ao_grouping,
+                "strict_fresh_host_descriptors": args.case_ids is not None,
                 "properties": list(args.properties),
                 "workloads": {
                     name: (
@@ -1553,6 +3881,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
                 "warmups": args.warmups,
                 "repetitions": args.repetitions,
+                "fail_on_correctness": args.fail_on_correctness,
+                "require_available": args.require_available,
                 "units": {"latency": "ms", "throughput": "systems/s"},
             },
             "rows": rows,
@@ -1566,10 +3896,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         failed = [
             row for row in rows if row.get("correctness", {}).get("status") == "fail"
         ]
-        if errors:
+        unavailable = [row for row in rows if row["availability"] == "unavailable"]
+        if errors or not receipt_integrity_passed or not mapping_integrity_passed:
             return 1
         if args.fail_on_correctness and failed:
             return 2
+        if args.require_available and unavailable:
+            return 3
         return 0
     except (BenchmarkError, conformance.ConformanceError) as exc:
         print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics

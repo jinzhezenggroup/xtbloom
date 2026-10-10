@@ -5,11 +5,13 @@ from __future__ import annotations
 import csv
 import ctypes
 import json
+import math
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
 from benchmarks import run, tblite_adapter, xtb_adapter
@@ -404,7 +406,789 @@ class HarnessTest(unittest.TestCase):
             with csv_path.open(newline="", encoding="utf-8") as handle:
                 written = next(csv.DictReader(handle))
             self.assertEqual(written["availability"], "unavailable")
-            self.assertEqual(written["unavailable_reason"], "missing library")
+        self.assertEqual(written["unavailable_reason"], "missing library")
+
+
+class PairedRunnerTest(unittest.TestCase):
+    """Exercise interleaved finite-list execution with persistent fake owners."""
+
+    def _record(self, case_id: str) -> dict[str, object]:
+        index = "abcd".index(case_id)
+        case = self.cases[case_id]
+        atom_count = case["atom_count"]
+        point_count = case["point_charge_count"]
+        record: dict[str, object] = {
+            "energy_hartree": -1.0 - index,
+            "partial_charges_e": [
+                index + atom_index / 10.0 for atom_index in range(atom_count)
+            ],
+            "forces_hartree_per_bohr": [
+                index + component / 100.0 for component in range(3 * atom_count)
+            ],
+            "status": run.public_api.XTBLOOM_STATUS_SUCCESS,
+            "scc_converged": 1,
+            "scc_iterations": 3,
+        }
+        if point_count:
+            record["point_charge_forces_hartree_per_bohr"] = [
+                index + component / 100.0 for component in range(3 * point_count)
+            ]
+        return record
+
+    def _run_pair(
+        self,
+        *,
+        property_name: str = "force",
+        warmups: int = 1,
+        repetitions: int = 2,
+        missing_reference_ids: tuple[str, ...] = (),
+        behavior: dict[str, object] | None = None,
+    ) -> tuple[dict[str, object], list[tuple[object, ...]], list[object]]:
+        behavior = behavior or {}
+        ids = ("a", "b", "c", "d")
+        atom_counts = {"a": 1, "b": 2, "c": 1, "d": 3}
+        point_counts = {"a": 1, "b": 0, "c": 2, "d": 1}
+        ao_counts = {"a": 2, "b": 1, "c": 2, "d": 1}
+        self.cases = {
+            case_id: {
+                "id": case_id,
+                "atom_count": atom_counts[case_id],
+                "point_charge_count": point_counts[case_id],
+                **(
+                    {"oracle_role": "diagnostic-no-independent-reference"}
+                    if case_id in missing_reference_ids
+                    else {}
+                ),
+            }
+            for case_id in ids
+        }
+        expected = {
+            case_id: ({} if case_id in missing_reference_ids else self._record(case_id))
+            for case_id in ids
+        }
+        manifest = {
+            "tolerances": {
+                "energy": {"atol": 1.0e-12},
+                "charges": {"atol": 1.0e-12},
+                "forces": {"atol": 1.0e-12},
+                "point_charge_forces": {"atol": 1.0e-12},
+            }
+        }
+        basis_hash = "a" * 64
+        plans = {
+            "original": run.ao_grouping.make_plan(
+                ids, 2, "original", ao_counts, basis_hash
+            ),
+            "exact-ao": run.ao_grouping.make_plan(
+                ids, 2, "exact-ao", ao_counts, basis_hash
+            ),
+        }
+        original_batches = {batch.case_ids for batch in plans["original"].batches}
+        events: list[tuple[object, ...]] = []
+        created: list[object] = []
+        active: list[object] = []
+
+        class FakeAdapter:
+            def __init__(
+                self,
+                library_path: Path,
+                manifest_path: Path,
+                loaded_manifest: dict[str, object],
+                case_sequence: tuple[dict[str, object], ...],
+                cell: run.Cell,
+                device_id: int,
+                cpu_threads: int,
+                **options: object,
+            ) -> None:
+                self.cell = cell
+                self.case_ids = tuple(case["id"] for case in case_sequence)
+                self.layout = (
+                    "original" if self.case_ids in original_batches else "exact-ao"
+                )
+                events.append(("setup", self.layout, self.case_ids, options))
+                failure = behavior.get("setup_failures", {}).get(
+                    (self.layout, self.case_ids)
+                )
+                if failure is not None:
+                    raise failure
+                self.options = run.public_api.ComputeOptions()
+                self.options.model = run.public_api.XTBLOOM_MODEL_GFN2_XTB
+                self.options.flags = (
+                    run.public_api.XTBLOOM_COMPUTE_ENERGY
+                    | run.public_api.XTBLOOM_COMPUTE_ATOMIC_CHARGES
+                )
+                if property_name == "force":
+                    self.options.flags |= run.public_api.XTBLOOM_COMPUTE_FORCES
+                    if any(case["point_charge_count"] for case in case_sequence):
+                        self.options.flags |= (
+                            run.public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+                        )
+                self.options.scc_start_mode = run.public_api.XTBLOOM_SCC_START_FRESH
+                self.options.max_scc_iterations = behavior.get(
+                    "max_iterations_by_layout", {}
+                ).get(self.layout, 321)
+                self.options.charge_tolerance = 2.0e-9
+                self.options.energy_tolerance = 3.0e-11
+                self.options.electronic_temperature = 0.007
+                self.calls = 0
+                atom_offsets = [0]
+                point_offsets = [0]
+                slices = []
+                for case in case_sequence:
+                    atom_offsets.append(atom_offsets[-1] + case["atom_count"])
+                    point_offsets.append(point_offsets[-1] + case["point_charge_count"])
+                    slices.append(
+                        SimpleNamespace(case=case, expected=expected[case["id"]])
+                    )
+                self.storage = SimpleNamespace(
+                    slices=slices,
+                    atom_offsets=atom_offsets,
+                    point_charge_offsets=point_offsets,
+                    point_charge_values=[0.0] * point_offsets[-1],
+                )
+                created.append(self)
+                active.append(self)
+
+            def results(self) -> dict[str, object]:
+                events.append(("results", self.layout, self.case_ids, self.calls))
+                failure = behavior.get("result_failures", {}).get(
+                    (self.layout, self.case_ids)
+                )
+                if failure is not None:
+                    raise failure
+                energies = []
+                charges = []
+                forces = []
+                point_forces = []
+                iterations = []
+                converged = []
+                statuses = []
+                failed_ids = behavior.get("failed_ids", set())
+                iteration_overrides = behavior.get("iteration_overrides", {})
+                for case_id in self.case_ids:
+                    record = self_outer._record(case_id)
+                    failure_status = case_id in failed_ids
+                    energies.append(
+                        math.nan if failure_status else record["energy_hartree"]
+                    )
+                    charges.extend(
+                        [math.nan] * self_outer.cases[case_id]["atom_count"]
+                        if failure_status
+                        else record["partial_charges_e"]
+                    )
+                    forces.extend(
+                        [math.nan] * (3 * self_outer.cases[case_id]["atom_count"])
+                        if failure_status
+                        else record["forces_hartree_per_bohr"]
+                    )
+                    point_count = self_outer.cases[case_id]["point_charge_count"]
+                    if point_count:
+                        point_forces.extend(
+                            [math.nan] * (3 * point_count)
+                            if failure_status
+                            else record["point_charge_forces_hartree_per_bohr"]
+                        )
+                    iterations.append(
+                        iteration_overrides.get(
+                            (self.layout, case_id), record["scc_iterations"]
+                        )
+                    )
+                    converged.append(0 if failure_status else 1)
+                    statuses.append(
+                        1 if failure_status else run.public_api.XTBLOOM_STATUS_SUCCESS
+                    )
+                output: dict[str, object] = {
+                    "energies_hartree": energies,
+                    "atomic_charges_e": charges,
+                    "scc_iterations": iterations,
+                    "scc_converged": converged,
+                    "per_system_status": statuses,
+                }
+                if self.storage.point_charge_values:
+                    output["point_charge_forces_hartree_per_bohr"] = point_forces
+                if property_name == "force":
+                    output["forces_hartree_per_bohr"] = forces
+                return output
+
+            def memory_snapshot(self) -> dict[str, int]:
+                events.append(("memory", self.layout, self.case_ids))
+                return {"active_owner_count": len(active), "host_process_hwm_bytes": 10}
+
+            def close(self) -> None:
+                events.append(("close", self.layout, self.case_ids))
+                if self in active:
+                    active.remove(self)
+                if (self.layout, self.case_ids) in behavior.get(
+                    "close_failures", set()
+                ):
+                    raise RuntimeError("fake close failure")
+
+        self_outer = self
+        args = SimpleNamespace(
+            backends=("cpu",),
+            library=Path("fake-library.so"),
+            manifest=Path("fake-manifest.json"),
+            device_id=0,
+            cpu_threads=1,
+            warmups=warmups,
+            repetitions=repetitions,
+        )
+
+        def timed_fake_invoke(adapter: FakeAdapter) -> float:
+            events.append(("invoke", adapter.layout, adapter.case_ids))
+            failure = behavior.get("invoke_failures", {}).get(
+                (adapter.layout, adapter.case_ids)
+            )
+            if failure is not None:
+                run.time.sleep(0.002)
+                raise failure
+            adapter.calls += 1
+            return 0.25
+
+        split_batch_results = run.ao_grouping.split_batch_results
+
+        def split_fake_batch(
+            case_ids: tuple[str, ...],
+            atom_offsets: list[int],
+            point_offsets: list[int],
+            output: dict[str, object],
+            required_outputs: tuple[str, ...],
+        ) -> tuple[dict[str, object], ...]:
+            failure = behavior.get("publication_failures", {}).get(tuple(case_ids))
+            if failure is not None:
+                raise failure
+            return split_batch_results(
+                case_ids,
+                atom_offsets,
+                point_offsets,
+                output,
+                required_outputs,
+            )
+
+        with (
+            mock.patch.object(run, "XTBloomAdapter", FakeAdapter),
+            mock.patch.object(run, "timed_invoke", side_effect=timed_fake_invoke),
+            mock.patch.object(
+                run.ao_grouping,
+                "split_batch_results",
+                side_effect=split_fake_batch,
+            ),
+            mock.patch.object(run, "current_rss_bytes", return_value=10),
+            mock.patch.object(run, "process_hwm_bytes", return_value=10),
+        ):
+            row = run.benchmark_finite_xtbloom_pair(
+                args,
+                manifest,
+                self.cases,
+                plans,
+                {"original": 1.0, "exact-ao": 2.0},
+                property_name,
+            )
+        return row, events, created
+
+    def test_alternates_all_phases_and_reuses_each_layout_owner(self) -> None:
+        """Use AB/BA order continuously and keep each batch adapter alive."""
+        row, events, created = self._run_pair(
+            property_name="energy", warmups=2, repetitions=3
+        )
+        rounds = row["paired_rounds"]
+        self.assertEqual(
+            [item["phase"] for item in rounds],
+            ["cold", "warmup", "warmup", "measured", "measured", "measured"],
+        )
+        self.assertEqual(
+            [item["execution_order"] for item in rounds],
+            [
+                ["original", "exact-ao"],
+                ["exact-ao", "original"],
+                ["original", "exact-ao"],
+                ["exact-ao", "original"],
+                ["original", "exact-ao"],
+                ["exact-ao", "original"],
+            ],
+        )
+        self.assertEqual(len(created), 4)
+        self.assertTrue(all(adapter.calls == 6 for adapter in created))
+        self.assertEqual(sum(event[0] == "setup" for event in events), 4)
+        self.assertEqual(sum(event[0] == "close" for event in events), 4)
+        setup_options = [event[3] for event in events if event[0] == "setup"]
+        self.assertTrue(all(options["strict_fresh"] for options in setup_options))
+        self.assertTrue(all(options["request_charges"] for options in setup_options))
+        self.assertEqual(row["paired_timing"]["requested_round_count"], 6)
+        self.assertEqual(row["paired_timing"]["measured_round_count"], 3)
+        self.assertEqual(
+            row["paired_timing"]["layout_samples"]["original"]["measured_end_to_end"][
+                "requested_count"
+            ],
+            3,
+        )
+        self.assertEqual(
+            [
+                item["original_index"]
+                for item in rounds[0]["arms"]["original"]["case_results"]
+            ],
+            [0, 1, 2, 3],
+        )
+        self.assertTrue(
+            all(
+                snapshot["snapshot"]["active_owner_count"] == 4
+                for item in rounds
+                for arm in item["arms"].values()
+                for snapshot in arm["memory_snapshots"]
+                if "snapshot" in snapshot
+            )
+        )
+
+    def test_scatters_scalar_and_all_ragged_force_outputs(self) -> None:
+        """Restore energies, charges, QM forces, and point-charge force slices."""
+        energy_row, _, _ = self._run_pair(
+            property_name="energy", warmups=0, repetitions=1
+        )
+        self.assertEqual(energy_row["correctness"]["status"], "pass")
+        self.assertTrue(energy_row["independent_reference_qualified"])
+        energy_results = energy_row["paired_rounds"][0]["arms"]["exact-ao"][
+            "case_results"
+        ]
+        for case_id, result in zip(("a", "b", "c", "d"), energy_results, strict=True):
+            self.assertEqual(result["case_id"], case_id)
+            self.assertIsInstance(result["energy_hartree"], float)
+            self.assertEqual(
+                result["atomic_charges_e"], self._record(case_id)["partial_charges_e"]
+            )
+
+        force_row, _, _ = self._run_pair(
+            property_name="force", warmups=0, repetitions=1
+        )
+        force_results = force_row["paired_rounds"][0]["arms"]["exact-ao"][
+            "case_results"
+        ]
+        for case_id, result in zip(("a", "b", "c", "d"), force_results, strict=True):
+            expected = self._record(case_id)
+            self.assertEqual(
+                result["forces_hartree_per_bohr"], expected["forces_hartree_per_bohr"]
+            )
+            self.assertEqual(
+                len(result["forces_hartree_per_bohr"]),
+                3 * self.cases[case_id]["atom_count"],
+            )
+            if self.cases[case_id]["point_charge_count"]:
+                self.assertEqual(
+                    result["point_charge_forces_hartree_per_bohr"],
+                    expected["point_charge_forces_hartree_per_bohr"],
+                )
+            self.assertTrue(result["correctness"]["independent_reference_pass"])
+
+    def test_missing_reference_and_branch_differences_never_qualify_pair(self) -> None:
+        """Keep diagnostic equality separate from scientific qualification."""
+        row, _, _ = self._run_pair(
+            property_name="energy",
+            warmups=0,
+            repetitions=1,
+            missing_reference_ids=("a", "b", "c", "d"),
+        )
+        measured = row["paired_rounds"][-1]
+        self.assertEqual(row["correctness"]["finite_output_status"], "pass")
+        self.assertEqual(row["correctness"]["status"], "unqualified")
+        self.assertEqual(measured["layout_equivalence"]["status"], "pass")
+        self.assertFalse(measured["performance_comparison_eligible"])
+        self.assertFalse(row["claim_eligible"])
+
+        branch_row, _, _ = self._run_pair(
+            property_name="energy",
+            warmups=0,
+            repetitions=1,
+            behavior={"iteration_overrides": {("exact-ao", "c"): 4}},
+        )
+        self.assertEqual(
+            branch_row["branch_differences"][0]["differences"]["scc_iterations"],
+            {"original": 3, "exact_ao": 4},
+        )
+        self.assertFalse(branch_row["claim_eligible"])
+
+    def test_nan_system_and_batch_exception_preserve_peers_and_cleanup(self) -> None:
+        """Retain peer-local NaNs, continue other batches, and report close errors."""
+        failed_row, _, _ = self._run_pair(
+            property_name="force",
+            warmups=0,
+            repetitions=1,
+            behavior={"failed_ids": {"b"}},
+        )
+        failed_results = failed_row["paired_rounds"][-1]["arms"]["original"][
+            "case_results"
+        ]
+        self.assertEqual(failed_results[0]["execution_state"], "completed")
+        self.assertEqual(failed_results[1]["execution_state"], "system-failure")
+        self.assertTrue(math.isnan(failed_results[1]["energy_hartree"]))
+        self.assertTrue(
+            all(
+                math.isnan(value)
+                for value in failed_results[1]["forces_hartree_per_bohr"]
+            )
+        )
+        self.assertFalse(math.isnan(failed_results[0]["energy_hartree"]))
+
+        failure = RuntimeError("fake batch result failure")
+        row, events, created = self._run_pair(
+            property_name="energy",
+            warmups=0,
+            repetitions=1,
+            behavior={
+                "result_failures": {("original", ("a", "b")): failure},
+                "close_failures": {("original", ("c", "d"))},
+            },
+        )
+        rounds = row["paired_rounds"]
+        errored = rounds[0]["arms"]["original"]["case_results"]
+        self.assertEqual(
+            [item["execution_state"] for item in errored],
+            ["error", "error", "completed", "completed"],
+        )
+        self.assertTrue(
+            any(
+                event[0] == "invoke"
+                and event[1] == "original"
+                and event[2] == ("c", "d")
+                for event in events
+            )
+        )
+        self.assertEqual(len(row["cleanup_errors"]), 1)
+        self.assertEqual(sum(event[0] == "close" for event in events), len(created))
+        self.assertEqual(row["availability"], "error")
+        self.assertFalse(row["claim_eligible"])
+        original_timing = rounds[0]["arms"]["original"]["timing"]
+        self.assertTrue(original_timing["compute_complete"])
+        self.assertIsNone(original_timing["download_ms"])
+        self.assertFalse(original_timing["download_complete"])
+        self.assertEqual(original_timing["download_attempt_count"], 2)
+        self.assertEqual(original_timing["download_success_count"], 1)
+        self.assertGreater(original_timing["download_attempted_time_ms"], 0.0)
+
+        invoke_error_row, _, _ = self._run_pair(
+            property_name="energy",
+            warmups=0,
+            repetitions=1,
+            behavior={
+                "invoke_failures": {
+                    ("original", ("a", "b")): RuntimeError("fake invoke failure")
+                }
+            },
+        )
+        invoke_arm = invoke_error_row["paired_rounds"][0]["arms"]["original"]
+        self.assertEqual(
+            [item["execution_state"] for item in invoke_arm["case_results"]],
+            ["error", "error", "completed", "completed"],
+        )
+        self.assertIsNone(invoke_arm["timing"]["compute_ms"])
+        self.assertFalse(invoke_arm["timing"]["compute_complete"])
+        self.assertEqual(invoke_arm["timing"]["compute_attempt_count"], 2)
+        self.assertEqual(invoke_arm["timing"]["compute_success_count"], 1)
+        self.assertGreater(invoke_arm["timing"]["compute_attempted_time_ms"], 0.0)
+        self.assertIsNotNone(invoke_arm["timing"]["end_to_end_ms"])
+        self.assertEqual(
+            invoke_error_row["paired_timing"]["layout_samples"]["original"][
+                "measured_end_to_end"
+            ]["requested_count"],
+            1,
+        )
+
+        publication_error_row, _, _ = self._run_pair(
+            property_name="energy",
+            warmups=0,
+            repetitions=1,
+            behavior={
+                "publication_failures": {
+                    ("a", "b"): RuntimeError("fake publication failure")
+                }
+            },
+        )
+        publication_timing = publication_error_row["paired_rounds"][0]["arms"][
+            "original"
+        ]["timing"]
+        self.assertTrue(publication_timing["download_complete"])
+        self.assertIsNone(publication_timing["publication_ms"])
+        self.assertFalse(publication_timing["publication_complete"])
+        self.assertEqual(publication_timing["publication_attempt_count"], 2)
+        self.assertEqual(publication_timing["publication_success_count"], 1)
+        self.assertGreater(publication_timing["publication_attempted_time_ms"], 0.0)
+
+    def test_scatter_failure_retains_ids_without_qualifying_fallback(self) -> None:
+        """Fallback archival must not promote a failed canonical mapping to PASS."""
+        with mock.patch.object(
+            run.ao_grouping,
+            "scatter_case_results",
+            side_effect=run.BenchmarkError("fake canonical mapping failure"),
+        ):
+            row, _, _ = self._run_pair(warmups=0, repetitions=1)
+        for pair_round in row["paired_rounds"]:
+            for arm in pair_round["arms"].values():
+                self.assertEqual(arm["status"], "fail")
+                self.assertTrue(arm["sweep_errors"])
+                self.assertEqual(
+                    [result["case_id"] for result in arm["case_results"]],
+                    list(self.cases),
+                )
+            self.assertFalse(pair_round["performance_comparison_eligible"])
+        self.assertFalse(row["claim_eligible"])
+
+    def test_cold_and_warmup_errors_block_claim_despite_passing_measured_rounds(
+        self,
+    ) -> None:
+        """Every phase remains a gate even when later strict-FRESH calls recover."""
+        actual_sweep = run._finite_pair_arm_sweep
+        for failed_arm_index in (0, 2):
+            with self.subTest(failed_arm_index=failed_arm_index):
+                arm_index = 0
+
+                def inject_phase_error(
+                    manifest: dict[str, Any],
+                    cases: dict[str, dict[str, Any]],
+                    expected_by_id: dict[str, dict[str, Any]],
+                    plan: run.ao_grouping.AOGroupingPlan,
+                    owners: list[dict[str, Any]],
+                    property_name: str,
+                    failure_index: int = failed_arm_index,
+                ) -> dict[str, Any]:
+                    nonlocal arm_index
+                    arm = actual_sweep(
+                        manifest, cases, expected_by_id, plan, owners, property_name
+                    )
+                    if arm_index == failure_index:
+                        arm["status"] = "fail"
+                        arm["sweep_errors"].append("fake pre-measurement error")
+                    arm_index += 1
+                    return arm
+
+                with mock.patch.object(
+                    run, "_finite_pair_arm_sweep", side_effect=inject_phase_error
+                ):
+                    row, _, _ = self._run_pair(warmups=1, repetitions=1)
+                self.assertTrue(
+                    row["paired_rounds"][-1]["numerical_comparison_eligible"]
+                )
+                self.assertFalse(row["numerical_comparison_eligible"])
+                self.assertFalse(row["claim_eligible"])
+                self.assertIn(
+                    "cold or warmup qualification failed or was incomplete",
+                    row["claim_ineligibility_reasons"],
+                )
+
+    def test_options_are_actual_snapshots_and_provenance_stays_unverified(self) -> None:
+        """Correct outputs and matching options cannot prove a binary's producer."""
+        row, _, _ = self._run_pair(warmups=0, repetitions=1)
+        self.assertTrue(row["compute_options_match"])
+        self.assertTrue(row["numerical_comparison_eligible"])
+        self.assertFalse(row["claim_eligible"])
+        self.assertEqual(row["producer_provenance"]["status"], "UNVERIFIED")
+        for owners in row["owner_engine_options"].values():
+            for owner in owners:
+                options = owner["engine_options"]["compute_options"]
+                self.assertEqual(options["max_scc_iterations"], 321)
+                self.assertEqual(options["electronic_temperature"], 0.007)
+        self.assertTrue(
+            all(
+                not pair_round["performance_comparison_eligible"]
+                for pair_round in row["paired_rounds"]
+            )
+        )
+        mismatched_row, _, _ = self._run_pair(
+            warmups=0,
+            repetitions=1,
+            behavior={"max_iterations_by_layout": {"exact-ao": 322}},
+        )
+        self.assertFalse(mismatched_row["compute_options_match"])
+        self.assertFalse(mismatched_row["numerical_comparison_eligible"])
+        self.assertFalse(mismatched_row["claim_eligible"])
+
+    def test_constructor_rolls_back_partial_context_and_control_acquisition(
+        self,
+    ) -> None:
+        """A constructor that never returns still releases every acquired owner."""
+        for failed_stage in ("after-context", "after-control"):
+            with self.subTest(failed_stage=failed_stage):
+                releases = []
+                context = ctypes.c_void_p(123)
+                library = SimpleNamespace(
+                    xtbloom_context_destroy=mock.Mock(
+                        side_effect=lambda _context, captured=releases: captured.append(
+                            "context"
+                        )
+                    )
+                )
+                memory = SimpleNamespace(
+                    cuda=None,
+                    close=mock.Mock(
+                        side_effect=lambda captured=releases: captured.append("memory")
+                    ),
+                )
+                control = SimpleNamespace(
+                    close=mock.Mock(
+                        side_effect=lambda captured=releases: captured.append("control")
+                    )
+                )
+                cell = run.Cell("xtbloom", "cuda", "host", "test", "energy", 1)
+                with (
+                    mock.patch.object(
+                        run.public_api, "_configure_library", return_value=library
+                    ),
+                    mock.patch.object(
+                        run.public_api, "assemble_batch", return_value=SimpleNamespace()
+                    ),
+                    mock.patch.object(
+                        run.public_api, "_make_context", return_value=context
+                    ),
+                    mock.patch.object(
+                        run.public_api,
+                        "DescriptorMemory",
+                        return_value=memory,
+                        side_effect=(
+                            run.BenchmarkError("post-context failure")
+                            if failed_stage == "after-context"
+                            else None
+                        ),
+                    ),
+                    mock.patch.object(
+                        run.public_api, "CudaRuntime", return_value=control
+                    ),
+                    mock.patch.object(run, "configure_cuda_runtime"),
+                    mock.patch.object(
+                        run.XTBloomAdapter,
+                        "_initialize_batch_and_results",
+                        side_effect=run.BenchmarkError("post-control failure"),
+                    ),
+                    self.assertRaises(run.BenchmarkError),
+                ):
+                    run.XTBloomAdapter(
+                        Path("fake.so"),
+                        Path("manifest.json"),
+                        {},
+                        ({"id": "a"},),
+                        cell,
+                        0,
+                        1,
+                    )
+                self.assertEqual(
+                    releases,
+                    ["context"]
+                    if failed_stage == "after-context"
+                    else ["control", "memory", "context"],
+                )
+
+    def test_unavailable_setup_keeps_not_run_coordinates_and_closes_peers(self) -> None:
+        """Keep unavailable setup coordinates explicit without skipping other owners."""
+        row, events, created = self._run_pair(
+            property_name="energy",
+            warmups=0,
+            repetitions=1,
+            behavior={
+                "setup_failures": {
+                    ("original", ("a", "b")): run.public_api.BackendUnavailable(
+                        "fake backend unavailable"
+                    )
+                }
+            },
+        )
+        arm = row["paired_rounds"][0]["arms"]["original"]
+        self.assertEqual(
+            [item["execution_state"] for item in arm["case_results"]],
+            ["not_run", "not_run", "completed", "completed"],
+        )
+        self.assertEqual(row["availability"], "unavailable")
+        self.assertEqual(len(created), 3)
+        self.assertEqual(sum(event[0] == "close" for event in events), 3)
+        self.assertEqual(
+            row["correctness"]["coordinate_states_by_layout"]["original"]["not_run"],
+            ["a", "b"],
+        )
+
+    def test_cli_defaults_and_paired_option_validation_remain_explicit(self) -> None:
+        """Leave original as the default and reject incompatible pair matrices."""
+        parser = run.build_parser()
+        defaults = parser.parse_args(["--library", "lib.so", "--case-ids", "a"])
+        self.assertEqual(defaults.ao_grouping, "original")
+        defaults.engines = ("xtbloom",)
+        defaults.backends = ("cpu",)
+        defaults.cuda_memory_modes = ("host",)
+        run.validate_args(defaults)
+        exact = parser.parse_args(
+            [
+                "--library",
+                "lib.so",
+                "--case-ids",
+                "a",
+                "--ao-grouping",
+                "exact-ao",
+                "--engines",
+                "xtbloom",
+                "--backends",
+                "cpu",
+            ]
+        )
+        exact.cuda_memory_modes = ("host",)
+        run.validate_args(exact)
+
+        for options in (
+            {"engines": ("xtbloom", "tblite")},
+            {"backends": ("cpu", "cuda")},
+            {"cuda_memory_modes": ("host", "device")},
+        ):
+            paired = parser.parse_args(
+                [
+                    "--library",
+                    "lib.so",
+                    "--case-ids",
+                    "a",
+                    "--ao-grouping",
+                    "paired",
+                    "--engines",
+                    "xtbloom",
+                    "--backends",
+                    "cpu",
+                    "--cuda-memory-modes",
+                    "host",
+                ]
+            )
+            for name, value in options.items():
+                setattr(paired, name, value)
+            with self.assertRaises(run.BenchmarkError):
+                run.validate_args(paired)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                mock.patch.object(run.conformance, "load_json", return_value={}),
+                mock.patch.object(
+                    run.public_api,
+                    "model_tag",
+                    return_value=run.public_api.XTBLOOM_MODEL_GFN2_XTB + 1,
+                ),
+                mock.patch.object(run.conformance, "selected_cases") as selected,
+                mock.patch.object(run, "environment_metadata") as metadata,
+                mock.patch.object(run, "finite_case_plan") as planning,
+            ):
+                status = run.main(
+                    [
+                        "--library",
+                        "lib.so",
+                        "--case-ids",
+                        "a",
+                        "--engines",
+                        "xtbloom",
+                        "--backends",
+                        "cpu",
+                        "--cuda-memory-modes",
+                        "host",
+                        "--ao-grouping",
+                        "paired",
+                        "--output-json",
+                        str(root / "row.json"),
+                        "--output-csv",
+                        str(root / "row.csv"),
+                    ]
+                )
+            self.assertEqual(status, 1)
+            selected.assert_not_called()
+            metadata.assert_not_called()
+            planning.assert_not_called()
 
 
 if __name__ == "__main__":
