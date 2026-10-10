@@ -205,6 +205,83 @@ unchanged-setting public E/F/q mismatch. These scalar-Mulliken, SCC-only
 controls do not independently validate a public stationary solution, establish
 a basin boundary, or authorize a new solution-selection policy.
 
+### Public FRESH and Strict-WARM Controls
+
+Separate public-C-ABI observations on clean source
+`471a7d50e86a8e56d213e3f599e6f5cf39a1486f` reproduce the original endpoint
+gap without using the scalar-Mulliken fixture. Both observations use the same
+shared library bytes (SHA256
+`a0ef437885f2ece3ce10c9e0cb5bb1b82bf57893a970ae1323dfc9767440aef7`),
+supplied geometry, explicit two channels, and original numerical settings.
+Three independent contexts per coordinate each execute
+`FRESH -> strict WARM -> strict WARM` at unchanged geometry and policy.
+There is no WARM-to-FRESH retry or selection of a passing seed.
+
+The first observation, Slurm Job 7282, retains **exit 1** for the probe,
+outer `srun`, and SSH. Its 36 attempts contain 27 finite/converged CUDA
+endpoints and nine CPU rejections. The staged MKL provider shim lacked its
+own `libxtbloom_mkl_pthread_tss_bridge.so` dependency, as recorded by `ldd`.
+Three CPU FRESH calls return backend-unavailable before SCC; six strict WARM
+calls return invalid-argument because no converged predecessor exists.
+All CPU outputs remain unchanged. This is a deployment failure, not CPU
+nonconvergence or a measured CPU endpoint.
+
+A separately preregistered CPU-only environmental complement, Job 7283,
+adds the exact already-built bridge without changing the library, provider
+shim, inputs, or numerical policy. Its nine CPU attempts are finite and
+converged; probe, outer `srun`, and SSH exit 0. The 27 CUDA observations are
+not rerun. Job 7282 remains failed: the two observations must not be reported
+as one repaired 36/36 passing invocation.
+
+| Public coordinate | FRESH energy (Eh) | FRESH iterations | Successive WARM iterations |
+| --- | ---: | ---: | --- |
+| CPU, host descriptors, Job 7283 | -88.55751920411979 | 365 | 9, 6 |
+| CUDA, host descriptors, Job 7282 | -88.55856605408331 | 316 | 4, 4 |
+| CUDA, device descriptors, Job 7282 | -88.55856605408331 | 316 | 4, 4 |
+| CUDA, mixed descriptors, Job 7282 | -88.55856605408331 | 316 | 4, 4 |
+
+All three CPU FRESH outputs are byte-identical. CUDA FRESH energies and
+charges are identical across contexts/memory modes; the maximum force spread
+is `4.163336342344337e-17 Eh/bohr`. Pair each CPU FRESH context with the
+same-index CUDA context in each of the three memory modes. Across these nine
+explicitly cross-job comparisons, the maximum energy/force/charge differences are
+`1.0468499635294393e-3 Eh`, `8.560817198010169e-4 Eh/bohr`, and
+`7.994193958632767e-3 e`. Thus the original public gap is reproduced, not fixed.
+
+| Successive WARM output changes | Energy (Eh) | Maximum force (Eh/bohr) | Maximum atomic charge (e) |
+| --- | ---: | ---: | ---: |
+| CPU, six comparisons | 1.2079226507921703e-12 | 3.026340120361069e-8 | 7.597233708800388e-8 |
+| CUDA, eighteen comparisons | 6.536993168992922e-13 | 2.4009378028679723e-8 | 6.071044778011014e-8 |
+
+These are observed output changes, not reconstructed SCC residuals or new
+acceptance tolerances. In particular, the maximum charge changes exceed
+`1e-8`; a native convergence flag is not an endpoint charge-parity pass.
+CPU WARM restores a wavefunction checkpoint and reinitializes its mixer;
+same-epoch CUDA WARM retains mixer history while resetting driver accounting.
+These public persistence controls therefore are not identical-internal-state
+paired transition tests.
+
+Both jobs run on node1 with the `main` partition, the `gpu:5090:1` resource
+request, one CPU/BLAS worker, and explicit ten/five-minute limits. Recorded
+`scontrol` metadata confirms the node, partition, limits, and `TresPerNode`
+request; it does not provide an independently accounted physical GPU UUID.
+Assigned device visibility is preserved. Offline typed audits validate all
+36 and nine saved records,
+respectively, including policy, memory-space tags, statuses, and output bytes.
+The first artifact receipt has SHA256
+`69350d7c5f8bbed538e3a23c938cb7d3c5411c00f979cdff2b67a237c05b30db`;
+the CPU complement receipt has SHA256
+`ad058cecc4a26fe550d4a43e35aac91f90734e67d827439ed1682af4236ed30d`.
+Exact scripts, preregistrations, raw arrays, source/runtime/payload receipts,
+failure records, and independent audits are linked from issue #509.
+
+Finite output capture and these short restart sequences do not establish
+fixed-point stationarity, physical/linear-response stability, independently
+correct endpoints, or the basin root cause. The public ABI does not expose
+terminal raw-versus-mixed multipoles or SCC residuals. The root correction,
+unchanged-setting public parity, and remaining applicable full CUDA validation
+remain incomplete.
+
 This draft documents branch-sensitivity evidence; it does not fix the original
 public mismatch. A robust policy shared by both backends for SCC convergence
 and stability still needs design and independent validation. Rounding values
