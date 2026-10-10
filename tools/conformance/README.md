@@ -171,6 +171,66 @@ Verify that the committed files still match the manifest:
 python3 tools/conformance/xtbloom_conformance.py check
 ```
 
+### Offline split-source tblite references
+
+The default checker continues to require `live-cli` provenance. A separately
+reviewed, external-only prospective bundle may record energy and forces from
+the pinned tblite CLI and charges from a separate live C API calculation.
+Check that explicitly declared source consistency with:
+
+```sh
+python3 tools/conformance/xtbloom_conformance.py \
+  --manifest /path/to/frozen-bundle/validation-manifest.json \
+  check --allow-derived-tblite
+```
+
+This opt-in supports only `derived-live-cli-and-live-c-api` provenance for
+the reviewed tblite 0.7.0 restricted-neutral, single-spin gas-phase recipe
+without point charges or electric-field attachments. All three E/F/q
+properties must remain oracle-gated. It is not
+a generator or permission to substitute a new oracle, settings, or reference
+for a failed historical gate. The manifest, case scientific/performance
+qualification (including native-validation status), composite provenance,
+and API record must retain false claim
+eligibility. No model, native library, or source script is executed.
+
+The composite contains exactly `energy_hartree`, `forces_hartree_per_bohr`,
+and `partial_charges_e`. Its `property_sources` assigns energy and force to
+one identical byte-count/SHA-256 descriptor and charges to a separately
+retained API JSON descriptor. Descriptor paths are bundle-relative; absolute
+paths, parent traversal, and symlink escapes are rejected. Historical
+`source_path` strings are informational and are never opened. Producer and
+prospective IDs are linked by the explicit `label_mapping`.
+
+The historical CLI record has no input-byte digest. Its declared input
+basename must match the producer ID, but this is not a byte-level binding
+to the case. The checker explicitly reports that CLI input-byte link as
+`UNVERIFIED`; only the API input is hash-bound here. A separate reviewed
+capture/provenance chain is still required before scientific admission.
+
+The CLI source retains the canonical method/units, command, version,
+revision, accuracy, runtime-library and thread-environment pins. Its exact
+`force=-gradient` identity is checked using that source's gradient without
+adding a gradient field to or rewriting the composite. API energy/force must
+exactly match the CLI, and the composite charges must match finite,
+correctly sized API output. The API source must retain the fixed numerical
+recipe, ordered eight-stage zero-status lifecycle, one singlepoint, deleted
+handles, input and binary64 coordinate hashes, version, library pins, and
+thread/loader environment. The bundle also retains the hash-pinned
+`frozen-sources/api-producer.py` and
+`frozen-sources/<producer_case_id>-api-captured-input.coord` sidecars.
+
+A successful opt-in check proves only consistency of the declared, pinned
+offline artifacts. It does not attest source origin, actual live execution,
+complete runtime dependency closure, oracle correctness, or science and
+performance admission. Historical aggregate failures and missing execution
+ledgers remain failures/missing evidence; they are not reconstructed. The
+declared CLI aggregate exit must be an integer shell exit code, with a
+nonempty failure description exactly when nonzero; retained declared codes
+are printed without interpreting them as witnessed execution. Keep
+tracked goldens and primary limits unchanged, and obtain independent
+scientific/provenance decisions before any prospective result is adopted.
+
 The snapshot importer remains available to audit the historical validation
 inputs at the pinned tblite source revision. Snapshot outputs are not the
 primary goldens because their original convergence setting was not recorded:
