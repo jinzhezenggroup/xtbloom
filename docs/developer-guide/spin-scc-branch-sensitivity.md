@@ -287,3 +287,68 @@ public mismatch. A robust policy shared by both backends for SCC convergence
 and stability still needs design and independent validation. Rounding values
 or selecting a seed solely to make this structure pass would not establish
 that policy or resolve issue #509.
+
+## CPU public terminal-buffer diagnostic
+
+When native tests and a compatible CPU LP64 provider are enabled,
+`xtbloom_cpu_scc_snapshot_test` builds a separate diagnostic executable from
+the real synchronous C API, CPU runtime, and production model/ISA objects.
+Its internal context resolver uses handles created by that same executable;
+it never interprets a handle belonging to the production shared library.
+`XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING` is confined to this executable. The
+released ABI and default library contain neither its resolver nor its capture
+receipt or copying path.
+
+The default invocation tests restricted/unrestricted ragged state, missing
+receipts, failure invalidation, empty calls, changed geometry/topology, and
+value ownership. It also compares FRESH/WARM/WARM public outputs in captured
+and uncaptured contexts. The supported diagnostic protocol is serial direct
+`xtbloom_compute` on a CPU GFN2 context, immediately followed by capture.
+All energy/force/atomic-charge properties must be requested and every peer
+must have converged.
+Enqueue, fixed plans, external callbacks, and concurrent context operations
+are outside this seam's contract. A call-level rejection or a different model
+invalidates the direct-call receipt. A data-level failed peer prevents a
+complete converged snapshot; neither call success nor an older checkpoint
+may be substituted for that missing terminal state.
+
+For an external molecular input, the optional invocation is:
+
+```console
+build/issue-509-cpu-terminal/xtbloom_cpu_scc_snapshot_test --capture input.txt > terminal.json
+```
+
+The first input line is `atom_count molecular_charge unpaired_electrons
+spin_channels`; each following line is `atomic_number x_bohr y_bohr z_bohr`.
+Numbers must preserve the original binary64 values, atom order, charge, and
+explicit spin choice. The producer runs FRESH/WARM/WARM with one CPU worker,
+300 K, maximum 500 iterations, energy tolerance `1e-10` Ha, charge tolerance
+`1e-8`, and modified Broyden history 8/damping 0.4/default determinism. WARM
+does not fall back to FRESH. JSON is emitted only after all three calls and
+captures succeed, using round-trip binary64 precision. Capture is outside
+SCC; this is not a timing producer. Retain failed command exits and stderr
+separately rather than presenting absent JSON as a passing run.
+
+The value-owned arrays preserve the actual wavefunction layout: orbital
+coefficients, densities, and energy-weighted densities are alpha/beta
+spin-major; occupations always have two rows, including restricted cases.
+Shell/atom charges and atomic dipoles/quadrupoles instead use the distinct
+charge/magnetization convention. Mixer vectors are the literal existing
+`qsh`, dipole, quadrupole concatenation. `mixer_current_inputs`,
+`mixer_previous_inputs`, and `mixer_previous_residuals` retain their storage
+names; do not assume they are a freshly recomputed fixed-point map at the
+published density. The SCC free energy excludes the geometry-only terms
+present in the full public energy. No retained solver scratch is certified
+or serialized as a terminal Fock operator.
+The mixer RMS/maximum summaries describe its packed vector, not the maximum
+public atomic-charge error or drift.
+
+Before using an endpoint for scientific reasoning, separately qualify the
+diagnostic executable against the actual shared-library public E/F/q,
+statuses, and iteration counts at identical source, provider, selected ISA,
+descriptors, and options. Archive both binary identities and input hashes.
+These are distinct producers, even when qualified outputs agree. A different
+provider or ISA is not a replay of the earlier pinned MKL observations.
+This CPU-only observability step does not establish the CUDA endpoint,
+fixed-point stationarity, minimum/stability, independent oracle correctness,
+or the root correction required by issue #509.

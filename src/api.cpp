@@ -16,6 +16,9 @@
 #include "runtime/backend.hpp"
 #include "runtime/gfn1_cpu_execution.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+#include "runtime/gfn2_cpu_scc_snapshot.hpp"
+#endif
 #include "runtime/model_plan.hpp"
 #include "runtime/model_registry.hpp"
 #include "xtbloom/xtbloom.h"
@@ -28,6 +31,13 @@
 
 struct xtbloom_context {
   xtbloom::detail::Context* implementation;
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+  /* This opaque wrapper exists only in the standalone diagnostic executable.
+   * A rejected direct call must not lend its predecessor's state a new receipt.
+   * Diagnostic callers are serial and never mix this seam with enqueue/plans. */
+  std::uint64_t public_compute_sequence = 0u;
+  bool public_scc_snapshot_ready = false;
+#endif
 };
 
 struct xtbloom_plan {
@@ -838,6 +848,10 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
   if (context == nullptr || context->implementation == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+  context->public_scc_snapshot_ready = false;
+  ++context->public_compute_sequence;
+#endif
   /* A private callback on a CUDA context selects the compatibility
    * host-staged path unless a native device model is installed.  The latter
    * keeps the normal CUDA graph route and executes the external evaluator in the
@@ -963,6 +977,9 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
       if (status != XTBLOOM_STATUS_SUCCESS) {
         return fail(status, std::move(error));
       }
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+      context->public_scc_snapshot_ready = batch->batch_size > 0;
+#endif
       last_error.clear();
       return XTBLOOM_STATUS_SUCCESS;
     } catch (const std::bad_alloc&) {
@@ -1539,3 +1556,45 @@ xtbloom_status_t xtbloom_result_owner_export_dltensor(const xtbloom_result_owner
 }
 
 }  // extern "C"
+
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+namespace xtbloom::detail {
+
+xtbloom_status_t snapshot_public_gfn2_cpu_scc(xtbloom_context_t* context,
+                                              Gfn2CpuSccSnapshot& snapshot, std::string& error) {
+  try {
+    if (context == nullptr || context->implementation == nullptr) {
+      error = "CPU SCC snapshot context is NULL";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    Context& implementation = *context->implementation;
+    std::lock_guard<std::mutex> transaction(implementation.cpu_transaction_mutex);
+    if (implementation.backend != XTBLOOM_BACKEND_CPU ||
+        implementation.external_energy_callback != nullptr || !context->public_scc_snapshot_ready ||
+        implementation.gfn2_cpu_execution_cache == nullptr) {
+      error = "CPU SCC snapshot requires the latest direct CPU GFN2 call to have succeeded";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    Gfn2CpuSccSnapshot captured;
+    const xtbloom_status_t status = snapshot_gfn2_cpu_scc_for_testing(
+        *implementation.gfn2_cpu_execution_cache, captured, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    captured.cpu_isa = implementation.cpu_isa;
+    captured.public_compute_sequence = context->public_compute_sequence;
+    snapshot = std::move(captured);
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the public CPU SCC snapshot";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    error = "unknown failure while capturing the public CPU SCC state";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+}
+
+}  // namespace xtbloom::detail
+#endif
