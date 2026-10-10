@@ -15,6 +15,7 @@ import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -698,8 +699,333 @@ def canonical_xtb_golden(
     return golden
 
 
-def check_manifest(manifest_path: Path) -> None:
-    """Validate schema invariants, source hashes, and committed corpus hashes."""
+def _split_source_record(manifest_path: Path, descriptor: object) -> dict[str, Any]:
+    """Read one bundle-local source once and verify its declared byte identity."""
+    if not isinstance(descriptor, dict):
+        raise ConformanceError("derived tblite source descriptor must be an object")
+    relative = descriptor.get("relative_path")
+    byte_count = descriptor.get("bytes")
+    digest = descriptor.get("sha256")
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or Path(relative).is_absolute()
+        or ".." in Path(relative).parts
+        or type(byte_count) is not int
+        or byte_count <= 0
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+    ):
+        raise ConformanceError("derived tblite source has an invalid path/size/hash")
+    bundle = manifest_path.parent.resolve()
+    source = (bundle / relative).resolve()
+    if not source.is_relative_to(bundle) or not source.is_file():
+        raise ConformanceError(
+            "derived tblite source escapes or is missing from bundle"
+        )
+    contents = source.read_bytes()
+    if len(contents) != byte_count or hashlib.sha256(contents).hexdigest() != digest:
+        raise ConformanceError("derived tblite source byte identity mismatch")
+    try:
+        document = json.loads(contents)
+    except (ValueError, UnicodeError) as exc:
+        raise ConformanceError("derived tblite source is not valid JSON") from exc
+    if not isinstance(document, dict):
+        raise ConformanceError("derived tblite source must be a JSON object")
+    return document
+
+
+def _split_numeric(value: object, components: int | None, label: str) -> None:
+    """Reject coercions that could disguise boolean, string or non-finite output."""
+    values = [value] if components is None else value
+    if not isinstance(values, list) or (
+        components is not None and len(values) != components
+    ):
+        raise ConformanceError(f"derived tblite {label} has the wrong shape")
+    for component in values:
+        try:
+            finite = type(component) in (int, float) and math.isfinite(float(component))
+        except (OverflowError, ValueError):
+            finite = False
+        if not finite:
+            raise ConformanceError(
+                f"derived tblite {label} is not finite numeric output"
+            )
+
+
+def _check_split_tblite_reference(
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    case: dict[str, Any],
+    golden: dict[str, Any],
+) -> tuple[dict[str, Any], list[float]]:
+    """Check declared CLI/API source consistency, never attest live execution.
+
+    This opt-in contract is limited to the reviewed tblite 0.7.0 restricted
+    neutral recipe. Its historical settings are recorded as strings; treating
+    a new recipe as equivalent would require a separate provenance decision.
+    The CLI gradient is used for validation only, not added to the composite.
+    """
+    provenance = golden["provenance"]
+    reference = manifest["reference_engines"]["tblite"]
+    qualification = case.get("qualification", {})
+    if (
+        reference.get("version") != "0.7.0"
+        or type(golden.get("schema_version")) is not int
+        or golden["schema_version"] != manifest["golden_schema_version"]
+        or case.get("reference_engine", "tblite") != "tblite"
+        or "point_charge_count" in case
+        or case.get("input_schema") == "qmmm-v1"
+        or case.get("efield") is not None
+        or any(
+            type(document.get(name)) is not int
+            for document in (case, golden)
+            for name in ("molecular_charge", "unpaired_electrons")
+        )
+        or case.get("molecular_charge") != 0
+        or case.get("unpaired_electrons") != 0
+        or type(case.get("spin_channels")) is not int
+        or case.get("spin_channels") != 1
+        or type(case.get("atom_count")) is not int
+        or case["atom_count"] <= 0
+        or manifest.get("claim_eligible") is not False
+        or provenance.get("claim_eligible") is not False
+        or not isinstance(qualification, dict)
+        or qualification.get("performance_claim_eligible") is not False
+        or qualification.get("scientific_correctness_qualified") is not False
+        or qualification.get("native_implementation_validated") is not False
+    ):
+        raise ConformanceError(
+            "derived tblite reference has unsupported scope/eligibility"
+        )
+    property_names = {"energy_hartree", "forces_hartree_per_bohr", "partial_charges_e"}
+    if (
+        case.get("xtbloom_oracle_properties") is not None
+        and set(case["xtbloom_oracle_properties"]) != property_names
+    ):
+        raise ConformanceError("derived tblite oracle must retain all E/F/q properties")
+    properties = golden["properties"]
+    sources = provenance.get("property_sources")
+    mapping = provenance.get("label_mapping")
+    if (
+        set(properties) != property_names
+        or not isinstance(sources, dict)
+        or set(sources) != property_names
+        or sources["energy_hartree"] != sources["forces_hartree_per_bohr"]
+        or sources["energy_hartree"] == sources["partial_charges_e"]
+        or not isinstance(mapping, dict)
+        or set(mapping) != {"producer_case_id", "prospective_case_id"}
+        or mapping.get("prospective_case_id") != case["id"]
+        or not isinstance(mapping.get("producer_case_id"), str)
+        or re.fullmatch(r"[A-Za-z0-9_-]+", mapping["producer_case_id"]) is None
+    ):
+        raise ConformanceError(
+            "derived tblite property source/label mapping is invalid"
+        )
+    producer_id = mapping["producer_case_id"]
+    cli = _split_source_record(manifest_path, sources["energy_hartree"])
+    api = _split_source_record(manifest_path, sources["partial_charges_e"])
+    for document in (cli, api):
+        if document.get("case_id") != producer_id:
+            raise ConformanceError("derived tblite source has the wrong producer case")
+    for name in (
+        "schema_version",
+        "method",
+        "units",
+        "molecular_charge",
+        "unpaired_electrons",
+    ):
+        if cli.get(name) != golden.get(name):
+            raise ConformanceError(f"derived tblite CLI source has inconsistent {name}")
+    cli_provenance = cli.get("provenance")
+    if (
+        not isinstance(cli_provenance, dict)
+        or provenance.get("cli_provenance") != cli_provenance
+        or cli_provenance.get("engine") != "tblite"
+        or cli_provenance.get("source_revision") != reference["revision"]
+        or provenance.get("accuracy") != PRIMARY_ORACLE_ACCURACY
+        or cli_provenance.get("source_output_sha256")
+        != sha256_json(cli.get("properties"))
+    ):
+        raise ConformanceError("derived tblite CLI source provenance mismatch")
+    if (
+        type(cli.get("schema_version")) is not int
+        or any(
+            type(cli.get(name)) is not int
+            for name in ("molecular_charge", "unpaired_electrons")
+        )
+        or not isinstance(cli_provenance.get("runtime"), dict)
+        or not isinstance(cli_provenance["runtime"].get("libtblite"), dict)
+        or not isinstance(cli_provenance.get("environment"), dict)
+    ):
+        raise ConformanceError("derived tblite CLI source metadata is malformed")
+    cli_input = cli_provenance.get("input")
+    if not isinstance(cli_input, str) or Path(cli_input).name != f"{producer_id}.coord":
+        raise ConformanceError("derived tblite CLI declared input/producer mismatch")
+    aggregate_exit = provenance.get("cli_aggregate_literal_exit")
+    aggregate_failure = provenance.get("cli_aggregate_failure", "")
+    if (
+        type(aggregate_exit) is not int
+        or not 0 <= aggregate_exit <= 255
+        or not isinstance(aggregate_failure, str)
+        or bool(aggregate_failure.strip()) != bool(aggregate_exit)
+    ):
+        raise ConformanceError(
+            "derived tblite CLI aggregate failure record is inconsistent"
+        )
+    settings = {
+        "accuracy": PRIMARY_ORACLE_ACCURACY,
+        "charge": 0,
+        "unpaired": 0,
+        "nspin": "default1",
+        "initial_guess": "defaultSAD",
+        "max_iterations": "default250",
+        "temperature_hartree": "default300 * 3.166808578545117e-06",
+        "configuration": "NULL optional config; builtin pinned GFN2 parameters",
+    }
+    api_settings = api.get("numerical_settings")
+    composite_settings = provenance.get("api_settings")
+    if (
+        api_settings != settings
+        or composite_settings != settings
+        or any(
+            type(document[name]) is not int
+            for document in (api_settings, composite_settings)
+            for name in ("charge", "unpaired")
+        )
+    ):
+        raise ConformanceError("derived tblite API numerical settings mismatch")
+    stages = [
+        "setVerbosity",
+        "newStructure",
+        "newCalculatorAndResult",
+        "setAccuracy",
+        "singlepoint",
+        "get_energy",
+        "get_gradient",
+        "get_charges",
+    ]
+    checks = api.get("api_checks")
+    if (
+        not isinstance(checks, list)
+        or len(checks) != len(stages)
+        or any(
+            not isinstance(check, dict)
+            or check.get("stage") != stage
+            or any(
+                type(check.get(name)) is not int or check[name] != 0
+                for name in ("error_status", "context_status")
+            )
+            for check, stage in zip(checks, stages, strict=True)
+        )
+        or type(api.get("attempted_singlepoints")) is not int
+        or api["attempted_singlepoints"] != 1
+        or api.get("deleted_objects_null") is not True
+        or api.get("claim_eligible") is not False
+        or type(api.get("version_api")) is not int
+        or api["version_api"] != 700
+    ):
+        raise ConformanceError("derived tblite API lifecycle/version mismatch")
+    expected_library_hash = reference["runtime_artifacts"]["libtblite_sha256"]
+    libraries = []
+    for name in ("pinned_artifacts", "loaded_library_hashes"):
+        record = api.get(name)
+        if not isinstance(record, dict):
+            raise ConformanceError("derived tblite API library record is missing")
+        matching = {
+            path: digest
+            for path, digest in record.items()
+            if Path(path).name == "libtblite.so.0.7.0"
+        }
+        if len(matching) != 1 or next(iter(matching.values())) != expected_library_hash:
+            raise ConformanceError("derived tblite API library identity mismatch")
+        libraries.append(matching)
+    if libraries[0] != libraries[1]:
+        raise ConformanceError("derived tblite API loaded/pinned library paths differ")
+    environment = api.get("environment")
+    if (
+        not isinstance(environment, dict)
+        or "LD_PRELOAD" not in environment
+        or "LD_AUDIT" not in environment
+        or any(
+            environment.get(name) != value
+            for name, value in {
+                "LC_ALL": "C",
+                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+            }.items()
+        )
+        or environment.get("LD_PRELOAD") is not None
+        or environment.get("LD_AUDIT") is not None
+    ):
+        raise ConformanceError("derived tblite API environment mismatch")
+    bundle = manifest_path.parent.resolve()
+    for relative, digest in (
+        ("frozen-sources/api-producer.py", provenance.get("api_driver_sha256")),
+        (
+            f"frozen-sources/{producer_id}-api-captured-input.coord",
+            case["input_sha256"],
+        ),
+    ):
+        source = (bundle / relative).resolve()
+        if (
+            not source.is_relative_to(bundle)
+            or not source.is_file()
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or hashlib.sha256(source.read_bytes()).hexdigest() != digest
+        ):
+            raise ConformanceError(
+                "derived tblite driver/captured input identity mismatch"
+            )
+    coordinates = load_turbomole_coord(
+        resolve_manifest_path(manifest_path, case["input"]), case
+    )["positions_bohr"]
+    flat = [component for position in coordinates for component in position]
+    positions_hash = hashlib.sha256(struct.pack(f"<{len(flat)}d", *flat)).hexdigest()
+    if (
+        api.get("input_sha256") != case["input_sha256"]
+        or api.get("positions_binary64_le_sha256") != positions_hash
+        or case.get("positions_binary64_le_sha256") != positions_hash
+    ):
+        raise ConformanceError("derived tblite API input/position identity mismatch")
+    cli_properties = cli.get("properties")
+    api_properties = api.get("properties")
+    if not isinstance(cli_properties, dict) or not isinstance(api_properties, dict):
+        raise ConformanceError("derived tblite source properties must be objects")
+    if "partial_charges_e" in cli_properties:
+        raise ConformanceError(
+            "derived tblite charges must not be represented as CLI output"
+        )
+    for document in (properties, cli_properties, api_properties):
+        _split_numeric(document.get("energy_hartree"), None, "energy")
+        _split_numeric(
+            document.get("forces_hartree_per_bohr"), 3 * case["atom_count"], "forces"
+        )
+    for document in (properties, api_properties):
+        _split_numeric(document.get("partial_charges_e"), case["atom_count"], "charges")
+    gradient = cli_properties.get("gradient_hartree_per_bohr")
+    _split_numeric(gradient, 3 * case["atom_count"], "gradient")
+    if (
+        properties["partial_charges_e"] != api_properties["partial_charges_e"]
+        or any(
+            properties[name] != cli_properties[name]
+            or cli_properties[name] != api_properties[name]
+            for name in ("energy_hartree", "forces_hartree_per_bohr")
+        )
+        or any(
+            force != -component
+            for force, component in zip(
+                properties["forces_hartree_per_bohr"], gradient, strict=True
+            )
+        )
+    ):
+        raise ConformanceError("derived tblite property values/force sign mismatch")
+    return cli_provenance, gradient
+
+
+def check_manifest(manifest_path: Path, *, allow_derived_tblite: bool = False) -> None:
+    """Validate corpus identity; derived references require explicit offline opt-in."""
     manifest = load_json(manifest_path)
     if (
         manifest.get("schema_version") != 1
@@ -742,6 +1068,8 @@ def check_manifest(manifest_path: Path) -> None:
             "manifest has an unsupported QMMM materialization schema"
         )
     point_hardness = xtb_reference["point_charge_hardness_hartree"]
+    derived_references = 0
+    derived_cli_exits: set[int] = set()
     for case in cases:
         backends = case.get("xtbloom_backends", ["cpu", "cuda"])
         if (
@@ -849,9 +1177,23 @@ def check_manifest(manifest_path: Path) -> None:
             )
         reference = references[reference_engine]
         expected_accuracy = reference_accuracy(reference, reference_engine)
-        if provenance.get("generation_mode") != "live-cli" or provenance.get(
-            "accuracy"
-        ) != float(expected_accuracy):
+        oracle_provenance = provenance
+        source_gradient = None
+        if provenance.get("generation_mode") == "derived-live-cli-and-live-c-api":
+            if not allow_derived_tblite:
+                raise ConformanceError(
+                    "derived tblite references require explicit --allow-derived-tblite"
+                )
+            oracle_provenance, source_gradient = _check_split_tblite_reference(
+                manifest_path, manifest, case, golden
+            )
+            derived_references += 1
+            derived_cli_exits.add(provenance["cli_aggregate_literal_exit"])
+        if oracle_provenance.get(
+            "generation_mode"
+        ) != "live-cli" or oracle_provenance.get("accuracy") != float(
+            expected_accuracy
+        ):
             raise ConformanceError(
                 f"golden {golden_path} does not pin the primary oracle accuracy"
             )
@@ -860,19 +1202,19 @@ def check_manifest(manifest_path: Path) -> None:
                 tblite_reference, case
             )
             if (
-                provenance.get("command") not in accepted_templates
-                or provenance.get("command_template") not in accepted_templates
+                oracle_provenance.get("command") not in accepted_templates
+                or oracle_provenance.get("command_template") not in accepted_templates
             ):
                 raise ConformanceError(
                     f"golden {golden_path} has the wrong tblite command template"
                 )
             if f"tblite version {tblite_reference['version']}" not in str(
-                provenance.get("executable_version", "")
+                oracle_provenance.get("executable_version", "")
             ):
                 raise ConformanceError(
                     f"golden {golden_path} has the wrong tblite version"
                 )
-            runtime = provenance.get("runtime", {})
+            runtime = oracle_provenance.get("runtime", {})
             if (
                 runtime.get("libtblite", {}).get("sha256")
                 != tblite_reference["runtime_artifacts"]["libtblite_sha256"]
@@ -880,7 +1222,7 @@ def check_manifest(manifest_path: Path) -> None:
                 raise ConformanceError(
                     f"golden {golden_path} has the wrong libtblite hash"
                 )
-            environment_record = provenance.get("environment", {})
+            environment_record = oracle_provenance.get("environment", {})
             expected_set = {
                 "LC_ALL": "C",
                 "OMP_NUM_THREADS": "1",
@@ -942,7 +1284,7 @@ def check_manifest(manifest_path: Path) -> None:
                 )
         properties = golden.get("properties", {})
         forces = properties.get("forces_hartree_per_bohr")
-        gradient = properties.get("gradient_hartree_per_bohr")
+        gradient = properties.get("gradient_hartree_per_bohr", source_gradient)
         expected_components = 3 * int(case["atom_count"])
         if not isinstance(forces, list) or len(forces) != expected_components:
             raise ConformanceError(f"golden {golden_path} has the wrong force shape")
@@ -1015,6 +1357,15 @@ def check_manifest(manifest_path: Path) -> None:
     print(  # noqa: T201 - CLI validation report
         f"conformance manifest OK: {len(cases)} cases"
     )
+    if derived_references:
+        print(  # noqa: T201 - CLI validation report
+            f"derived tblite source consistency only: {derived_references} cases; "
+            "no scientific or performance admission"
+        )
+        print(  # noqa: T201 - CLI validation report
+            "CLI input-byte link remains UNVERIFIED; retained declared CLI "
+            f"aggregate exit codes: {sorted(derived_cli_exits)}"
+        )
 
 
 def _validate_nested_shape(
@@ -1750,8 +2101,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser(
+    check = subparsers.add_parser(
         "check", help="verify manifest, corpus hashes, units, and shapes"
+    )
+    check.add_argument(
+        "--allow-derived-tblite",
+        action="store_true",
+        help=(
+            "also check restricted-neutral CLI/API source consistency "
+            "(not scientific admission)"
+        ),
     )
 
     generate = subparsers.add_parser(
@@ -1789,7 +2148,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "check":
-            check_manifest(args.manifest)
+            check_manifest(
+                args.manifest, allow_derived_tblite=args.allow_derived_tblite
+            )
         elif args.command == "generate":
             generate_with_tblite(
                 args.manifest, args.executable, args.output_dir, args.cases
