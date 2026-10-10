@@ -597,6 +597,55 @@ class FrozenRunnerTests(unittest.TestCase):
 class ConvergenceCLITests(unittest.TestCase):
     """Keep the prototype opt-in and direct/module entry points consistent."""
 
+    def test_receipt_flags_cannot_admit_convergence_inputs_to_pairing(self) -> None:
+        """A well-formed receipt cannot authorize frozen holdout or risk pairing."""
+        base = [
+            "--library",
+            "/tmp/mock-library.so",
+            "--engines",
+            "xtbloom",
+            "--backends",
+            "cpu",
+            "--cuda-memory-modes",
+            "host",
+            "--case-ids",
+            "a",
+            "--ao-grouping",
+            "paired",
+            "--build-receipt",
+            "/tmp/receipt.json",
+            "--build-receipt-sha256",
+            "a" * 64,
+            "--build-source-revision",
+            "b" * 40,
+        ]
+        for flag, value in (
+            ("--convergence-manifest", "/tmp/scheduling.json"),
+            ("--convergence-plan", "/tmp/freeze.json"),
+            ("--convergence-freeze-sha256", "a" * 64),
+            ("--convergence-workload-sha256", "b" * 64),
+            ("--convergence-cohort-sha256", "c" * 64),
+            ("--convergence-partition", "calibration"),
+            ("--convergence-partition", "holdout"),
+        ):
+            with (
+                self.subTest(flag=flag, value=value),
+                mock.patch.object(run.build_receipt, "verify_receipt") as verify,
+                mock.patch.object(run.conformance, "load_json") as load,
+                mock.patch.object(run, "XTBloomAdapter") as adapter,
+                mock.patch("sys.stderr"),
+            ):
+                self.assertEqual(run.main([*base, flag, value]), 1)
+                verify.assert_not_called()
+                load.assert_not_called()
+                adapter.assert_not_called()
+                with self.assertRaisesRegex(
+                    run.BenchmarkError, "paired mode is AO-only"
+                ):
+                    run.validate_args(
+                        run.build_parser().parse_args([*base, flag, value])
+                    )
+
     def test_paired_rejects_every_convergence_input_before_setup(self) -> None:
         """AO-only pairing must not read a freeze, native library or workload."""
         base = [

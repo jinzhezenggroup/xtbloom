@@ -75,6 +75,12 @@ Source and library hashes alone do not establish that association, even for a
 clean runner. This mode therefore reports diagnostic evidence, not an adopted
 performance claim.
 
+The optional [controlled build receipt](build-receipts.md) recorder and
+read-only checker bind retained source/artifact bytes without promoting this
+gate. Paired mode can archive externally pinned preflight/postflight checks;
+actual mapped-image/dependency/scientific/runtime/performance admission remains
+separate, and every performance flag stays false.
+
 The existing `original` and `exact-ao` single-layout modes remain available
 for diagnostic runs. They do not provide interleaved paired evidence.
 
