@@ -41,9 +41,10 @@ import xtbloom_public_api as public_api
 from xtbloom_public_api import PublicBatchStorage
 
 try:
-    from . import ao_grouping
+    from . import ao_grouping, build_receipt
 except ImportError:  # Direct ``python benchmarks/run.py`` execution.
     import ao_grouping
+    import build_receipt
 
 try:
     from .xtb_adapter import XtbAdapter, XtbError, XtbState
@@ -3234,6 +3235,16 @@ def build_parser() -> argparse.ArgumentParser:
     """Define one command that can expand from smoke tests to the full matrix."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
+    parser.add_argument(
+        "--build-receipt",
+        type=Path,
+        help=(
+            "record-only controlled-build receipt; paired mode only, "
+            "no performance admission"
+        ),
+    )
+    parser.add_argument("--build-receipt-sha256")
+    parser.add_argument("--build-source-revision")
     parser.add_argument("--manifest", type=Path, default=conformance.DEFAULT_MANIFEST)
     parser.add_argument(
         "--output-json",
@@ -3384,6 +3395,25 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.dxtb_cpu_threads <= 0:
         raise BenchmarkError("dxtb CPU threads must be positive")
     finite_list_requested = args.case_ids is not None or args.case_ids_file is not None
+    receipt_inputs = (
+        getattr(args, "build_receipt", None),
+        getattr(args, "build_receipt_sha256", None),
+        getattr(args, "build_source_revision", None),
+    )
+    if any(value is not None for value in receipt_inputs):
+        if not all(value is not None for value in receipt_inputs):
+            raise BenchmarkError(
+                "build receipt, external SHA-256 and source revision "
+                "are required together"
+            )
+        if args.ao_grouping != "paired":
+            raise BenchmarkError(
+                "controlled build receipts are record-only in paired mode"
+            )
+        if not build_receipt.SHA256_PATTERN.fullmatch(args.build_receipt_sha256):
+            raise BenchmarkError("build receipt requires a lowercase SHA-256 pin")
+        if not build_receipt.REVISION_PATTERN.fullmatch(args.build_source_revision):
+            raise BenchmarkError("build receipt requires a full source revision")
     if not finite_list_requested and args.ao_grouping != "original":
         raise BenchmarkError("--ao-grouping requires --case-ids or --case-ids-file")
     if finite_list_requested:
@@ -3418,6 +3448,93 @@ def read_case_id_file(path: Path) -> tuple[str, ...]:
         raise BenchmarkError(f"cannot read finite case ID file {path}: {exc}") from exc
 
 
+def controlled_receipt_check(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Check pinned files outside timing, without asserting mapped-image identity.
+
+    The controlled artifact/source check is deliberately not a performance
+    admission gate. Loaded-image identity, dependency closure and independent
+    scientific/runtime qualification remain separate incomplete requirements.
+    """
+    if getattr(args, "build_receipt", None) is None:
+        return None
+    started = time.perf_counter_ns()
+    try:
+        verified = build_receipt.verify_receipt(
+            args.build_receipt,
+            args.build_receipt_sha256,
+            args.library,
+            args.build_source_revision,
+        )
+    except build_receipt.ReceiptError as exc:
+        raise BenchmarkError(
+            f"controlled build receipt verification failed: {exc}"
+        ) from exc
+    if verified["backend"] != args.backends[0]:
+        raise BenchmarkError(
+            "controlled build receipt backend differs from the requested benchmark"
+        )
+    return {
+        "verification": verified,
+        "validation_ms": (time.perf_counter_ns() - started) * 1e-6,
+        "runtime_loaded_image_binding": "NOT_ESTABLISHED",
+        "performance_admission": False,
+        "cost_scope": (
+            "one preflight/postflight file check outside measured sweeps; "
+            "costs retained separately"
+        ),
+    }
+
+
+def receipt_postflight(
+    args: argparse.Namespace,
+    preflight: dict[str, Any] | None,
+    metadata: dict[str, Any],
+    rows: Sequence[dict[str, Any]],
+) -> bool:
+    """Retain computed coordinates when evidence integrity fails after execution."""
+    if preflight is None:
+        return True
+    started = time.perf_counter_ns()
+    postflight = None
+    try:
+        postflight = controlled_receipt_check(args)
+        if (
+            postflight is None
+            or postflight["verification"] != preflight["verification"]
+        ):
+            raise BenchmarkError("controlled receipt identity changed during execution")
+        passed = True
+    except BenchmarkError as exc:
+        postflight = {
+            "verification": postflight.get("verification") if postflight else None,
+            "error": str(exc),
+            "validation_ms": (time.perf_counter_ns() - started) * 1e-6,
+            "performance_admission": False,
+            "runtime_loaded_image_binding": "NOT_ESTABLISHED",
+        }
+        passed = False
+    evidence = {
+        "status": "LOCAL_RECEIPT_MATCHES" if passed else "POSTFLIGHT_FAILED",
+        "preflight": preflight,
+        "postflight": postflight,
+        "performance_admission": False,
+    }
+    metadata["controlled_build_receipt"] = evidence
+    for row in rows:
+        if "producer_provenance" in row:
+            row["producer_provenance"]["controlled_build_receipt"] = evidence
+            row["producer_provenance"]["runtime_loaded_image_binding"] = (
+                "NOT_ESTABLISHED"
+            )
+            row["claim_ineligibility_reasons"].append(
+                "local receipt does not establish loaded-image/dependency/"
+                "performance admission"
+                if passed
+                else "controlled build receipt postflight failed"
+            )
+    return passed
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run requested cells and always retain both machine-readable artifacts."""
     args = build_parser().parse_args(argv)
@@ -3425,6 +3542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.case_ids_file is not None:
             args.case_ids = read_case_id_file(args.case_ids_file)
         validate_args(args)
+        receipt_preflight = controlled_receipt_check(args)
         manifest = conformance.load_json(args.manifest)
         if (
             args.ao_grouping == "paired"
@@ -3571,6 +3689,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(  # noqa: T201 - preserve benchmark CLI progress output
                     f"  {row['availability']}", flush=True
                 )
+        receipt_integrity_passed = receipt_postflight(
+            args, receipt_preflight, metadata, rows
+        )
         document = {
             "schema_version": SCHEMA_VERSION,
             "metadata": metadata,
@@ -3614,7 +3735,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             row for row in rows if row.get("correctness", {}).get("status") == "fail"
         ]
         unavailable = [row for row in rows if row["availability"] == "unavailable"]
-        if errors:
+        if errors or not receipt_integrity_passed:
             return 1
         if args.fail_on_correctness and failed:
             return 2

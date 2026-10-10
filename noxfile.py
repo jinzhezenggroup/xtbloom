@@ -297,6 +297,9 @@ def _run_python_tests(session: nox.Session) -> None:
         "benchmarks.test_dxtb_adapter",
         "benchmarks.test_evidence_size",
         "benchmarks.test_ao_grouping",
+        "benchmarks.test_build_receipt",
+        "benchmarks.test_record_build",
+        "benchmarks.test_build_receipt_runner",
         "benchmarks.test_omol25_inputs",
         env=test_environment,
     )
