@@ -114,11 +114,53 @@ science, three layout-sensitive iteration IDs, scientific blockers, corpus
 rights/family identity and timing/memory gaps remain open. Do not promote a
 performance flag merely because a new provenance field matches.
 
+## Optional live mapped-image observation
+
+`--runtime-mapped-images` adds Linux-only **endpoint observation** to the
+existing AO-paired runner. It requires all three externally pinned receipt
+flags. Other platforms, nonpaired modes and missing pins fail before workload
+or native setup. Leaving the flag off preserves the default runner and CSV
+columns; fake adapters do not need a native library handle.
+
+After all owners are constructed and again after all paired rounds, while
+those owners are still alive, the observer reads the process's kernel mappings.
+It checks that every adapter's actual public compute/context entrypoint lies
+in an executable segment of the selected library's device/inode. The selected
+file's bytes must match the preverified receipt digest. File descriptors,
+metadata and a second mapping snapshot detect changed, replaced or unstable
+observations. Each snapshot reads to EOF under a total byte limit: a
+newline-ended kernel short read is not proof that every mapping was read.
+Snapshots are never silently retried. Accessible file-backed files are
+inventoried, hashed and
+classified by ELF magic;
+unreadable, deleted or ambiguous file mappings fail closed without privilege
+requests or silent retries. The observer never loads the selected library.
+
+These checks and their source identity/cost are outside the existing sweep
+timing. JSON retains the full observations; opted-in CSV rows append endpoint
+status, integrity and observation-cost columns. This is an instrumented
+diagnostic run: memory high-water marks can include observation overhead, and
+its observation-excluding timings are not eligible for performance claims.
+
+A failed pre-observation starts no compute sweeps, retains NOT_RUN coordinates
+and closes every constructed owner. A failed post-observation retains all
+computed values, including failed-peer NaNs, separately marks tooling
+integrity failure, writes JSON/CSV and returns nonzero. Neither case rewrites
+native numerical outcomes or erases earlier phases.
+
+**This is not complete runtime dependency closure.** It observes only these
+endpoints, not transient loaded/unloaded images, actual provider use, anonymous
+executable code or resident private-mapping bytes. The receipt's broad
+loaded-image/source/performance admission remains unestablished; all claim
+flags stay false. Historical artifacts are not admitted retroactively and
+original scientific/identity/paired-matrix gates remain required.
+
 ## Validation
 
 ```bash
 python -m unittest -v benchmarks.test_build_receipt \
-  benchmarks.test_record_build benchmarks.test_build_receipt_runner
+  benchmarks.test_record_build benchmarks.test_build_receipt_runner \
+  benchmarks.test_runtime_mapped_images benchmarks.test_runtime_mapped_images_runner
 ```
 
 These use synthetic archives, fake builds and fake benchmark adapters; they do

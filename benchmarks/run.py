@@ -41,12 +41,19 @@ import xtbloom_public_api as public_api
 from xtbloom_public_api import PublicBatchStorage
 
 try:
-    from . import ao_grouping, build_receipt, convergence_grouping, frozen_inputs
+    from . import (
+        ao_grouping,
+        build_receipt,
+        convergence_grouping,
+        frozen_inputs,
+        runtime_mapped_images,
+    )
 except ImportError:  # Direct ``python benchmarks/run.py`` execution.
     import ao_grouping
     import build_receipt
     import convergence_grouping
     import frozen_inputs
+    import runtime_mapped_images
 
 try:
     from .xtb_adapter import XtbAdapter, XtbError, XtbState
@@ -1990,6 +1997,43 @@ def _finite_pair_timing_field(
     return summary
 
 
+def runtime_image_check(
+    args: argparse.Namespace,
+    owners_by_layout: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Observe every live paired owner outside sweep timing, retaining failures.
+
+    File receipts and endpoint mappings are different evidence. In particular,
+    an inventory of observed images cannot certify transient dependencies or
+    the bytes actually resident in executable private mappings.
+    """
+    started = time.perf_counter_ns()
+    observer_source = None
+    try:
+        observer_source = build_receipt.file_record(
+            Path(runtime_mapped_images.__file__)
+        )
+        owners = [
+            owner
+            for layout in ("original", "exact-ao")
+            for owner in owners_by_layout[layout]
+        ]
+        if not owners or any(owner["setup_state"] != "ready" for owner in owners):
+            raise BenchmarkError("runtime image observation requires all paired owners")
+        libraries = [owner["adapter"].library for owner in owners]
+        observation = runtime_mapped_images.capture(
+            args.library,
+            runtime_mapped_images.library_entrypoints(libraries),
+            args.runtime_images_expected_sha256,
+        )
+        result = {"status": "PASS", "observation": observation, "error": None}
+    except Exception as exc:  # noqa: BLE001 - retain instrumentation failures
+        result = {"status": "FAIL", "observation": None, "error": str(exc)}
+    result["observer_source"] = observer_source
+    result["validation_ms"] = (time.perf_counter_ns() - started) * 1.0e-6
+    return result
+
+
 def benchmark_finite_xtbloom_pair(
     args: argparse.Namespace,
     manifest: dict[str, Any],
@@ -2021,6 +2065,16 @@ def benchmark_finite_xtbloom_pair(
     paired_rounds: list[dict[str, Any]] = []
     cleanup_errors = []
     rss_before = current_rss_bytes()
+    mapping_evidence = None
+    if getattr(args, "runtime_mapped_images", False):
+        mapping_evidence = {
+            "preflight": None,
+            "postflight": {"status": "NOT_RUN", "error": "preflight did not pass"},
+            "integrity_passed": False,
+            "performance_admission": False,
+            "cost_scope": "endpoint observation outside sweep timings; costs retained",
+            "complete_runtime_dependency_closure": "NOT_ESTABLISHED",
+        }
 
     try:
         max_batches = max(len(plans[layout].batches) for layout in layouts)
@@ -2105,6 +2159,17 @@ def benchmark_finite_xtbloom_pair(
             and all(snapshot == option_snapshots[0] for snapshot in option_snapshots)
             and point_force_requests_match
         )
+        if mapping_evidence is not None:
+            mapping_evidence["preflight"] = runtime_image_check(args, owners_by_layout)
+            if mapping_evidence["preflight"]["status"] != "PASS":
+                for owners in owners_by_layout.values():
+                    for owner in owners:
+                        if owner["setup_state"] == "ready":
+                            owner["setup_state"] = "error"
+                            owner["setup_error"] = (
+                                "runtime image preflight failed: "
+                                + mapping_evidence["preflight"]["error"]
+                            )
         round_specs = [("cold", None)]
         round_specs.extend(("warmup", index) for index in range(1, args.warmups + 1))
         round_specs.extend(
@@ -2244,6 +2309,33 @@ def benchmark_finite_xtbloom_pair(
                     "performance_comparison_eligible": False,
                 }
             )
+        if (
+            mapping_evidence is not None
+            and mapping_evidence["preflight"]["status"] == "PASS"
+        ):
+            postflight = runtime_image_check(args, owners_by_layout)
+            mapping_evidence["postflight"] = postflight
+            if postflight["status"] == "PASS":
+                before = mapping_evidence["preflight"]["observation"]
+                after = postflight["observation"]
+                if any(
+                    before[key] != after[key]
+                    for key in ("selected_library", "entrypoints")
+                ):
+                    postflight["status"] = "FAIL"
+                    postflight["error"] = (
+                        "selected image or live entrypoints changed between endpoints"
+                    )
+                elif (
+                    mapping_evidence["preflight"]["observer_source"]
+                    != postflight["observer_source"]
+                ):
+                    postflight["status"] = "FAIL"
+                    postflight["error"] = (
+                        "runtime image observer source changed between endpoints"
+                    )
+                else:
+                    mapping_evidence["integrity_passed"] = True
     finally:
         for layout in layouts:
             for owner in owners_by_layout[layout]:
@@ -2639,6 +2731,13 @@ def benchmark_finite_xtbloom_pair(
             "cleanup_errors": cleanup_errors,
         }
     )
+    if mapping_evidence is not None:
+        row["producer_provenance"]["runtime_mapped_images"] = mapping_evidence
+        row["timing_excludes_runtime_image_observation"] = True
+        if not mapping_evidence["integrity_passed"]:
+            row["claim_ineligibility_reasons"].append(
+                "runtime mapped-image observation failed"
+            )
     if availability == "error":
         row["error"] = next(
             (
@@ -3390,6 +3489,18 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     )
     if include_convergence:
         fields.extend(convergence_fields)
+    observed_rows = any(
+        "runtime_mapped_images" in row.get("producer_provenance", {}) for row in rows
+    )
+    if observed_rows:
+        fields.extend(
+            (
+                "runtime_image_integrity_passed",
+                "runtime_image_preflight_status",
+                "runtime_image_postflight_status",
+                "runtime_image_validation_ms",
+            )
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="") as handle:
@@ -3484,6 +3595,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             paired_timing = row.get("paired_timing", {})
             paired_layouts = paired_timing.get("layout_samples", {})
             paired_rounds = row.get("paired_rounds", [])
+            mapping_evidence = row.get("producer_provenance", {}).get(
+                "runtime_mapped_images", {}
+            )
             record.update(
                 {
                     "paired_original_end_to_end_median_ms": (
@@ -3538,6 +3652,27 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                         allow_nan=False,
                         sort_keys=True,
                     ),
+                    **(
+                        {
+                            "runtime_image_integrity_passed": mapping_evidence.get(
+                                "integrity_passed"
+                            ),
+                            "runtime_image_preflight_status": (
+                                mapping_evidence.get("preflight") or {}
+                            ).get("status"),
+                            "runtime_image_postflight_status": (
+                                mapping_evidence.get("postflight") or {}
+                            ).get("status"),
+                            "runtime_image_validation_ms": sum(
+                                (mapping_evidence.get(phase) or {}).get(
+                                    "validation_ms", 0.0
+                                )
+                                for phase in ("preflight", "postflight")
+                            ),
+                        }
+                        if observed_rows
+                        else {}
+                    ),
                 }
             )
             writer.writerow(record)
@@ -3558,6 +3693,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--build-receipt-sha256")
     parser.add_argument("--build-source-revision")
+    parser.add_argument(
+        "--runtime-mapped-images",
+        action="store_true",
+        help=(
+            "Linux endpoint image observation; requires paired mode "
+            "and pinned build receipt"
+        ),
+    )
     parser.add_argument("--manifest", type=Path, default=conformance.DEFAULT_MANIFEST)
     parser.add_argument(
         "--output-json",
@@ -3786,6 +3929,13 @@ def validate_args(args: argparse.Namespace) -> None:
         getattr(args, "build_receipt_sha256", None),
         getattr(args, "build_source_revision", None),
     )
+    if getattr(args, "runtime_mapped_images", False):
+        if not sys.platform.startswith("linux"):
+            raise BenchmarkError("runtime mapped-image observation requires Linux")
+        if not all(value is not None for value in receipt_inputs):
+            raise BenchmarkError(
+                "runtime mapped-image observation requires a pinned build receipt"
+            )
     if any(value is not None for value in receipt_inputs):
         if not all(value is not None for value in receipt_inputs):
             raise BenchmarkError(
@@ -3922,13 +4072,22 @@ def receipt_postflight(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run requested cells and always retain both machine-readable artifacts."""
+    """Validate options before input I/O, then run and retain requested cells.
+
+    Case-list files are read only after option-only constraints pass; their
+    contents are revalidated before receipt, workload, policy or native setup.
+    """
     args = build_parser().parse_args(argv)
     try:
+        validate_args(args)
         if args.case_ids_file is not None:
             args.case_ids = read_case_id_file(args.case_ids_file)
-        validate_args(args)
+            validate_args(args)
         receipt_preflight = controlled_receipt_check(args)
+        if args.runtime_mapped_images:
+            args.runtime_images_expected_sha256 = receipt_preflight["verification"][
+                "library"
+            ]["sha256"]
         manifest = conformance.load_json(args.manifest)
         if (
             args.ao_grouping == "paired"
@@ -4079,6 +4238,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         receipt_integrity_passed = receipt_postflight(
             args, receipt_preflight, metadata, rows
         )
+        mapping_integrity_passed = True
+        if args.runtime_mapped_images:
+            mapping_integrity_passed = bool(rows) and all(
+                row.get("producer_provenance", {})
+                .get("runtime_mapped_images", {})
+                .get("integrity_passed", False)
+                for row in rows
+            )
+            metadata["runtime_mapped_image_observation"] = {
+                "requested": True,
+                "integrity_passed": mapping_integrity_passed,
+                "cost_scope": "endpoint-only observation outside sweep timings",
+                "performance_admission": False,
+            }
         document = {
             "schema_version": SCHEMA_VERSION,
             "metadata": metadata,
@@ -4122,7 +4295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             row for row in rows if row.get("correctness", {}).get("status") == "fail"
         ]
         unavailable = [row for row in rows if row["availability"] == "unavailable"]
-        if errors or not receipt_integrity_passed:
+        if errors or not receipt_integrity_passed or not mapping_integrity_passed:
             return 1
         if args.fail_on_correctness and failed:
             return 2
