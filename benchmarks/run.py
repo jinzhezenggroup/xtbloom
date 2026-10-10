@@ -23,6 +23,7 @@ import statistics
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -342,20 +343,33 @@ class XTBloomAdapter:
             raise BenchmarkError("finite case sequence does not match its batch plan")
         self.storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
         self.allow_system_failures = allow_system_failures
-        self.context = public_api._make_context(
-            self.library, cell.backend, device_id, cpu_threads
-        )
-        self.memory = public_api.DescriptorMemory(cell.memory_mode, device_id)
-        # Host descriptors still execute on CUDA.  Keep a control runtime even
-        # when DescriptorMemory did not need one so every CUDA timing has an
-        # explicit completion boundary and device-memory sample.
-        self.cuda_control = self.memory.cuda
-        self.owns_cuda_control = False
-        if cell.backend == "cuda" and self.cuda_control is None:
-            self.cuda_control = public_api.CudaRuntime(device_id)
-            self.owns_cuda_control = True
-        if self.cuda_control is not None:
-            configure_cuda_runtime(self.cuda_control)
+        self.systems = len(case_sequence)
+        # Register rollback immediately: a failed constructor never reaches close().
+        with ExitStack() as rollback:
+            self.context = public_api._make_context(
+                self.library, cell.backend, device_id, cpu_threads
+            )
+            rollback.callback(self.library.xtbloom_context_destroy, self.context)
+            self.memory = public_api.DescriptorMemory(cell.memory_mode, device_id)
+            rollback.callback(self.memory.close)
+            # Host descriptors still need a CUDA completion/control owner.
+            self.cuda_control = self.memory.cuda
+            self.owns_cuda_control = False
+            if cell.backend == "cuda" and self.cuda_control is None:
+                self.cuda_control = public_api.CudaRuntime(device_id)
+                self.owns_cuda_control = True
+                rollback.callback(self.cuda_control.close)
+            if self.cuda_control is not None:
+                configure_cuda_runtime(self.cuda_control)
+            self._initialize_batch_and_results(
+                cell, strict_fresh=strict_fresh, request_charges=request_charges
+            )
+            rollback.pop_all()
+
+    def _initialize_batch_and_results(
+        self, cell: Cell, *, strict_fresh: bool, request_charges: bool
+    ) -> None:
+        """Initialize borrowed views while constructor rollback still owns resources."""
         # Both backends consume the same explicit ABI-v2 one/two-channel
         # selection; benchmark cells therefore exercise the production suffix.
         self.batch = public_api._make_batch(
@@ -391,7 +405,6 @@ class XTBloomAdapter:
                 300.0 * public_api.XTBLOOM_KELVIN_TO_HARTREE
             )
         # These public defaults are recorded in every row and match normal API use.
-        self.systems = len(case_sequence)
         self.atoms = len(self.storage.atomic_numbers)
         self.energies = (ctypes.c_double * self.systems)()
         self.forces = (
@@ -798,8 +811,14 @@ def finite_case_plan(
     cases: dict[str, dict[str, Any]],
     case_ids: tuple[str, ...],
     batch_cap: int,
+    strategy: str | None = None,
 ) -> tuple[ao_grouping.AOGroupingPlan, float]:
-    """Plan one finite list and account for input inspection and AO analysis."""
+    """Plan one finite list, optionally overriding only its grouping strategy.
+
+    An explicit AO-only paired arm uses the same input inspection and mapping
+    as a standalone baseline; frozen input binding remains independent of the
+    chosen grouping key.
+    """
     started = time.perf_counter_ns()
     previous_capture = getattr(args, "finite_frozen_workload", None)
     if previous_capture is not None:
@@ -807,12 +826,13 @@ def finite_case_plan(
         args.finite_frozen_workload = None
     basis_sha256 = None
     counts: dict[str, int] | None = None
+    selected_strategy = strategy or args.ao_grouping
     risk_bands = None
     risk_policy_sha256 = None
     risk_freeze_plan_sha256 = None
     binding = None
     if (
-        args.ao_grouping in {"exact-ao", "ao-risk"}
+        selected_strategy in {"exact-ao", "ao-risk"}
         or getattr(args, "convergence_plan", None) is not None
     ):
         if public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB:
@@ -821,7 +841,7 @@ def finite_case_plan(
             REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
         )
         if (
-            args.ao_grouping != "original"
+            selected_strategy != "original"
             and getattr(args, "convergence_plan", None) is None
         ):
             counts = {
@@ -833,9 +853,9 @@ def finite_case_plan(
             }
     if getattr(args, "convergence_plan", None) is not None:
         binding, annotations = finite_convergence_binding(
-            args, manifest, cases, case_ids, basis_counts
+            args, manifest, cases, case_ids, basis_counts, selected_strategy
         )
-        if args.ao_grouping != "original":
+        if selected_strategy != "original":
             captured = args.finite_frozen_workload
             counts = {
                 case_id: ao_grouping.count_gfn2_aos(
@@ -846,29 +866,29 @@ def finite_case_plan(
                 )
                 for case_id in case_ids
             }
-        if args.ao_grouping == "ao-risk":
+        if selected_strategy == "ao-risk":
             risk_bands = {
                 case_id: annotations[case_id].risk_band for case_id in case_ids
             }
             risk_policy_sha256 = binding["policy_sha256"]
             risk_freeze_plan_sha256 = binding["freeze_plan_sha256"]
-    elif args.ao_grouping == "ao-risk":
+    elif selected_strategy == "ao-risk":
         raise BenchmarkError(
             "ao-risk requires a convergence manifest and pinned freeze plan"
         )
     plan = ao_grouping.make_plan(
         case_ids,
         batch_cap,
-        strategy=args.ao_grouping,
+        strategy=selected_strategy,
         ao_counts_by_case_id=counts,
-        basis_sha256=basis_sha256 if args.ao_grouping != "original" else None,
+        basis_sha256=basis_sha256 if selected_strategy != "original" else None,
         **(
             {
                 "risk_bands_by_case_id": risk_bands,
                 "risk_policy_sha256": risk_policy_sha256,
                 "risk_freeze_plan_sha256": risk_freeze_plan_sha256,
             }
-            if args.ao_grouping == "ao-risk"
+            if selected_strategy == "ao-risk"
             else {}
         ),
     )
@@ -883,6 +903,7 @@ def finite_convergence_binding(
     cases: dict[str, dict[str, Any]],
     case_ids: tuple[str, ...],
     basis_counts: dict[int, int],
+    strategy: str,
 ) -> tuple[dict[str, Any], dict[str, convergence_grouping.GroupingAnnotation]]:
     """Validate the complete frozen input roster before using selected annotations.
 
@@ -972,7 +993,7 @@ def finite_convergence_binding(
             )
         annotations = (
             convergence_grouping.annotate_scheduling_inputs(document)
-            if args.ao_grouping == "ao-risk"
+            if strategy == "ao-risk"
             else {}
         )
         args.finite_frozen_workload = captured
@@ -1560,6 +1581,1083 @@ def benchmark_finite_xtbloom_cell(
     )
     if not row["independent_reference_qualified"]:
         row["claim_eligible"] = False
+    return row
+
+
+def finite_pair_plan_metadata(plan: ao_grouping.AOGroupingPlan) -> dict[str, Any]:
+    """Describe one persistent layout plan and its exact inverse mapping."""
+    return {
+        "strategy": plan.strategy,
+        "plan_sha256": plan.plan_sha256,
+        "basis_sha256": plan.basis_sha256,
+        "ao_count_by_case_id": dict(plan.ao_counts_by_case_id),
+        "planned_case_order": list(plan.ordered_case_ids),
+        "canonical_index_by_case_id": plan.canonical_index_by_case_id,
+        "total_systems": len(plan.original_case_ids),
+        "batch_count": len(plan.batches),
+        "actual_batch_sizes": [len(batch.case_ids) for batch in plan.batches],
+        "batches": [
+            {
+                "case_ids": list(batch.case_ids),
+                "canonical_indices": list(batch.canonical_indices),
+                "ao_count": batch.ao_count,
+            }
+            for batch in plan.batches
+        ],
+    }
+
+
+def finite_pair_engine_options(
+    adapter: XTBloomAdapter, args: argparse.Namespace
+) -> dict[str, Any]:
+    """Snapshot initialized values, not a reconstructed strict-FRESH template."""
+    return {
+        "compute_options": {
+            field: getattr(adapter.options, field)
+            for field, _ in public_api.ComputeOptions._fields_
+            if not field.startswith("reserved")
+        },
+        "backend": adapter.cell.backend,
+        "memory_mode": adapter.cell.memory_mode,
+        "requested_device_id": args.device_id,
+        "requested_cpu_threads": args.cpu_threads,
+        "point_charge_count": len(adapter.storage.point_charge_values),
+    }
+
+
+def finite_pair_missing_result(
+    case_id: str,
+    original_index: int,
+    case: dict[str, Any],
+    property_name: str,
+    execution_state: str,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """Keep an unexecuted coordinate and its full requested NaN output slices."""
+    atom_count = int(case["atom_count"])
+    point_count = int(case.get("point_charge_count", 0))
+    record: dict[str, Any] = {
+        "case_id": case_id,
+        "original_index": original_index,
+        "status": None,
+        "scc_converged": None,
+        "scc_iterations": None,
+        "energy_hartree": math.nan,
+        "atomic_charges_e": [math.nan] * atom_count,
+        "execution_state": execution_state,
+    }
+    if property_name == "force":
+        record["forces_hartree_per_bohr"] = [math.nan] * (3 * atom_count)
+        if point_count:
+            record["point_charge_forces_hartree_per_bohr"] = [math.nan] * (
+                3 * point_count
+            )
+    if detail:
+        record["execution_detail"] = detail
+    return record
+
+
+def finite_pair_layout_comparison(
+    case: dict[str, Any],
+    original: dict[str, Any],
+    exact_ao: dict[str, Any],
+    manifest: dict[str, Any],
+    property_name: str,
+) -> dict[str, Any]:
+    """Compare paired outputs using the same manifest tolerances as oracle checks."""
+    comparisons = [
+        ("energy_hartree", "energy_hartree", "energy"),
+        ("atomic_charges_e", "partial_charges_e", "charges"),
+    ]
+    if property_name == "force":
+        comparisons.append(
+            ("forces_hartree_per_bohr", "forces_hartree_per_bohr", "forces")
+        )
+        if int(case.get("point_charge_count", 0)):
+            comparisons.append(
+                (
+                    "point_charge_forces_hartree_per_bohr",
+                    "point_charge_forces_hartree_per_bohr",
+                    "point_charge_forces",
+                )
+            )
+
+    errors: dict[str, float | None] = {}
+    tolerances: dict[str, float | None] = {}
+    output_pass = True
+    case_tolerances = case.get("tolerances", {})
+    manifest_tolerances = manifest.get("tolerances", {})
+    for actual_key, report_key, tolerance_key in comparisons:
+        error = _max_abs_error(original.get(actual_key), exact_ao.get(actual_key))
+        tolerance = case_tolerances.get(report_key)
+        if tolerance is None:
+            tolerance = manifest_tolerances.get(tolerance_key, {}).get("atol")
+        errors[report_key] = error
+        tolerances[report_key] = float(tolerance) if tolerance is not None else None
+        if error is None or tolerance is None or error > float(tolerance):
+            output_pass = False
+
+    discrete_differences = {}
+    for key in ("execution_state", "status", "scc_converged", "scc_iterations"):
+        original_value = original.get(key)
+        exact_value = exact_ao.get(key)
+        if original_value != exact_value:
+            discrete_differences[key] = {
+                "original": original_value,
+                "exact_ao": exact_value,
+            }
+    both_successful = all(
+        result.get("status") == public_api.XTBLOOM_STATUS_SUCCESS
+        and result.get("scc_converged") == 1
+        for result in (original, exact_ao)
+    )
+    return {
+        "status": "pass" if output_pass and both_successful else "fail",
+        "reference_validation": (
+            "paired-layout diagnostic only; this is not an independent reference"
+        ),
+        "independent_reference_pass": False,
+        "max_abs_errors": errors,
+        "absolute_tolerances": tolerances,
+        "discrete_state_differences": discrete_differences,
+    }
+
+
+def _finite_pair_arm_sweep(
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    expected_by_id: dict[str, dict[str, Any]],
+    plan: ao_grouping.AOGroupingPlan,
+    owners: Sequence[dict[str, Any]],
+    property_name: str,
+) -> dict[str, Any]:
+    """Run a layout once over its retained owners, preserving every ID."""
+    sweep_start = time.perf_counter_ns()
+    compute_ms = 0.0
+    compute_attempted_ms = 0.0
+    compute_attempt_count = 0
+    compute_success_count = 0
+    compute_complete = True
+    download_ms = 0.0
+    download_attempted_ms = 0.0
+    download_attempt_count = 0
+    download_success_count = 0
+    download_complete = True
+    publication_ms = 0.0
+    publication_attempted_ms = 0.0
+    publication_attempt_count = 0
+    publication_success_count = 0
+    publication_complete = True
+    memory_snapshots = []
+    batch_results: list[dict[str, Any]] = []
+    errors = []
+
+    def append_missing(
+        batch: ao_grouping.AOBatch,
+        execution_state: str,
+        detail: str,
+    ) -> None:
+        batch_results.extend(
+            finite_pair_missing_result(
+                case_id,
+                canonical_index,
+                cases[case_id],
+                property_name,
+                execution_state,
+                detail,
+            )
+            for case_id, canonical_index in zip(
+                batch.case_ids, batch.canonical_indices, strict=True
+            )
+        )
+
+    for owner in owners:
+        batch = owner["batch"]
+        adapter = owner["adapter"]
+        if adapter is None or owner["setup_state"] != "ready":
+            compute_complete = download_complete = publication_complete = False
+            append_missing(batch, "not_run", owner["setup_error"] or "")
+            for result in batch_results[-len(batch.case_ids) :]:
+                result["availability"] = owner["setup_state"]
+            memory_snapshots.append(
+                {
+                    "case_ids": list(batch.case_ids),
+                    "ao_count": batch.ao_count,
+                    "status": owner["setup_state"],
+                    "error": owner["setup_error"],
+                }
+            )
+            continue
+
+        stage = "compute"
+        try:
+            compute_attempt_count += 1
+            compute_start = time.perf_counter_ns()
+            try:
+                compute_ms += timed_invoke(adapter)
+                compute_success_count += 1
+            finally:
+                compute_attempted_ms += (
+                    time.perf_counter_ns() - compute_start
+                ) * 1.0e-6
+
+            stage = "download"
+            download_attempt_count += 1
+            download_start = time.perf_counter_ns()
+            try:
+                output = adapter.results()
+                download_success_count += 1
+            finally:
+                elapsed = (time.perf_counter_ns() - download_start) * 1.0e-6
+                download_ms += elapsed
+                download_attempted_ms += elapsed
+
+            stage = "publication"
+            publication_attempt_count += 1
+            publication_start = time.perf_counter_ns()
+            try:
+                required_outputs = ["atomic_charges_e"]
+                if property_name == "force":
+                    required_outputs.append("forces_hartree_per_bohr")
+                    if adapter.storage.point_charge_values:
+                        required_outputs.append("point_charge_forces_hartree_per_bohr")
+                records = ao_grouping.split_batch_results(
+                    batch.case_ids,
+                    adapter.storage.atom_offsets,
+                    adapter.storage.point_charge_offsets,
+                    output,
+                    tuple(required_outputs),
+                )
+                for result in records:
+                    result["execution_state"] = (
+                        "completed"
+                        if result["status"] == public_api.XTBLOOM_STATUS_SUCCESS
+                        and result["scc_converged"] == 1
+                        else "system-failure"
+                    )
+                batch_results.extend(records)
+                publication_success_count += 1
+            finally:
+                elapsed = (time.perf_counter_ns() - publication_start) * 1.0e-6
+                publication_ms += elapsed
+                publication_attempted_ms += elapsed
+        except public_api.BackendUnavailable as exc:
+            errors.append(str(exc))
+            if stage == "compute":
+                compute_complete = False
+            if stage in {"compute", "download"}:
+                download_complete = False
+            publication_complete = False
+            append_missing(batch, "unavailable", str(exc))
+        except Exception as exc:  # noqa: BLE001 - retain failed-batch evidence
+            errors.append(str(exc))
+            if stage == "compute":
+                compute_complete = False
+            if stage in {"compute", "download"}:
+                download_complete = False
+            publication_complete = False
+            append_missing(batch, "error", str(exc))
+
+        try:
+            memory_snapshots.append(
+                {
+                    "case_ids": list(batch.case_ids),
+                    "ao_count": batch.ao_count,
+                    "snapshot": adapter.memory_snapshot(),
+                    "resident_layouts": ["original", "exact-ao"],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - archive unavailable memory
+            errors.append(f"memory snapshot failed: {exc}")
+            memory_snapshots.append(
+                {
+                    "case_ids": list(batch.case_ids),
+                    "ao_count": batch.ao_count,
+                    "status": "unavailable",
+                    "error": str(exc),
+                    "resident_layouts": ["original", "exact-ao"],
+                }
+            )
+
+    scatter_start = time.perf_counter_ns()
+    try:
+        restored = list(ao_grouping.scatter_case_results(plan, batch_results))
+    except Exception as exc:  # noqa: BLE001 - retain all requested IDs
+        errors.append(f"canonical scatter failed: {exc}")
+        results_by_id = {}
+        for result in batch_results:
+            results_by_id.setdefault(result.get("case_id"), result)
+        restored = []
+        for index, case_id in enumerate(plan.original_case_ids):
+            result = results_by_id.get(case_id)
+            if result is None:
+                result = finite_pair_missing_result(
+                    case_id,
+                    index,
+                    cases[case_id],
+                    property_name,
+                    "not_run",
+                    str(exc),
+                )
+            result = dict(result)
+            result["original_index"] = index
+            restored.append(result)
+    scatter_ms = (time.perf_counter_ns() - scatter_start) * 1.0e-6
+
+    end_to_end_ms = (time.perf_counter_ns() - sweep_start) * 1.0e-6
+    correctness_start = time.perf_counter_ns()
+    for result in restored:
+        case_id = result["case_id"]
+        try:
+            result["correctness"] = finite_case_correctness(
+                cases[case_id],
+                expected_by_id.get(case_id, {}),
+                result,
+                manifest,
+                property_name,
+            )
+        except Exception as exc:  # noqa: BLE001 - record failed reference checks
+            result["correctness"] = {
+                "status": "fail",
+                "reference_validation": f"correctness comparison failed: {exc}",
+                "independent_reference_pass": False,
+                "missing_reference_properties": [
+                    "energy_hartree",
+                    "partial_charges_e",
+                ],
+            }
+    correctness_validation_ms = (time.perf_counter_ns() - correctness_start) * 1.0e-6
+    timing = {
+        "compute_ms": compute_ms if compute_complete else None,
+        "compute_complete": compute_complete,
+        "compute_attempted_time_ms": compute_attempted_ms,
+        "compute_attempt_count": compute_attempt_count,
+        "compute_success_count": compute_success_count,
+        "download_ms": download_ms if download_complete else None,
+        "download_complete": download_complete,
+        "download_attempted_time_ms": download_attempted_ms,
+        "download_attempt_count": download_attempt_count,
+        "download_success_count": download_success_count,
+        "publication_ms": publication_ms if publication_complete else None,
+        "publication_complete": publication_complete,
+        "publication_attempted_time_ms": publication_attempted_ms,
+        "publication_attempt_count": publication_attempt_count,
+        "publication_success_count": publication_success_count,
+        "scatter_ms": scatter_ms,
+        "correctness_validation_ms": correctness_validation_ms,
+        "end_to_end_ms": end_to_end_ms,
+    }
+    # Archival fallback may retain valid slices after a mapping or memory error.
+    failed = bool(errors) or any(
+        result.get("execution_state") != "completed"
+        or result.get("correctness", {}).get("status") != "pass"
+        for result in restored
+    )
+    unqualified = any(
+        not result.get("correctness", {}).get("independent_reference_pass", False)
+        for result in restored
+    )
+    return {
+        "timing": timing,
+        "case_results": restored,
+        "finite_output_status": "fail" if failed else "pass",
+        "status": "fail" if failed else "unqualified" if unqualified else "pass",
+        "sweep_errors": errors,
+        "memory_snapshots": memory_snapshots,
+    }
+
+
+def _finite_pair_timing_field(
+    rounds: Sequence[dict[str, Any]], layout: str, field: str
+) -> dict[str, Any]:
+    """Summarize a timing field while retaining requested missing samples."""
+    samples = [item["arms"][layout]["timing"].get(field) for item in rounds]
+    numeric = [value for value in samples if isinstance(value, (int, float))]
+    summary: dict[str, Any] = {
+        "samples_ms": samples,
+        "sample_count": len(numeric),
+        "requested_count": len(samples),
+        "median_ms": statistics.median(numeric) if numeric else None,
+    }
+    if field == "end_to_end_ms" and numeric:
+        summary.update(
+            timing_summary(numeric, len(rounds[0]["arms"][layout]["case_results"]))
+        )
+        summary["samples_ms"] = samples
+        summary["sample_count"] = len(numeric)
+        summary["requested_count"] = len(samples)
+    return summary
+
+
+def benchmark_finite_xtbloom_pair(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    plans: dict[str, ao_grouping.AOGroupingPlan],
+    planning_ms_by_layout: dict[str, float],
+    property_name: str,
+) -> dict[str, Any]:
+    """Interleave two strict-FRESH layouts while keeping both owner sets alive."""
+    original_plan = plans["original"]
+    cell = Cell(
+        "xtbloom",
+        args.backends[0],
+        "host",
+        "finite-list",
+        property_name,
+        original_plan.max_batch_size,
+        original_plan.original_case_ids,
+    )
+    row = base_row(cell)
+    row["ao_grouping"] = "paired-original-vs-exact-ao"
+    layouts = ("original", "exact-ao")
+    owners_by_layout: dict[str, list[dict[str, Any]]] = {
+        layout: [] for layout in layouts
+    }
+    setup_ms_by_layout = dict.fromkeys(layouts, 0.0)
+    setup_order = []
+    expected_by_id: dict[str, dict[str, Any]] = {}
+    paired_rounds: list[dict[str, Any]] = []
+    cleanup_errors = []
+    rss_before = current_rss_bytes()
+
+    try:
+        max_batches = max(len(plans[layout].batches) for layout in layouts)
+        for batch_index in range(max_batches):
+            order = layouts if batch_index % 2 == 0 else tuple(reversed(layouts))
+            setup_order.append(
+                {"batch_index": batch_index, "layout_order": list(order)}
+            )
+            for layout in order:
+                plan = plans[layout]
+                if batch_index >= len(plan.batches):
+                    continue
+                batch = plan.batches[batch_index]
+                owner: dict[str, Any] = {
+                    "batch": batch,
+                    "adapter": None,
+                    "setup_state": "ready",
+                    "setup_error": None,
+                    "engine_options": None,
+                }
+                owners_by_layout[layout].append(owner)
+                batch_cell = Cell(
+                    cell.engine,
+                    cell.backend,
+                    cell.memory_mode,
+                    cell.workload,
+                    cell.property,
+                    plan.max_batch_size,
+                    batch.case_ids,
+                )
+                case_sequence = tuple(cases[case_id] for case_id in batch.case_ids)
+                setup_start = time.perf_counter_ns()
+                try:
+                    owner["adapter"] = XTBloomAdapter(
+                        args.library,
+                        args.manifest,
+                        manifest,
+                        case_sequence,
+                        batch_cell,
+                        args.device_id,
+                        args.cpu_threads,
+                        strict_fresh=True,
+                        request_charges=True,
+                        allow_system_failures=True,
+                    )
+                    owner["engine_options"] = finite_pair_engine_options(
+                        owner["adapter"], args
+                    )
+                    for case_slice in owner["adapter"].storage.slices:
+                        expected_by_id[case_slice.case["id"]] = case_slice.expected
+                except public_api.BackendUnavailable as exc:
+                    owner["setup_state"] = "unavailable"
+                    owner["setup_error"] = str(exc)
+                except Exception as exc:  # noqa: BLE001 - isolate owner setup
+                    owner["setup_state"] = "error"
+                    owner["setup_error"] = str(exc)
+                finally:
+                    setup_ms_by_layout[layout] += (
+                        time.perf_counter_ns() - setup_start
+                    ) * 1.0e-6
+
+        engine_snapshots = [
+            owner["engine_options"]
+            for layout in layouts
+            for owner in owners_by_layout[layout]
+            if owner["engine_options"] is not None
+        ]
+        # PC-force requests legitimately vary with each owner's embedding extents.
+        option_snapshots = []
+        point_force_requests_match = True
+        for snapshot in engine_snapshots:
+            actual_options = dict(snapshot["compute_options"])
+            point_force_requests_match &= bool(
+                actual_options["flags"] & public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+            ) == (property_name == "force" and snapshot["point_charge_count"] > 0)
+            actual_options["flags"] &= ~public_api.XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+            option_snapshots.append(actual_options)
+        compute_options_match = (
+            bool(option_snapshots)
+            and len(option_snapshots)
+            == sum(len(owners) for owners in owners_by_layout.values())
+            and all(snapshot == option_snapshots[0] for snapshot in option_snapshots)
+            and point_force_requests_match
+        )
+        round_specs = [("cold", None)]
+        round_specs.extend(("warmup", index) for index in range(1, args.warmups + 1))
+        round_specs.extend(
+            ("measured", index) for index in range(1, args.repetitions + 1)
+        )
+        for round_index, (phase, phase_index) in enumerate(round_specs):
+            order = layouts if round_index % 2 == 0 else tuple(reversed(layouts))
+            arm_results = {}
+            for layout in order:
+                try:
+                    arm_results[layout] = _finite_pair_arm_sweep(
+                        manifest,
+                        cases,
+                        expected_by_id,
+                        plans[layout],
+                        owners_by_layout[layout],
+                        property_name,
+                    )
+                except Exception as exc:  # noqa: BLE001, PERF203
+                    # One failed arm must not discard its partner or later rounds.
+                    results = []
+                    for index, case_id in enumerate(plans[layout].original_case_ids):
+                        result = finite_pair_missing_result(
+                            case_id,
+                            index,
+                            cases[case_id],
+                            property_name,
+                            "not_run",
+                            str(exc),
+                        )
+                        result["correctness"] = finite_case_correctness(
+                            cases[case_id], {}, result, manifest, property_name
+                        )
+                        results.append(result)
+                    arm_results[layout] = {
+                        "timing": dict.fromkeys(
+                            (
+                                "compute_ms",
+                                "download_ms",
+                                "publication_ms",
+                                "scatter_ms",
+                                "correctness_validation_ms",
+                                "end_to_end_ms",
+                            )
+                        ),
+                        "case_results": results,
+                        "finite_output_status": "fail",
+                        "status": "fail",
+                        "sweep_errors": [str(exc)],
+                        "memory_snapshots": [],
+                    }
+            original_results = {
+                item["case_id"]: item
+                for item in arm_results["original"]["case_results"]
+            }
+            exact_results = {
+                item["case_id"]: item
+                for item in arm_results["exact-ao"]["case_results"]
+            }
+            per_case_comparison = []
+            branch_differences = []
+            for case_id in original_plan.original_case_ids:
+                try:
+                    comparison = finite_pair_layout_comparison(
+                        cases[case_id],
+                        original_results[case_id],
+                        exact_results[case_id],
+                        manifest,
+                        property_name,
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain failed pairs
+                    comparison = {
+                        "status": "fail",
+                        "reference_validation": f"paired comparison failed: {exc}",
+                        "independent_reference_pass": False,
+                        "max_abs_errors": {},
+                        "absolute_tolerances": {},
+                        "discrete_state_differences": {},
+                    }
+                per_case_comparison.append({"case_id": case_id, **comparison})
+                if comparison["discrete_state_differences"]:
+                    branch_differences.append(
+                        {
+                            "case_id": case_id,
+                            "differences": comparison["discrete_state_differences"],
+                        }
+                    )
+            equivalence_status = (
+                "pass"
+                if all(item["status"] == "pass" for item in per_case_comparison)
+                else "fail"
+            )
+            all_independently_qualified = all(
+                result["correctness"].get("independent_reference_pass", False)
+                for layout in layouts
+                for result in arm_results[layout]["case_results"]
+            )
+            arms_performance_complete = all(
+                arm_results[layout]["status"] == "pass" for layout in layouts
+            )
+            memory_complete = all(
+                len(arm_results[layout]["memory_snapshots"])
+                == len(owners_by_layout[layout])
+                and all(
+                    "snapshot" in snapshot
+                    for snapshot in arm_results[layout]["memory_snapshots"]
+                )
+                for layout in layouts
+            )
+            paired_rounds.append(
+                {
+                    "pair_round_id": (
+                        f"{property_name}-b{original_plan.max_batch_size}-r{round_index}"
+                    ),
+                    "pair_round_index": round_index,
+                    "phase": phase,
+                    "phase_index": phase_index,
+                    "execution_order": list(order),
+                    "arms": arm_results,
+                    "layout_equivalence": {
+                        "status": equivalence_status,
+                        "reference_validation": (
+                            "diagnostic only; paired equality is not an independent "
+                            "scientific reference"
+                        ),
+                        "case_results": per_case_comparison,
+                        "branch_differences": branch_differences,
+                    },
+                    "numerical_comparison_eligible": (
+                        all_independently_qualified
+                        and arms_performance_complete
+                        and memory_complete
+                        and equivalence_status == "pass"
+                        and not branch_differences
+                        and compute_options_match
+                    ),
+                    "performance_comparison_eligible": False,
+                }
+            )
+    finally:
+        for layout in layouts:
+            for owner in owners_by_layout[layout]:
+                adapter = owner["adapter"]
+                if adapter is None:
+                    continue
+                try:
+                    adapter.close()
+                except Exception as exc:  # noqa: BLE001 - close remaining owners
+                    cleanup_errors.append(
+                        {
+                            "layout": layout,
+                            "case_ids": list(owner["batch"].case_ids),
+                            "error": str(exc),
+                        }
+                    )
+
+    measured_rounds = [item for item in paired_rounds if item["phase"] == "measured"]
+    cold_rounds = [item for item in paired_rounds if item["phase"] == "cold"]
+    warmup_rounds = [item for item in paired_rounds if item["phase"] == "warmup"]
+    layout_timing = {}
+    for layout in layouts:
+        layout_timing[layout] = {
+            "plan_ms": planning_ms_by_layout[layout],
+            "owner_setup_ms": setup_ms_by_layout[layout],
+            "cold": cold_rounds[0]["arms"][layout]["timing"],
+            "warmups": [item["arms"][layout]["timing"] for item in warmup_rounds],
+            "measured": [item["arms"][layout]["timing"] for item in measured_rounds],
+            "measured_end_to_end": _finite_pair_timing_field(
+                measured_rounds, layout, "end_to_end_ms"
+            ),
+            "one_shot_total_ms": (
+                planning_ms_by_layout[layout]
+                + setup_ms_by_layout[layout]
+                + cold_rounds[0]["arms"][layout]["timing"]["end_to_end_ms"]
+                if cold_rounds[0]["arms"][layout]["timing"]["end_to_end_ms"] is not None
+                else None
+            ),
+            "plan_setup_amortized_ms_per_measured_sweep": (
+                planning_ms_by_layout[layout] + setup_ms_by_layout[layout]
+            )
+            / args.repetitions,
+            "owner_lifecycle": (
+                "one adapter/context per planned batch, retained for cold, all "
+                "warmups, and all measured rounds; closed after the final pair"
+            ),
+        }
+
+    measured_numeric_rounds = [
+        item
+        for item in measured_rounds
+        if all(
+            isinstance(
+                item["arms"][layout]["timing"].get("end_to_end_ms"), (int, float)
+            )
+            for layout in layouts
+        )
+    ]
+    paired_samples = []
+    for item in measured_rounds:
+        original_ms = item["arms"]["original"]["timing"].get("end_to_end_ms")
+        exact_ms = item["arms"]["exact-ao"]["timing"].get("end_to_end_ms")
+        paired_samples.append(
+            {
+                "pair_round_id": item["pair_round_id"],
+                "execution_order": item["execution_order"],
+                "original_ms": original_ms,
+                "exact_ao_ms": exact_ms,
+                "exact_ao_minus_original_ms": (
+                    exact_ms - original_ms
+                    if isinstance(original_ms, (int, float))
+                    and isinstance(exact_ms, (int, float))
+                    else None
+                ),
+                "exact_ao_over_original_ratio": (
+                    exact_ms / original_ms
+                    if isinstance(original_ms, (int, float))
+                    and isinstance(exact_ms, (int, float))
+                    and original_ms > 0.0
+                    else None
+                ),
+                "performance_comparison_eligible": item[
+                    "performance_comparison_eligible"
+                ],
+            }
+        )
+    paired_ratios = [
+        item["exact_ao_over_original_ratio"]
+        for item in paired_samples
+        if item["exact_ao_over_original_ratio"] is not None
+    ]
+
+    correctness_failure_ids_by_layout = {}
+    failed_ids_by_layout = {}
+    coordinate_states_by_layout = {}
+    unqualified_ids_by_layout = {}
+    successful_every_sweep_by_layout = {}
+    for layout in layouts:
+        all_results = [
+            result
+            for item in measured_rounds
+            for result in item["arms"][layout]["case_results"]
+        ]
+        correctness_failure_ids = {
+            result["case_id"]
+            for result in all_results
+            if result.get("correctness", {}).get("status") != "pass"
+        }
+        failed_ids = {
+            result["case_id"]
+            for result in all_results
+            if result.get("execution_state") != "completed"
+        }
+        unqualified_ids = {
+            result["case_id"]
+            for result in all_results
+            if not result.get("correctness", {}).get(
+                "independent_reference_pass", False
+            )
+        }
+        successful_every_sweep = set(original_plan.original_case_ids)
+        for item in measured_rounds:
+            successful_every_sweep.intersection_update(
+                result["case_id"]
+                for result in item["arms"][layout]["case_results"]
+                if result.get("execution_state") == "completed"
+                and result.get("status") == public_api.XTBLOOM_STATUS_SUCCESS
+                and result.get("scc_converged") == 1
+            )
+        correctness_failure_ids_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in correctness_failure_ids
+        ]
+        failed_ids_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in failed_ids
+        ]
+        ids_by_state = {
+            state: set()
+            for state in ("system-failure", "unavailable", "error", "not_run")
+        }
+        for result in all_results:
+            state = result.get("execution_state")
+            if state in ids_by_state:
+                ids_by_state[state].add(result["case_id"])
+        coordinate_states_by_layout[layout] = {
+            state: [
+                case_id
+                for case_id in original_plan.original_case_ids
+                if case_id in state_ids
+            ]
+            for state, state_ids in ids_by_state.items()
+        }
+        unqualified_ids_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in unqualified_ids
+        ]
+        successful_every_sweep_by_layout[layout] = [
+            case_id
+            for case_id in original_plan.original_case_ids
+            if case_id in successful_every_sweep
+        ]
+
+    measured_layout_equivalence_pass = all(
+        item["layout_equivalence"]["status"] == "pass" for item in measured_rounds
+    )
+    measured_branch_differences = [
+        {
+            "pair_round_id": item["pair_round_id"],
+            **difference,
+        }
+        for item in measured_rounds
+        for difference in item["layout_equivalence"]["branch_differences"]
+    ]
+    independent_reference_qualified = all(
+        not unqualified_ids_by_layout[layout] for layout in layouts
+    )
+    finite_output_status = (
+        "pass"
+        if all(
+            not correctness_failure_ids_by_layout[layout]
+            and not failed_ids_by_layout[layout]
+            for layout in layouts
+        )
+        else "fail"
+    )
+    correctness_status = (
+        "fail"
+        if finite_output_status == "fail"
+        else "pass"
+        if independent_reference_qualified
+        else "unqualified"
+    )
+    numerical_comparison_eligible = (
+        independent_reference_qualified
+        and not cleanup_errors
+        and correctness_status == "pass"
+        and measured_layout_equivalence_pass
+        and not measured_branch_differences
+        and all(item["numerical_comparison_eligible"] for item in paired_rounds)
+    )
+    claim_reasons = []
+    if not independent_reference_qualified:
+        claim_reasons.append(
+            "one or more layout results lack required independent references"
+        )
+    if cleanup_errors:
+        claim_reasons.append("one or more persistent owners failed during cleanup")
+    if any(
+        not item["numerical_comparison_eligible"]
+        for item in (*cold_rounds, *warmup_rounds)
+    ):
+        claim_reasons.append("cold or warmup qualification failed or was incomplete")
+    if not compute_options_match:
+        claim_reasons.append("initialized owner compute options differ or are missing")
+    if correctness_status != "pass":
+        if correctness_status == "fail":
+            claim_reasons.append("one or more measured system or oracle checks failed")
+        else:
+            claim_reasons.append(
+                "independent references are missing for one or more IDs"
+            )
+    if not measured_layout_equivalence_pass:
+        claim_reasons.append(
+            "paired layouts exceed or cannot establish existing tolerances"
+        )
+    if measured_branch_differences:
+        claim_reasons.append(
+            "layout-dependent status, convergence, or SCC iteration differences"
+        )
+    claim_reasons.append("selected-library producer/source binding is UNVERIFIED")
+
+    setup_failures = [
+        {
+            "layout": layout,
+            "case_ids": list(owner["batch"].case_ids),
+            "state": owner["setup_state"],
+            "error": owner["setup_error"],
+        }
+        for layout in layouts
+        for owner in owners_by_layout[layout]
+        if owner["adapter"] is None
+    ]
+    execution_states = {
+        result.get("execution_state")
+        for item in paired_rounds
+        for layout in layouts
+        for result in item["arms"][layout]["case_results"]
+    }
+    if (
+        cleanup_errors
+        or any(item["state"] == "error" for item in setup_failures)
+        or "error" in execution_states
+        or ("not_run" in execution_states and not setup_failures)
+    ):
+        availability = "error"
+    elif setup_failures or "unavailable" in execution_states:
+        availability = "unavailable"
+    else:
+        availability = "available"
+
+    snapshot_entries = [
+        snapshot
+        for item in paired_rounds
+        for layout in layouts
+        for snapshot in item["arms"][layout]["memory_snapshots"]
+        if "snapshot" in snapshot
+    ]
+    row.update(
+        {
+            "availability": availability,
+            "pair_status": "complete" if not setup_failures else "partial",
+            "planning_ms": sum(planning_ms_by_layout.values()),
+            "planning_ms_by_layout": planning_ms_by_layout,
+            "setup_ms": sum(setup_ms_by_layout.values()),
+            "setup_ms_by_layout": setup_ms_by_layout,
+            "layouts": {
+                layout: finite_pair_plan_metadata(plans[layout]) for layout in layouts
+            },
+            "plan_sha256_by_layout": {
+                layout: plans[layout].plan_sha256 for layout in layouts
+            },
+            "owner_setup_order": setup_order,
+            "owner_setup_failures": setup_failures,
+            "owner_engine_options": {
+                layout: [
+                    {
+                        "case_ids": list(owner["batch"].case_ids),
+                        "setup_state": owner["setup_state"],
+                        "engine_options": owner["engine_options"],
+                    }
+                    for owner in owners_by_layout[layout]
+                ]
+                for layout in layouts
+            },
+            "compute_options_match": compute_options_match,
+            "owner_lifecycle": (
+                "both layout owner sets remain resident together for every round; "
+                "one owner is created per planned batch and none are recreated "
+                "per sample"
+            ),
+            "paired_rounds": paired_rounds,
+            "paired_timing": {
+                "layout_samples": layout_timing,
+                "measured_pair_samples": paired_samples,
+                "paired_one_shot_total_ms": (
+                    sum(planning_ms_by_layout.values())
+                    + sum(setup_ms_by_layout.values())
+                    + sum(
+                        item["arms"][layout]["timing"]["end_to_end_ms"]
+                        for item in cold_rounds
+                        for layout in layouts
+                        if item["arms"][layout]["timing"]["end_to_end_ms"] is not None
+                    )
+                    if all(
+                        item["arms"][layout]["timing"]["end_to_end_ms"] is not None
+                        for item in cold_rounds
+                        for layout in layouts
+                    )
+                    else None
+                ),
+                "measured_round_count": len(measured_rounds),
+                "requested_round_count": len(paired_rounds),
+                "paired_ratio_median": (
+                    statistics.median(paired_ratios) if paired_ratios else None
+                ),
+                "paired_numeric_round_count": len(measured_numeric_rounds),
+                "scope": (
+                    "each arm E2E includes its synchronous strict-FRESH compute, "
+                    "result download, per-system publication, memory sampling, and "
+                    "canonical scatter; persistent owner setup and planning are "
+                    "reported separately and amortized explicitly; cleanup and "
+                    "oracle comparisons are outside E2E"
+                ),
+                "round_policy": (
+                    "cold is original then exact-AO; each subsequent warmup and "
+                    "measured pair alternates AB/BA continuously; all requested "
+                    "rounds, including failed coordinates, remain in paired_rounds"
+                ),
+            },
+            "memory": {
+                "host_rss_before_setup_bytes": rss_before,
+                "host_peak_rss_bytes": max(
+                    (
+                        snapshot["snapshot"]["host_process_hwm_bytes"]
+                        for snapshot in snapshot_entries
+                        if snapshot["snapshot"].get("host_process_hwm_bytes")
+                        is not None
+                    ),
+                    default=process_hwm_bytes(),
+                ),
+                "snapshot_count": len(snapshot_entries),
+                "snapshots_location": (
+                    "paired_rounds[*].arms[*].memory_snapshots; snapshots are taken "
+                    "while both layout owner sets remain alive"
+                ),
+                "device_memory_scope": (
+                    "cudaMemGetInfo device-global samples when CUDA is selected"
+                ),
+            },
+            "correctness": {
+                "status": correctness_status,
+                "finite_output_status": finite_output_status,
+                "reference": "per-ID committed independent oracle where available",
+                "sweep_count": len(measured_rounds),
+                "successful_system_ids_by_layout": successful_every_sweep_by_layout,
+                "failed_system_ids_by_layout": failed_ids_by_layout,
+                "correctness_failure_ids_by_layout": correctness_failure_ids_by_layout,
+                "coordinate_states_by_layout": coordinate_states_by_layout,
+                "unqualified_reference_ids_by_layout": unqualified_ids_by_layout,
+                "layout_equivalence_status": (
+                    "pass" if measured_layout_equivalence_pass else "fail"
+                ),
+                "layout_equivalence_is_scientific_qualification": False,
+            },
+            "independent_reference_qualified": independent_reference_qualified,
+            "numerical_comparison_eligible": numerical_comparison_eligible,
+            "claim_eligible": False,
+            "producer_provenance": {
+                "status": "UNVERIFIED",
+                "selected_library_source_binding": "NOT_ESTABLISHED",
+                "scope": (
+                    "archival source/library hashes do not verify producer identity; "
+                    "clean or dirty runner states remain diagnostic until an "
+                    "admissible exact-binary provenance contract is implemented"
+                ),
+            },
+            "claim_ineligibility_reasons": claim_reasons,
+            "branch_differences": measured_branch_differences,
+            "cleanup_errors": cleanup_errors,
+        }
+    )
+    if availability == "error":
+        row["error"] = next(
+            (
+                item["error"]
+                for item in setup_failures
+                if item["state"] == "error" and item["error"]
+            ),
+            cleanup_errors[0]["error"]
+            if cleanup_errors
+            else "paired arm execution failed",
+        )
+    elif availability == "unavailable":
+        row["unavailable_reason"] = next(
+            (
+                item["error"]
+                for item in setup_failures
+                if item["state"] == "unavailable" and item["error"]
+            ),
+            "one or more paired layout coordinates were unavailable",
+        )
     return row
 
 
@@ -2235,6 +3333,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
 
     Frozen rows export JSON booleans so CSV-only consumers can distinguish
     independent science checks from the still-incomplete adoption protocol.
+    Other rows keep their raw boolean/empty fields even in mixed CSV files.
     """
     fields = [
         "engine",
@@ -2270,15 +3369,20 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "end_to_end_median_ms",
         "end_to_end_samples_ms",
         "one_shot_total_ms",
+        "paired_original_end_to_end_median_ms",
+        "paired_exact_ao_end_to_end_median_ms",
+        "paired_ratio_median",
+        "paired_rounds_json",
+        "paired_plan_sha256_json",
+        "independent_reference_qualified",
+        "claim_eligible",
     ]
     convergence_fields = (
         "planning_inclusive_end_to_end_median_ms",
         "convergence_binding_json",
         "risk_band_by_case_id_json",
         "input_snapshot_release_ms",
-        "claim_eligible",
         "claim_eligibility_scope",
-        "independent_reference_qualified",
     )
     include_convergence = any(
         row.get("convergence_binding") is not None for row in rows
@@ -2364,15 +3468,77 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     allow_nan=False,
                     sort_keys=True,
                 ),
-                "claim_eligible": json.dumps(row.get("claim_eligible")),
+                "claim_eligible": row.get("claim_eligible"),
                 "claim_eligibility_scope": row.get("claim_eligibility_scope"),
-                "independent_reference_qualified": json.dumps(
-                    row.get("independent_reference_qualified")
+                "independent_reference_qualified": row.get(
+                    "independent_reference_qualified"
                 ),
             }
+            if row.get("convergence_binding") is not None:
+                for field in ("claim_eligible", "independent_reference_qualified"):
+                    record[field] = json.dumps(record[field])
             if not include_convergence:
                 for field in convergence_fields:
                     del record[field]
+            paired_timing = row.get("paired_timing", {})
+            paired_layouts = paired_timing.get("layout_samples", {})
+            paired_rounds = row.get("paired_rounds", [])
+            record.update(
+                {
+                    "paired_original_end_to_end_median_ms": (
+                        paired_layouts.get("original", {})
+                        .get("measured_end_to_end", {})
+                        .get("median_ms")
+                    ),
+                    "paired_exact_ao_end_to_end_median_ms": (
+                        paired_layouts.get("exact-ao", {})
+                        .get("measured_end_to_end", {})
+                        .get("median_ms")
+                    ),
+                    "paired_ratio_median": paired_timing.get("paired_ratio_median"),
+                    "paired_rounds_json": json.dumps(
+                        json_safe_value(
+                            [
+                                {
+                                    "pair_round_id": item["pair_round_id"],
+                                    "phase": item["phase"],
+                                    "phase_index": item["phase_index"],
+                                    "execution_order": item["execution_order"],
+                                    "end_to_end_ms": {
+                                        layout: item["arms"][layout]["timing"].get(
+                                            "end_to_end_ms"
+                                        )
+                                        for layout in ("original", "exact-ao")
+                                    },
+                                    "timing": {
+                                        layout: item["arms"][layout]["timing"]
+                                        for layout in ("original", "exact-ao")
+                                    },
+                                    "layout_equivalence_status": item[
+                                        "layout_equivalence"
+                                    ]["status"],
+                                    "branch_differences": item["layout_equivalence"][
+                                        "branch_differences"
+                                    ],
+                                    "performance_comparison_eligible": item[
+                                        "performance_comparison_eligible"
+                                    ],
+                                    "numerical_comparison_eligible": item[
+                                        "numerical_comparison_eligible"
+                                    ],
+                                }
+                                for item in paired_rounds
+                            ]
+                        ),
+                        allow_nan=False,
+                    ),
+                    "paired_plan_sha256_json": json.dumps(
+                        json_safe_value(row.get("plan_sha256_by_layout")),
+                        allow_nan=False,
+                        sort_keys=True,
+                    ),
+                }
+            )
             writer.writerow(record)
     temporary.replace(path)
 
@@ -2435,9 +3601,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ao-grouping",
-        choices=("original", "exact-ao", "ao-risk"),
+        choices=("original", "exact-ao", "ao-risk", "paired"),
         default="original",
-        help="finite-list strategy; exact-ao is opt-in and original remains default",
+        help=(
+            "finite-list layout; original is the default, exact-ao runs one "
+            "grouped layout, paired interleaves original with exact-ao, and "
+            "ao-risk requires a separately pinned input-only convergence plan"
+        ),
     )
     parser.add_argument(
         "--convergence-manifest",
@@ -2574,6 +3744,12 @@ def validate_args(args: argparse.Namespace) -> None:
         getattr(args, "convergence_cohort_sha256", None),
     )
     convergence_requested = any(value is not None for value in convergence_inputs)
+    if args.ao_grouping == "paired" and (
+        convergence_requested or getattr(args, "convergence_partition", "all") != "all"
+    ):
+        raise BenchmarkError(
+            "paired mode is AO-only and cannot use convergence inputs or partitions"
+        )
     if convergence_requested and not all(
         value is not None for value in convergence_inputs
     ):
@@ -2610,6 +3786,10 @@ def validate_args(args: argparse.Namespace) -> None:
             )
         if args.backends == ("cuda",) and args.cuda_memory_modes != ("host",):
             raise BenchmarkError("finite-list CUDA grouping requires host descriptors")
+        if args.ao_grouping == "paired" and args.cuda_memory_modes != ("host",):
+            raise BenchmarkError(
+                "paired finite-list grouping requires --cuda-memory-modes host"
+            )
 
 
 def read_case_id_file(path: Path) -> tuple[str, ...]:
@@ -2632,6 +3812,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.case_ids = read_case_id_file(args.case_ids_file)
         validate_args(args)
         manifest = conformance.load_json(args.manifest)
+        if (
+            args.ao_grouping == "paired"
+            and public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB
+        ):
+            raise BenchmarkError("paired exact-AO grouping requires a GFN2 manifest")
         manifest_cases = conformance.selected_cases(manifest, None)
         cases: dict[str, dict[str, Any]] = {}
         for case in manifest_cases:
@@ -2652,24 +3837,55 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.case_ids is not None:
             for property_name in args.properties:
                 for batch_cap in args.batch_sizes:
-                    plan, planning_ms = finite_case_plan(
-                        args, manifest, cases, args.case_ids, batch_cap
-                    )
-                    print(  # noqa: T201 - preserve benchmark CLI progress output
-                        "RUN xtbloom "
-                        f"{args.backends[0]}/host finite-list {plan.strategy} "
-                        f"{property_name} cap={batch_cap} systems={len(args.case_ids)}",
-                        flush=True,
-                    )
-                    row = benchmark_finite_xtbloom_cell(
-                        args,
-                        manifest,
-                        cases,
-                        plan,
-                        planning_ms,
-                        property_name,
-                    )
-                    finish_frozen_run(args, row)
+                    if args.ao_grouping == "paired":
+                        plans = {}
+                        planning_ms_by_layout = {}
+                        for strategy in ("original", "exact-ao"):
+                            plan, planning_ms = finite_case_plan(
+                                args,
+                                manifest,
+                                cases,
+                                args.case_ids,
+                                batch_cap,
+                                strategy=strategy,
+                            )
+                            plans[strategy] = plan
+                            planning_ms_by_layout[strategy] = planning_ms
+                        print(  # noqa: T201 - preserve benchmark CLI progress output
+                            "RUN xtbloom "
+                            f"{args.backends[0]}/host finite-list paired "
+                            f"{property_name} cap={batch_cap} "
+                            f"systems={len(args.case_ids)}",
+                            flush=True,
+                        )
+                        row = benchmark_finite_xtbloom_pair(
+                            args,
+                            manifest,
+                            cases,
+                            plans,
+                            planning_ms_by_layout,
+                            property_name,
+                        )
+                    else:
+                        plan, planning_ms = finite_case_plan(
+                            args, manifest, cases, args.case_ids, batch_cap
+                        )
+                        print(  # noqa: T201 - preserve benchmark CLI progress output
+                            "RUN xtbloom "
+                            f"{args.backends[0]}/host finite-list {plan.strategy} "
+                            f"{property_name} cap={batch_cap} "
+                            f"systems={len(args.case_ids)}",
+                            flush=True,
+                        )
+                        row = benchmark_finite_xtbloom_cell(
+                            args,
+                            manifest,
+                            cases,
+                            plan,
+                            planning_ms,
+                            property_name,
+                        )
+                        finish_frozen_run(args, row)
                     rows.append(row)
                     print(  # noqa: T201 - preserve benchmark CLI progress output
                         f"  {row['availability']}", flush=True

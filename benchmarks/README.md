@@ -23,11 +23,17 @@ their numbers or thresholds.
 
 ## Finite-list exact-AO grouping
 
-`run.py` also has an explicit finite-list path for comparing the existing
-input order with deterministic exact-AO grouping. The default matrix and the
-finite-list `original` strategy retain input order. `exact-ao` is opt-in and is
-limited to xTBloom CPU host or CUDA host descriptors with strict FRESH SCC
-starts. CUDA execution must use the local GPU scheduler where required.
+`run.py` also has an explicit finite-list path for deterministic exact-AO
+grouping. The default matrix and the finite-list `original` strategy retain
+input order. `exact-ao` runs one grouped layout; `paired` is the opt-in
+original-versus-exact-AO comparison. Paired mode is limited to xTBloom CPU
+host or CUDA host descriptors with strict FRESH SCC starts. It creates both
+layout owner sets once, keeps them alive together, and never reconstructs
+contexts per sample. CUDA execution must use the local GPU scheduler where
+required.
+Paired mode is AO-only: convergence inputs and calibration/holdout partition
+flags are rejected before workload or native-library setup. The separately
+pinned input-only convergence prototype remains a single-layout experiment.
 Every case ID must occur once in the selected manifest; duplicate IDs are
 rejected before planning.
 
@@ -42,21 +48,35 @@ the resulting batch/index mapping. Spin metadata remains attached to each
 whole system; it is not a grouping key, and no SCC result or convergence
 outcome is read while planning.
 
-For each property, cap, and measured sweep, the runner reports planning,
-per-batch input/context/descriptor preparation, synchronous compute (including
-the CUDA completion boundary when applicable), result publication, canonical
-scatter, end-to-end time, and host/device memory while the batch context is
-alive. Independent-oracle comparisons are outside end-to-end timing and are
-reported separately. Each sweep creates and destroys one batch context at a
-time, so preparation remains inside every end-to-end sample. The one-shot
-total adds planning to the first end-to-end sweep. The reusable-plan estimate adds
-`planning_ms / measured_reuses` to the mean sweep time and is valid only while
-ordered case IDs, input bytes, the GFN2 parameter hash, and batch cap remain
-unchanged. JSON retains full per-ID energies, requested forces, charges,
-iterations, convergence, status, correctness, and NaN slices in original
-input order. It also retains per-measured-sweep per-ID status, convergence,
-iteration counts, and correctness summaries; the row-level correctness status
-fails if any measured sweep fails, even when the final sweep passes.
+Each property and cap reports planning and one-time owner setup separately,
+then per-round synchronous compute, result download, per-system publication,
+canonical scatter, end-to-end time, and host/device memory. Paired mode runs
+one cold pair, the requested warmup pairs, then every measured pair. Order
+starts original/exact-AO and alternates AB/BA continuously across all phases.
+Both layout owner sets remain resident for every round, and memory snapshots
+state that shared residency. End-to-end excludes planning, one-time setup,
+correctness comparisons, and final owner cleanup; one-shot totals and
+plan/setup amortization are reported separately with their denominators.
+Every requested round retains full per-original-ID E/F/q, SCC iterations,
+convergence, status, correctness, and raw NaN slices. Failed, unavailable, and
+not-run coordinates remain explicit. Pairwise layout comparison uses the
+manifest's existing absolute tolerances, records discrete branch differences,
+and never counts as independent scientific qualification. Missing independent
+references therefore keep `claim_eligible` false even when layouts agree.
+Qualification also requires every cold, warmup, and measured phase to pass;
+later successful calls do not erase an earlier failure. Memory observations
+are process-lifetime host high-water marks and device-global samples, not
+per-layout or per-owner device peaks. Initialized compute options are captured
+once per owner outside sweep timing and must match across both layouts.
+`numerical_comparison_eligible` is only the numerical/protocol gate;
+`claim_eligible` and performance-eligibility flags remain false because the
+selected library's exact clean producer/source binding is `UNVERIFIED`.
+Source and library hashes alone do not establish that association, even for a
+clean runner. This mode therefore reports diagnostic evidence, not an adopted
+performance claim.
+
+The existing `original` and `exact-ao` single-layout modes remain available
+for diagnostic runs. They do not provide interleaved paired evidence.
 
 The JSON reporter emits strict JSON. NaN and infinities use tagged objects,
 for example `{"__xtbloom_nonfinite_float__":"NaN"}`, which
@@ -78,18 +98,18 @@ srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
   --manifest /absolute/path/to/manifest.json \
   --case-ids-file /absolute/path/to/case-ids.txt \
   --engines xtbloom --backends cuda --cuda-memory-modes host \
-  --ao-grouping exact-ao --batch-sizes 64,256 \
+  --ao-grouping paired --batch-sizes 64,256 \
   --properties energy,force --warmups 2 --repetitions 5 \
   --output-json build/benchmarks/ao-exact.json \
   --output-csv build/benchmarks/ao-exact.csv \
   --fail-on-correctness --require-available'
 ```
 
-Run the same command with `--ao-grouping original` and distinct output paths
-for the baseline. Keep the case-ID file, manifest, library, CUDA host mode,
-strict-FRESH defaults, warmups, repetitions, and caps identical when comparing
-the two reports. The runner does not claim a speedup from planner output alone;
-real-GPU interleaved measurements and per-ID scientific review remain required.
+This command produces one interleaved comparison row for each property and
+cap. JSON keeps full per-round outputs and pairing order; CSV carries the round
+schedule, timing pairs, plan hashes, and qualification flags. Original input
+manifest identity and independent scientific references remain separate
+acceptance gates: paired equality alone cannot satisfy either gate.
 
 For a local CPU smoke check, run both strategies against the same built
 library and finite case list. Ensure the configured LP64 linear-algebra

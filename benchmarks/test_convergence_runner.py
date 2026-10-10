@@ -237,6 +237,48 @@ class FrozenRunnerTests(unittest.TestCase):
             self.assertEqual(plan.strategy, strategy)
             self.assertEqual(plan.risk_bands_by_case_id, ())
 
+    def test_strategy_override_preserves_frozen_and_unbound_baselines(self) -> None:
+        """Use explicit AO-only arms without mutating the selected CLI strategy."""
+        for freeze_path in (self.freeze_path, None):
+            self.args.convergence_plan = freeze_path
+            for strategy in ("original", "exact-ao"):
+                with (
+                    self.subTest(frozen=freeze_path is not None, strategy=strategy),
+                    mock.patch.object(
+                        convergence_grouping,
+                        "annotate_scheduling_inputs",
+                        side_effect=AssertionError("candidate-only"),
+                    ),
+                ):
+                    plan, _ = run.finite_case_plan(
+                        self.args,
+                        self.manifest,
+                        self.cases,
+                        ("a", "b", "c", "d"),
+                        2,
+                        strategy=strategy,
+                    )
+                    self.assertEqual(plan.strategy, strategy)
+                    self.assertEqual(plan.risk_bands_by_case_id, ())
+                    self.assertEqual(self.args.ao_grouping, "ao-risk")
+                    counts = (
+                        dict(plan.ao_counts_by_case_id)
+                        if strategy == "exact-ao"
+                        else None
+                    )
+                    expected = ao_grouping.make_plan(
+                        ("a", "b", "c", "d"), 2, strategy, counts, plan.basis_sha256
+                    )
+                    self.assertEqual(plan.plan_sha256, expected.plan_sha256)
+                    self.assertEqual(
+                        self.args.finite_convergence_binding is not None,
+                        freeze_path is not None,
+                    )
+                    self.assertEqual(
+                        getattr(self.args, "finite_frozen_workload", None) is not None,
+                        freeze_path is not None,
+                    )
+
     def test_frozen_original_keeps_its_legacy_hash_and_csv_columns(self) -> None:
         """Keep new binding opt-in without changing the original permutation hash."""
         self.args.ao_grouping = "original"
@@ -261,9 +303,70 @@ class FrozenRunnerTests(unittest.TestCase):
             fields = next(csv.reader(handle))
         self.assertNotIn("convergence_binding_json", fields)
         self.assertNotIn("planning_inclusive_end_to_end_median_ms", fields)
-        self.assertNotIn("claim_eligible", fields)
         self.assertNotIn("claim_eligibility_scope", fields)
-        self.assertNotIn("independent_reference_qualified", fields)
+        self.assertEqual(fields.count("claim_eligible"), 1)
+        self.assertEqual(fields.count("independent_reference_qualified"), 1)
+
+    def test_mixed_csv_preserves_unique_paired_and_frozen_columns(self) -> None:
+        """Keep JSON freeze flags, raw pair flags and incomplete stage telemetry."""
+        base = run.base_row(
+            run.Cell("xtbloom", "cpu", "host", "gas", "energy", 1, ("a",))
+        )
+        base["availability"] = "available"
+        timing = {"end_to_end_ms": None, "complete": False, "attempted_call_count": 1}
+        pair_round = {
+            "pair_round_id": 0,
+            "phase": "cold",
+            "phase_index": 0,
+            "execution_order": ["original", "exact-ao"],
+            "arms": {layout: {"timing": timing} for layout in ("original", "exact-ao")},
+            "layout_equivalence": {"status": "unqualified", "branch_differences": []},
+            "performance_comparison_eligible": False,
+            "numerical_comparison_eligible": False,
+        }
+        paired = dict(
+            base,
+            ao_grouping="paired",
+            paired_rounds=[pair_round],
+            plan_sha256_by_layout={"original": "original-pin", "exact-ao": "ao-pin"},
+            claim_eligible=False,
+            independent_reference_qualified=False,
+        )
+        frozen = dict(
+            base,
+            convergence_binding={"freeze_plan_sha256": "freeze-pin"},
+            risk_band_by_case_id={"a": "high"},
+            claim_eligible=False,
+            independent_reference_qualified=True,
+        )
+        csv_path = self.root / "mixed.csv"
+        run.write_csv(csv_path, [base, paired, frozen])
+        with csv_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            records = list(reader)
+            self.assertEqual(len(reader.fieldnames), len(set(reader.fieldnames)))
+        self.assertEqual(records[0]["claim_eligible"], "")
+        self.assertEqual(records[0]["independent_reference_qualified"], "")
+        self.assertEqual(records[1]["claim_eligible"], "False")
+        self.assertEqual(records[1]["independent_reference_qualified"], "False")
+        exported_round = json.loads(records[1]["paired_rounds_json"])[0]
+        self.assertEqual(exported_round["timing"]["original"], timing)
+        self.assertIsNone(exported_round["end_to_end_ms"]["original"])
+        self.assertEqual(
+            exported_round["execution_order"], pair_round["execution_order"]
+        )
+        self.assertFalse(exported_round["performance_comparison_eligible"])
+        self.assertFalse(exported_round["numerical_comparison_eligible"])
+        self.assertEqual(
+            json.loads(records[1]["paired_plan_sha256_json"]),
+            paired["plan_sha256_by_layout"],
+        )
+        self.assertEqual(
+            json.loads(records[2]["convergence_binding_json"]),
+            frozen["convergence_binding"],
+        )
+        self.assertIs(json.loads(records[2]["claim_eligible"]), False)
+        self.assertIs(json.loads(records[2]["independent_reference_qualified"]), True)
 
     def test_finite_row_restores_failures_and_retains_binding_in_csv(self) -> None:
         """Publish all failed slices and keep planning-inclusive provenance."""
@@ -493,6 +596,47 @@ class FrozenRunnerTests(unittest.TestCase):
 
 class ConvergenceCLITests(unittest.TestCase):
     """Keep the prototype opt-in and direct/module entry points consistent."""
+
+    def test_paired_rejects_every_convergence_input_before_setup(self) -> None:
+        """AO-only pairing must not read a freeze, native library or workload."""
+        base = [
+            "--library",
+            "/tmp/mock-library.so",
+            "--engines",
+            "xtbloom",
+            "--backends",
+            "cpu",
+            "--cuda-memory-modes",
+            "host",
+            "--case-ids",
+            "a",
+            "--ao-grouping",
+            "paired",
+        ]
+        for flag, value in (
+            ("--convergence-manifest", "/tmp/scheduling.json"),
+            ("--convergence-plan", "/tmp/freeze.json"),
+            ("--convergence-freeze-sha256", "a" * 64),
+            ("--convergence-workload-sha256", "b" * 64),
+            ("--convergence-cohort-sha256", "c" * 64),
+            ("--convergence-partition", "calibration"),
+            ("--convergence-partition", "holdout"),
+        ):
+            with (
+                self.subTest(flag=flag, value=value),
+                mock.patch.object(run.conformance, "load_json") as load,
+                mock.patch.object(run, "XTBloomAdapter") as adapter,
+                mock.patch("sys.stderr"),
+            ):
+                self.assertEqual(run.main([*base, flag, value]), 1)
+                load.assert_not_called()
+                adapter.assert_not_called()
+                with self.assertRaisesRegex(
+                    run.BenchmarkError, "paired mode is AO-only"
+                ):
+                    run.validate_args(
+                        run.build_parser().parse_args([*base, flag, value])
+                    )
 
     def test_freeze_flags_are_complete_and_finite_list_only(self) -> None:
         """Reject partial identities and implicit finite-list experiments."""
