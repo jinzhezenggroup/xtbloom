@@ -3678,7 +3678,11 @@ if(XTBLOOM_BUILD_TESTS)
       add_test(NAME xtbloom.cuda.scc_spin_frozen_replay
         COMMAND xtbloom_cuda_scc_iteration_production_test --spin-frozen-replay
       )
-      set_tests_properties(xtbloom.cuda.scc_spin_frozen_replay PROPERTIES
+      add_test(NAME xtbloom.cuda.scc_spin_two_origin_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-two-origin-replay
+      )
+      set_tests_properties(xtbloom.cuda.scc_spin_frozen_replay
+        xtbloom.cuda.scc_spin_two_origin_replay PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1;MKL_NUM_THREADS=1"
         SKIP_RETURN_CODE 77
       )

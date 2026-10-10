@@ -144,6 +144,67 @@ CPU.
 
 ## Status and interpretation
 
+### Actual Two-Origin Checkpoint Control
+
+The opt-in `--spin-two-origin-replay [new-output-directory]` mode captures
+independently evolved CPU and CUDA pre-states after exactly 19 transitions,
+then replays transition 20 from each origin through both backends. Transition
+20 is a hindsight-selected diagnostic coordinate from the earlier threshold
+crossing, not a searched-for passing point or a prospective holdout.
+
+The typed snapshots retain separate SCC q/d/Q and mixer current/previous
+inputs, previous residuals, full df/u/omega histories, residual diagnostics,
+counters, statuses, and terminal flags. They also retain wavefunction,
+Hamiltonian, raw/publication, and energy outputs. Every mapped field is
+restored and checked byte-for-byte before replay; descriptors and allocation
+ownership never move between backends. CPU-specific unpublished scratch is
+restored from the compatible host checkpoint, while CUDA's arena is restored
+on its original device allocations.
+
+CPU `mixer.converged` contains terminal SCC convergence, whereas CUDA
+`mixer.residual_converged` is residual-only. The bridge derives the CPU
+residual-only diagnostic from the real RMS/maximum thresholds, without
+substituting a terminal flag. CUDA's separate SCC RMS has no separate CPU
+storage slot: a test-owned proxy preserves it during import, and fresh CPU
+post-state comparisons derive that diagnostic from actual CPU mixer RMS.
+CPU private next-round q/d/Q maps to the corresponding slices of
+`mixer.current_inputs`, not its published wavefunction. The mapper requires
+the single-system field-major layout, including both spin channels within
+each field. Published multipoles must equal SCC inputs byte-for-byte at the
+active pre-transition coordinate, while using distinct storage. Terminal
+publications can be raw and are not interchangeable with private next inputs.
+Eigenvector coefficients are restored exactly, but post-state
+comparison uses the existing sign/degenerate-subspace-aware comparator.
+
+The output directory is created once and must not already exist. Binary
+little-endian snapshots and their stdout dtype/count ledger include the real
+input geometry and all six pre/post snapshots. The two origins must differ
+in at least one transition-relevant input/history field. Both origins are
+attempted even when a numerical comparison fails; an invalid restoration or
+launch stops rather than executing a misleading control. The mode reports
+full post-state/history errors and literal pass/fail at the existing field
+tolerances. A no-driver invocation returns 77, and CTest registers
+`xtbloom.cuda.scc_spin_two_origin_replay` only with a production LP64 provider.
+
+Validate the complete saved stdout and snapshot directory without running a
+model:
+
+```bash
+python3 tools/oracle/check_spin_two_origin_replay.py captured-replay.stdout saved-snapshots
+```
+
+The directory must match the location recorded by the native invocation.
+The checker requires all 294 input/state files and independently recomputes
+each typed field comparison at the frozen limits. It treats the native gauge
+record as a comparator assertion, not an independently evaluated eigenspace.
+Exit 0 means complete diagnostic agreement, exit 1 retains a complete
+numerical failure, and exit 2 rejects malformed or incomplete evidence.
+
+Compilation, snapshots, or replay agreement alone do not resolve the original
+unchanged-setting public E/F/q mismatch. These scalar-Mulliken, SCC-only
+controls do not independently validate a public stationary solution, establish
+a basin boundary, or authorize a new solution-selection policy.
+
 This draft documents branch-sensitivity evidence; it does not fix the original
 public mismatch. A robust policy shared by both backends for SCC convergence
 and stability still needs design and independent validation. Rounding values
