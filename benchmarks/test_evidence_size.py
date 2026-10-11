@@ -176,10 +176,12 @@ class EvidenceSizePolicyUnitTests(unittest.TestCase):
             ),
         ]
         for index_output, expected in scenarios:
-            with self.subTest(index_output=index_output):
-                with mock.patch.object(checker, "_run_git", return_value=index_output):
-                    with self.assertRaisesRegex(checker.EvidencePolicyError, expected):
-                        checker.indexed_evidence(Path("repository"))
+            with (
+                self.subTest(index_output=index_output),
+                mock.patch.object(checker, "_run_git", return_value=index_output),
+                self.assertRaisesRegex(checker.EvidencePolicyError, expected),
+            ):
+                checker.indexed_evidence(Path("repository"))
 
     def test_indexed_evidence_rejects_invalid_cat_file_records(self) -> None:
         """Only well-formed blob metadata can supply staged evidence sizes."""
