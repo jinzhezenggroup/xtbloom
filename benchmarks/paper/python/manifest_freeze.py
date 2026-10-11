@@ -204,7 +204,18 @@ def inventory(items: list[Any]) -> dict[str, Any]:
 def validate_selected_contract(name: str, items: list[Any]) -> None:
     for item in items:
         if item.system is None:
-            continue
+            raise FreezeError(f"{name}/{item.system_id} is malformed")
+        allowed_subsets = (
+            {"main", "stress", "performance"}
+            if name == "omol25"
+            else {"performance"}
+            if name == "qm9_performance"
+            else {"main"}
+        )
+        if item.subset not in allowed_subsets:
+            raise FreezeError(
+                f"{name}/{item.system_id} has unexpected subset {item.subset!r}"
+            )
         row = item.system.manifest
         probability_text = row.get("sampling_probability") or item.system.strata.get(
             "sampling_probability"

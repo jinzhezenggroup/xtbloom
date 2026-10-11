@@ -15,6 +15,14 @@ class FiniteDifferenceError(RuntimeError):
     pass
 
 
+def verify_input_hash(system_id: str, frozen_row: dict[str, Any], system: Any) -> None:
+    if (
+        not frozen_row.get("input_sha256")
+        or frozen_row["input_sha256"] != system.input_sha256
+    ):
+        raise FiniteDifferenceError(f"input hash mismatch for {system_id}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
@@ -111,11 +119,7 @@ def main() -> int:
     ) as context:
         for system_id, frozen_row in sorted(chosen.items()):
             system = loaded[system_id]
-            if (
-                frozen_row.get("input_sha256")
-                and frozen_row["input_sha256"] != system.input_sha256
-            ):
-                raise FiniteDifferenceError(f"input hash mismatch for {system_id}")
+            verify_input_hash(system_id, frozen_row, system)
             base = compute(context, structure(system), flags)
             base_forces = np.asarray(base.forces).reshape((-1, 3))
             original = np.asarray(system.positions_bohr, dtype=float)

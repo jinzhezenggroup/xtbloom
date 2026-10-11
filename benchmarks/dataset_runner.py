@@ -834,7 +834,9 @@ def _program_document(
     return document
 
 
-def _status_category(native_status: int, converged: int) -> str:
+def _status_category(native_status: int, converged: int | None) -> str:
+    if native_status == 0 and converged is None:
+        return "unknown_error"
     if native_status == 0 and converged == 1:
         return "success"
     if native_status == 7 or (native_status == 0 and converged != 1):
@@ -1018,11 +1020,19 @@ def _records_from_outputs(
             status_name = None
         else:
             native = int(statuses[local_index])
-            converged = int(converged_values[local_index])
+            converged = (
+                int(converged_values[local_index])
+                if converged_values is not None
+                else None
+            )
             category = _status_category(native, converged)
             status_name = STATUS_NAMES.get(native, "unknown")
             native_status = _available({"code": native, "name": status_name})
-            convergence = _available(bool(converged))
+            convergence = (
+                _available(bool(converged))
+                if converged is not None
+                else _unavailable(f"{engine} adapter does not expose SCC convergence")
+            )
         failure_reason = (
             f"engine status is {status_name or category}"
             if category != "success"

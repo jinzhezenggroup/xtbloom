@@ -18,6 +18,6 @@ paper_run_python "$ROOT/python/failure_peer_probe.py" --repo "$PAPER_REPO_ROOT" 
   --manifest "$PAPER_OMOL25_MANIFEST" \
   --source-results "$PAPER_DATA_ROOT/$PAPER_RUN_ID/p0b-dataset-cpu/raw/omol25-main,stress/results.jsonl" \
   --library "$PAPER_CPU_LIBRARY" --backend cpu --memory-mode host --cpu-threads 1 \
-  --max-scc-iterations "$PAPER_MAX_SCC_ITERATIONS" --atol "$PAPER_PEER_UNCHANGED_ATOL" \
+  --max-scc-iterations "$PAPER_MAX_SCC_ITERATIONS" --electronic-temperature-kelvin "$PAPER_ELECTRONIC_TEMPERATURE_K" --atol "$PAPER_PEER_UNCHANGED_ATOL" \
   --output "$PAPER_OUTPUT_DIR/derived/real-peer.json"
 paper_finish

@@ -73,7 +73,7 @@ fi
 # shellcheck disable=SC1090
 source "$CONFIG"
 : "${PAPER_RUN_ID:?}" "${PAPER_REPO_ROOT:?}" "${PAPER_DATA_ROOT:?}"
-[[ "$PAPER_RUN_ID" =~ ^[A-Za-z0-9._-]+$ ]] || { echo 'unsafe PAPER_RUN_ID' >&2; exit 2; }
+[[ "$PAPER_RUN_ID" =~ ^[A-Za-z0-9._-]+$ && "$PAPER_RUN_ID" != . && "$PAPER_RUN_ID" != .. ]] || { echo 'unsafe PAPER_RUN_ID' >&2; exit 2; }
 [[ "$PAPER_REPO_ROOT" = /* && "$PAPER_DATA_ROOT" = /* ]] || {
   echo 'repository and data roots must be absolute' >&2
   exit 2

@@ -24,6 +24,9 @@ def main() -> int:
                 for row in document.get("rows", [])
                 if row.get("suite") == "gpu-crossover"
                 and row.get("availability") == "available"
+                and row.get("claim_eligible") is True
+                and row.get("correctness", {}).get("performance_claim_eligible") is True
+                and row.get("memory", {}).get("status") == "available"
                 and row.get("engine") == "xtbloom-ragged"
                 and row.get("backend") == "cuda"
                 and row.get("memory_mode") == "device"

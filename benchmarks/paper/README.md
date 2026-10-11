@@ -150,3 +150,14 @@ input hashes.  Every later job re-verifies the frozen bytes before computing.
   structures; `sample-censored` closes the saturation/OOM claim until a larger
   capacity-only manifest is frozen. Expected capacity OOM and unavailable
   optional dxtb rows remain evidence rather than being relabelled as passes.
+
+The optional WARM trajectory check also uses the configured warmups and
+repetitions. Each trial creates separate FRESH and WARM contexts, alternates
+the execution order, and records every frame in each paired trajectory.
+Its speedup interval resamples paired whole-trajectory totals (including the
+initial frame), rather than treating correlated frames as independent samples.
+
+Every cold and measured performance call is correctness-qualified after its
+timed interval and before another call can replace the outputs. Recorded errors
+are maxima across measured calls. Ragged outcomes must be stable across samples
+before one success count is used to derive throughput.

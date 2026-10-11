@@ -14,6 +14,16 @@ from pathlib import Path
 from typing import Any
 
 
+def qualified_performance_row(row: dict[str, Any]) -> bool:
+    return (
+        row.get("availability") == "available"
+        and row.get("claim_eligible") is True
+        and row.get("correctness", {}).get("status") == "pass"
+        and row.get("correctness", {}).get("performance_claim_eligible") is True
+        and row.get("memory", {}).get("status") == "available"
+    )
+
+
 def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     rows = list(rows)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +59,7 @@ def performance_rows(root: Path) -> list[dict[str, Any]]:
                     "batch_size": row.get("batch_size"),
                     "cpu_threads": row.get("cpu_threads"),
                     "availability": row.get("availability"),
+                    "claim_eligible": qualified_performance_row(row),
                     "median_ms": timing.get("median_ms"),
                     "iqr_ms": timing.get("iqr_ms"),
                     "p95_ms": timing.get("p95_ms"),
@@ -116,14 +127,19 @@ def performance_rows(root: Path) -> list[dict[str, Any]]:
             row["memory_mode"],
         ): row
         for row in rows
-        if row["availability"] == "available"
+        if row["availability"] == "available" and row["claim_eligible"]
     }
 
     def annotate(
         candidate: dict[str, Any], label: str, baseline_key: tuple[Any, ...]
     ) -> None:
         baseline = lookup.get(baseline_key)
-        if baseline is None or not candidate["_raw_ms"] or not baseline["_raw_ms"]:
+        if (
+            not candidate["claim_eligible"]
+            or baseline is None
+            or not candidate["_raw_ms"]
+            or not baseline["_raw_ms"]
+        ):
             return
         seed = hashlib.sha256(
             f"{candidate['source']}|{label}|{candidate['engine']}|{candidate['ao_bin']}|{candidate['batch_size']}|{candidate['cpu_threads']}".encode()
@@ -196,7 +212,7 @@ def process_pool_comparisons(root: Path) -> list[dict[str, Any]]:
         document = json.loads(path.read_text())
         for row in document.get("rows", []):
             timing = row.get("steady_fresh", {})
-            if row.get("availability") != "available" or not timing.get("raw_ms"):
+            if not qualified_performance_row(row) or not timing.get("raw_ms"):
                 continue
             key = (
                 row["dataset"],
@@ -215,7 +231,11 @@ def process_pool_comparisons(root: Path) -> list[dict[str, Any]]:
             samples = [
                 float(sample["wall_ms"]) for sample in row.get("raw_samples", [])
             ]
-            if row.get("availability") != "available" or not samples:
+            if (
+                row.get("availability") != "available"
+                or row.get("claim_eligible") is not True
+                or not samples
+            ):
                 continue
             key = (
                 row["dataset"],
@@ -463,7 +483,9 @@ def main() -> int:
     cpu = {
         (row["dataset"], row["ao_bin"], row["batch_size"]): row["systems_per_second"]
         for row in figure3
-        if row["backend"] == "cpu" and row["availability"] == "available"
+        if row["backend"] == "cpu"
+        and row["availability"] == "available"
+        and row["claim_eligible"]
     }
     for row in figure3:
         baseline = cpu.get((row["dataset"], row["ao_bin"], row["batch_size"]))

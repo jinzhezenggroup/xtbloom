@@ -43,7 +43,7 @@ paper_verify_script_bundle() {
   (cd "$PAPER_SCRIPT_ROOT" && sha256sum -c SCRIPT_SHA256SUMS >/dev/null) || \
     paper_die 'paper script bundle checksum verification failed'
   listed=$(cut -d' ' -f3- "$checksum" | LC_ALL=C sort)
-  actual=$(cd "$PAPER_SCRIPT_ROOT" && find . -type f ! -name SCRIPT_SHA256SUMS | LC_ALL=C sort)
+  actual=$(cd "$PAPER_SCRIPT_ROOT" && find . \( -type f -o -type l \) ! -name SCRIPT_SHA256SUMS | LC_ALL=C sort)
   [[ "$listed" == "$actual" ]] || paper_die 'paper script bundle file inventory drifted'
 }
 
@@ -151,8 +151,10 @@ paper_load_config() {
       paper_die 'formal bootstrap sample count drifted'
     [[ -n "${PAPER_CPU_SCALING_GOVERNOR:-}" && "$PAPER_CPU_SCALING_GOVERNOR" != CHANGE-ME ]] || \
       paper_die 'formal CPU frequency policy requires an explicit site governor'
+    [[ -n "${PAPER_HARDWARE_ID:-}" && "$PAPER_HARDWARE_ID" != CHANGE-ME ]] || \
+      paper_die 'formal evidence requires an explicit PAPER_HARDWARE_ID'
   fi
-  [[ "$PAPER_RUN_ID" =~ ^[A-Za-z0-9._-]+$ ]] || paper_die 'unsafe PAPER_RUN_ID'
+  [[ "$PAPER_RUN_ID" =~ ^[A-Za-z0-9._-]+$ && "$PAPER_RUN_ID" != . && "$PAPER_RUN_ID" != .. ]] || paper_die 'unsafe PAPER_RUN_ID'
   paper_require_dir "$PAPER_REPO_ROOT"
   paper_require_file "$PAPER_PYTHON"
   numactl_command=${PAPER_NUMACTL:-numactl}

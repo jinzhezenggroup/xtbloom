@@ -139,6 +139,14 @@ def select_systems(
     return eligible[:count]
 
 
+def pin_cpu_budget(
+    backend: str, original_affinity: set[int], allowed_cpus: list[int], threads: int
+) -> None:
+    selected = set(allowed_cpus[:threads])
+    if backend == "cpu" and original_affinity and selected:
+        os.sched_setaffinity(0, selected)
+
+
 def controlled_wide(
     items: list[Any],
     bins: tuple[tuple[int, int | None, str], ...],
@@ -162,13 +170,18 @@ def controlled_wide(
         )
         buckets.append(bucket)
     result = []
+    selected_ids = set()
     cursor = 0
     while len(result) < count:
         progressed = False
         for bucket in buckets:
             if cursor < len(bucket):
-                result.append(bucket[cursor])
                 progressed = True
+                item = bucket[cursor]
+                if item.system_id in selected_ids:
+                    continue
+                selected_ids.add(item.system_id)
+                result.append(item)
                 if len(result) == count:
                     break
         if not progressed:
@@ -351,7 +364,8 @@ class ResourceProbe:
 
     def stop(self, backend: str, invocations: int) -> dict[str, Any]:
         self.stop_event.set()
-        self.thread.join()
+        if self.thread.ident is not None:
+            self.thread.join()
         self._sample()
         if self.nvml is not None:
             self.nvml.close()
@@ -689,7 +703,7 @@ def qualify(
         paired == successful if allow_system_failures else successful == len(selected)
     )
     passed = not contract_failures and success_requirement and numerical_passed
-    claim_eligible = passed and successful > 0
+    claim_eligible = passed and not missing and successful > 0
     if require and (missing or not passed):
         raise PerformanceError(
             f"correctness qualification failed: missing={len(missing)} successful={successful}/{len(selected)} "
@@ -1002,6 +1016,105 @@ def timed(call: Callable[[], None]) -> tuple[float, float]:
     )
 
 
+def combine_qualifications(*documents: dict[str, Any]) -> dict[str, Any]:
+    """A successful later probe cannot erase a failed or missing timing gate."""
+    combined = dict(documents[-1])
+    statuses = {document["status"] for document in documents}
+    combined["status"] = (
+        "fail"
+        if "fail" in statuses
+        else "unavailable"
+        if statuses != {"pass"}
+        else "pass"
+    )
+    combined["performance_claim_eligible"] = all(
+        document["status"] == "pass"
+        and document.get("performance_claim_eligible", False)
+        for document in documents
+    )
+    for field in ("missing_reference_ids", "output_contract_failures"):
+        combined[field] = sorted(
+            {value for document in documents for value in document.get(field, [])}
+        )
+    for field in (
+        "max_abs_energy_error_hartree",
+        "max_abs_force_error_hartree_per_bohr",
+        "max_abs_charge_error_e",
+    ):
+        values = [
+            document[field] for document in documents if document.get(field) is not None
+        ]
+        combined[field] = max(values) if values else None
+    combined["qualification_scopes"] = [
+        document.get("scope", "untimed output qualification") for document in documents
+    ]
+    return combined
+
+
+def row_claim_eligible(row: dict[str, Any]) -> bool:
+    return (
+        row.get("availability") == "available"
+        and row.get("claim_eligible") is True
+        and row.get("correctness", {}).get("status") == "pass"
+        and row.get("correctness", {}).get("performance_claim_eligible") is True
+        and row.get("memory", {}).get("status") == "available"
+    )
+
+
+def qualified_measurements(
+    invoke: Callable[[], None],
+    read_outputs: Callable[[], dict[str, Any]],
+    qualify_outputs: Callable[[dict[str, Any]], dict[str, Any]],
+    repetitions: int,
+) -> tuple[list[tuple[float, float]], dict[str, Any], dict[str, Any]]:
+    """Check each sample after its timed interval, before outputs can be overwritten."""
+    if repetitions < 1:
+        raise PerformanceError("timing repetitions must be positive")
+    measured = []
+    aggregate: dict[str, Any] | None = None
+    outputs: dict[str, Any] = {}
+    for _ in range(repetitions):
+        measurement = timed(invoke)
+        outputs = read_outputs()
+        correctness = qualify_outputs(outputs)
+        if aggregate is None:
+            aggregate = dict(correctness)
+        else:
+            if correctness["system_outcomes"] != aggregate["system_outcomes"]:
+                raise PerformanceError(
+                    "per-system outcomes changed between timed samples"
+                )
+            for field in (
+                "max_abs_energy_error_hartree",
+                "max_abs_force_error_hartree_per_bohr",
+                "max_abs_charge_error_e",
+            ):
+                values = [
+                    value
+                    for value in (aggregate.get(field), correctness.get(field))
+                    if value is not None
+                ]
+                aggregate[field] = max(values) if values else None
+            if "fail" in {aggregate["status"], correctness["status"]}:
+                aggregate["status"] = "fail"
+            elif correctness["status"] != "pass":
+                aggregate["status"] = "unavailable"
+            aggregate["performance_claim_eligible"] = (
+                aggregate["performance_claim_eligible"]
+                and correctness["performance_claim_eligible"]
+            )
+            for field in ("missing_reference_ids", "output_contract_failures"):
+                aggregate[field] = sorted(
+                    set(aggregate[field]) | set(correctness[field])
+                )
+        measured.append(measurement)
+    if aggregate is None:
+        raise PerformanceError("no measured samples were qualified")
+    aggregate["checked_samples"] = repetitions
+    aggregate["scope"] = "all measured samples; qualification outside timed interval"
+    return measured, outputs, aggregate
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
@@ -1055,6 +1168,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.energy_atol > 5e-7 or args.force_atol > 5e-6 or args.charge_atol > 5e-7:
         raise PerformanceError("requested correctness gate widens the paper contract")
+    if args.warmups < 0 or args.repetitions < 1 or args.bootstrap_samples < 1:
+        raise PerformanceError(
+            "need nonnegative warmups and positive repetitions/bootstrap samples"
+        )
     if args.max_scc_iterations <= 0:
         raise PerformanceError("max SCC iterations must be positive")
     if not math.isfinite(args.accuracy) or args.accuracy <= 0.0:
@@ -1332,8 +1449,9 @@ def main() -> int:
                         # CPU cells with budget N are pinned to the same first N
                         # Slurm-assigned logical CPUs.  This makes the budget an
                         # enforced affinity contract instead of a thread-count hint.
-                        if backend == "cpu" and original_affinity:
-                            os.sched_setaffinity(0, set(allowed_cpus[:threads]))
+                        pin_cpu_budget(
+                            backend, original_affinity, allowed_cpus, threads
+                        )
                         adapter, invoke = construct_adapter(
                             engine,
                             backend,
@@ -1346,31 +1464,46 @@ def main() -> int:
                         adapter_constructed = True
                         setup_ms = (time.perf_counter_ns() - setup_start) * 1e-6
                         compute_attempted = True
-                        cold_ms, cold_cpu_ms = timed(invoke)
+
+                        def read_outputs(
+                            adapter: Any = adapter, engine: str = engine
+                        ) -> dict[str, Any]:
+                            return (
+                                adapter.results()
+                                if engine
+                                in {"xtb", "tblite", "dxtb", "xtbloom-sequential"}
+                                else adapter.raw_results()
+                            )
+
+                        def qualify_outputs(
+                            outputs: dict[str, Any],
+                            selected: list[Any] = selected,
+                            engine: str = engine,
+                        ) -> dict[str, Any]:
+                            return qualify(
+                                selected,
+                                outputs,
+                                references,
+                                engine,
+                                args.energy_atol,
+                                args.force_atol,
+                                args.charge_atol,
+                                args.property,
+                                args.require_correctness,
+                                allow_system_failures=args.suite == "ragged",
+                            )
+
+                        cold, _, cold_correctness = qualified_measurements(
+                            invoke, read_outputs, qualify_outputs, 1
+                        )
+                        cold_ms, cold_cpu_ms = cold[0]
                         for _ in range(args.warmups):
                             invoke()
-                        measured = [timed(invoke) for _ in range(args.repetitions)]
+                        measured, outputs, timed_correctness = qualified_measurements(
+                            invoke, read_outputs, qualify_outputs, args.repetitions
+                        )
                         samples = [wall_ms for wall_ms, _ in measured]
                         cpu_samples = [cpu_ms for _, cpu_ms in measured]
-                        outputs = (
-                            adapter.results()
-                            if engine in {"xtb", "tblite", "dxtb"}
-                            else adapter.results()
-                            if engine == "xtbloom-sequential"
-                            else adapter.raw_results()
-                        )
-                        timed_correctness = qualify(
-                            selected,
-                            outputs,
-                            references,
-                            engine,
-                            args.energy_atol,
-                            args.force_atol,
-                            args.charge_atol,
-                            args.property,
-                            args.require_correctness,
-                            allow_system_failures=args.suite == "ragged",
-                        )
                         engine_options = {
                             "accuracy": getattr(adapter, "accuracy", None),
                             "electronic_temperature_kelvin": getattr(
@@ -1406,7 +1539,7 @@ def main() -> int:
                         }
                         adapter.close()
                         adapter = None
-                        del invoke
+                        del invoke, read_outputs, qualify_outputs
                         correctness = timed_correctness
                         qualification_output_contract = (
                             "energy+analytic-forces+atomic-charges"
@@ -1455,9 +1588,19 @@ def main() -> int:
                                 allow_system_failures=args.suite == "ragged",
                                 require_charges=True,
                             )
+                            if (
+                                correctness["system_outcomes"]
+                                != timed_correctness["system_outcomes"]
+                            ):
+                                raise PerformanceError(
+                                    "charge qualification changed the timed per-system outcomes"
+                                )
                             adapter.close()
                             adapter = None
                             del qualification_invoke
+                        correctness = combine_qualifications(
+                            cold_correctness, timed_correctness, correctness
+                        )
                         probe_invocations = 3
                         # Reconstruct the complete cell in a fresh spawned
                         # process. Process exit clears Python, BLAS, CUDA and
@@ -1571,11 +1714,16 @@ def main() -> int:
                                 "adapter_identity": adapter_identity,
                                 "system_ids": [item.system_id for item in selected],
                                 "availability": "available",
+                                "claim_eligible": (
+                                    correctness["performance_claim_eligible"]
+                                    and memory_probe["status"] == "available"
+                                ),
                                 "adapter_constructed": adapter_constructed,
                                 "compute_attempted": compute_attempted,
                                 "setup_ms": setup_ms,
                                 "cold_ms": cold_ms,
                                 "cold_process_cpu_ms": cold_cpu_ms,
+                                "cold_output_correctness": cold_correctness,
                                 "cpu_affinity": sorted(os.sched_getaffinity(0))
                                 if hasattr(os, "sched_getaffinity")
                                 else [],
@@ -1636,10 +1784,10 @@ def main() -> int:
             row.get("batch_size"),
         ): row
         for row in rows
-        if row.get("availability") == "available" and row.get("cpu_threads") == 1
+        if row_claim_eligible(row) and row.get("cpu_threads") == 1
     }
     for row in rows:
-        if row.get("availability") != "available" or row.get("backend") != "cpu":
+        if not row_claim_eligible(row) or row.get("backend") != "cpu":
             continue
         baseline = one_thread.get(
             (
@@ -1684,7 +1832,7 @@ def main() -> int:
                 and row.get("availability") == "not-applicable"
                 for row in rows
             )
-            available = [row for row in cells if row.get("availability") == "available"]
+            available = [row for row in cells if row_claim_eligible(row)]
             oom = [row for row in cells if row.get("availability") == "oom"]
             saturated_at = None
             if len(available) >= 3:
@@ -1719,7 +1867,7 @@ def main() -> int:
                 "saturated_at_batch": saturated_at,
                 "requested_batches": list(args.batch_sizes),
                 "note": "sample-censored means the frozen distinct-system set ended before measured saturation/OOM",
-                "claim_eligible": status in {"oom", "saturated"},
+                "claim_eligible": bool(available) and status in {"oom", "saturated"},
             }
     fatal_rows: list[int] = []
     fatal_reasons: list[str] = []

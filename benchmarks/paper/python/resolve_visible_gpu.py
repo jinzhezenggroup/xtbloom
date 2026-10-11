@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import platform
 from pathlib import Path
 
 
@@ -14,7 +15,11 @@ def resolve_cudart(cuda_root: Path, explicit: Path | None = None) -> Path:
         if not explicit.is_file():
             raise RuntimeError(f"configured libcudart is missing: {explicit}")
         return explicit.resolve()
-    candidates = sorted((cuda_root / "targets").glob("*-linux/lib/libcudart.so*"))
+    machine = platform.machine().lower()
+    architecture = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+    candidates = sorted(
+        (cuda_root / "targets" / f"{architecture}-linux" / "lib").glob("libcudart.so*")
+    )
     candidates.extend(sorted((cuda_root / "lib64").glob("libcudart.so*")))
     library_path = next((path for path in candidates if path.is_file()), None)
     if library_path is None:

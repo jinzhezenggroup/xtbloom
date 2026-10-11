@@ -15,6 +15,8 @@ def choose_ids(results: Path, backend: str) -> tuple[str, str]:
     failed = None
     with results.open(encoding="utf-8") as handle:
         for line in handle:
+            if not line.strip():
+                continue
             row = json.loads(line)
             if (
                 row["program"]["engine"] != "xtbloom"
@@ -26,7 +28,11 @@ def choose_ids(results: Path, backend: str) -> tuple[str, str]:
                 healthy = row["input"]["system_id"]
             elif (
                 category
-                in {"scc_not_converged", "eigensolver_failed", "internal_error"}
+                in {
+                    "scc_not_converged",
+                    "eigensolver_or_numerical_failure",
+                    "unknown_error",
+                }
                 and failed is None
             ):
                 failed = row["input"]["system_id"]
@@ -50,6 +56,7 @@ def main() -> int:
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--cpu-threads", type=int, default=1)
     parser.add_argument("--max-scc-iterations", type=int, default=500)
+    parser.add_argument("--electronic-temperature-kelvin", type=float, required=True)
     parser.add_argument("--atol", type=float, default=1e-10)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -91,6 +98,10 @@ def main() -> int:
             args.cpu_threads,
             collect_atomic_charges=True,
             max_scc_iterations=args.max_scc_iterations,
+            electronic_temperature_hartree=(
+                args.electronic_temperature_kelvin
+                * benchmark_run.public_api.XTBLOOM_KELVIN_TO_HARTREE
+            ),
         )
         try:
             adapter.invoke()

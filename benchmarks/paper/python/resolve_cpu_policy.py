@@ -39,6 +39,10 @@ def main() -> int:
         if node_links:
             nodes.update(int(path.name.removeprefix("node")) for path in node_links)
         governor = read(root / "cpufreq/scaling_governor")
+        if args.expected_governor is not None and governor != args.expected_governor:
+            raise RuntimeError(
+                f"assigned CPU {cpu} governor {governor!r} does not equal {args.expected_governor!r}"
+            )
         driver = read(root / "cpufreq/scaling_driver")
         minimum = read(root / "cpufreq/scaling_min_freq")
         maximum = read(root / "cpufreq/scaling_max_freq")

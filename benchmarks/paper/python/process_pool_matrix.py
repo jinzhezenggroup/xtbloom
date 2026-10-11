@@ -12,6 +12,7 @@ import os
 import random
 import statistics
 import time
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,7 @@ def worker(
     accuracy: float,
     electronic_temperature_kelvin: float,
 ) -> None:
+    adapter = None
     try:
         if resource is None or not hasattr(os, "sched_setaffinity"):
             raise PoolError("persistent process-pool experiment requires Linux")
@@ -111,7 +113,6 @@ def worker(
         while True:
             command = connection.recv()
             if command == "close":
-                adapter.close()
                 return
             before_cpu = time.process_time_ns()
             start = time.perf_counter_ns()
@@ -130,11 +131,21 @@ def worker(
                 }
             )
     except BaseException as exc:  # noqa: BLE001 - worker must report every Python exit
-        connection.send({"state": "error", "error": f"{type(exc).__name__}: {exc}"})
+        with suppress(BrokenPipeError, EOFError, OSError):
+            connection.send({"state": "error", "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        try:
+            if adapter is not None:
+                adapter.close()
+        finally:
+            connection.close()
 
 
 def parse_csv_ints(value: str) -> tuple[int, ...]:
-    return tuple(int(item) for item in value.split(",") if item)
+    values = tuple(int(item) for item in value.split(",") if item)
+    if not values or any(item < 1 for item in values):
+        raise argparse.ArgumentTypeError("process counts must be positive integers")
+    return values
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -175,6 +186,128 @@ def timing_summary(
     }
 
 
+def load_reference(root: Path, engine: str) -> dict[tuple[str, str], dict[str, Any]]:
+    references: dict[tuple[str, str], dict[str, Any]] = {}
+    for path in sorted(root.rglob("results.jsonl")):
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if (
+                    row["program"]["engine"] == engine
+                    and row["status"]["category"] == "success"
+                ):
+                    key = (row["input"]["dataset"], row["input"]["system_id"])
+                    if key in references:
+                        raise PoolError(f"duplicate correctness reference: {key}")
+                    references[key] = row
+    return references
+
+
+def receive_ready(
+    connections: list[Any], timeout_seconds: float
+) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout_seconds
+    messages = []
+    for connection in connections:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not connection.poll(remaining):
+            raise PoolError("worker startup timed out")
+        try:
+            messages.append(connection.recv())
+        except (EOFError, OSError) as exc:
+            raise PoolError("worker exited before startup handshake") from exc
+    return messages
+
+
+def collect_responses(
+    parent_connections: tuple[Any, ...],
+    worker_process_ids: tuple[int, ...],
+    timeout_seconds: float,
+    start: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, int]], int]:
+    responses: list[dict[str, Any] | None] = [None] * len(parent_connections)
+    pending = set(range(len(parent_connections)))
+    deadline = time.monotonic() + timeout_seconds
+    rss_samples: list[dict[str, int]] = []
+    rss_sample_count = 0
+    while pending:
+        if time.monotonic() >= deadline:
+            raise PoolError("worker inference timed out")
+        # The deployable reference is the complete process group, not
+        # just its workers: include this coordinating parent in the
+        # concurrent RSS sample taken on the same time axis.
+        aggregate_rss = current_rss_bytes(os.getpid()) + sum(
+            current_rss_bytes(pid) for pid in worker_process_ids
+        )
+        rss_sample_count += 1
+        row = {
+            "elapsed_ns": time.perf_counter_ns() - start,
+            "aggregate_current_rss_bytes": aggregate_rss,
+        }
+        if (
+            not rss_samples
+            or aggregate_rss != rss_samples[-1]["aggregate_current_rss_bytes"]
+            or rss_sample_count % 100 == 0
+        ):
+            rss_samples.append(row)
+        completed = []
+        for index in pending:
+            if parent_connections[index].poll():
+                try:
+                    responses[index] = parent_connections[index].recv()
+                except (EOFError, OSError) as exc:
+                    raise PoolError("worker exited during inference") from exc
+                completed.append(index)
+        pending.difference_update(completed)
+        if pending:
+            time.sleep(0.002)
+    return (
+        [response for response in responses if response is not None],
+        rss_samples,
+        rss_sample_count,
+    )
+
+
+def shutdown_pool(connections: list[Any], processes: list[Any]) -> list[str]:
+    """Release every child and pipe with bounded graceful/terminate/kill waits."""
+    failures = []
+    for connection in connections:
+        with suppress(BrokenPipeError, EOFError, OSError):
+            connection.send("close")
+    for process in processes:
+        process.join(timeout=5)
+        if process.is_alive():
+            failures.append("worker did not shut down gracefully")
+            process.terminate()
+            process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+        if process.is_alive():
+            failures.append("worker remained alive after kill")
+        elif process.exitcode != 0:
+            failures.append(f"worker exited with {process.exitcode}")
+    for connection in connections:
+        connection.close()
+    return failures
+
+
+@contextmanager
+def pool_lifecycle(connections: list[Any], processes: list[Any]):
+    failed = False
+    try:
+        yield
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        failures = shutdown_pool(connections, processes)
+        if failures and not failed:
+            raise PoolError("; ".join(failures))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
@@ -197,10 +330,20 @@ def main() -> int:
     parser.add_argument("--accuracy", type=float, required=True)
     parser.add_argument("--electronic-temperature-kelvin", type=float, required=True)
     parser.add_argument("--seed", required=True)
+    parser.add_argument("--worker-timeout-seconds", type=float, default=7200)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists():
         raise PoolError(f"refusing to overwrite: {args.output}")
+    if (
+        not math.isfinite(args.worker_timeout_seconds)
+        or args.worker_timeout_seconds <= 0
+    ):
+        raise PoolError("worker timeout must be finite and positive")
+    if args.warmups < 0 or args.repetitions < 1 or args.bootstrap_samples < 1:
+        raise PoolError(
+            "need nonnegative warmups and positive repetitions/bootstrap samples"
+        )
     if args.max_scc_iterations <= 0:
         raise PoolError("max SCC iterations must be positive")
     if not math.isfinite(args.accuracy) or args.accuracy <= 0.0:
@@ -265,18 +408,7 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
         return 0
-    references: dict[tuple[str, str], dict[str, Any]] = {}
-    for path in sorted(args.reference_root.rglob("results.jsonl")):
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                row = json.loads(line)
-                if (
-                    row["program"]["engine"] == args.engine
-                    and row["status"]["category"] == "success"
-                ):
-                    references[(row["input"]["dataset"], row["input"]["system_id"])] = (
-                        row
-                    )
+    references = load_reference(args.reference_root, args.engine)
     selected_items = items[: args.batch_size]
     missing = [
         item.system_id
@@ -306,185 +438,162 @@ def main() -> int:
         parents = []
         processes = []
         startup = time.perf_counter_ns()
-        for index, chunk in enumerate(chunks):
-            parent, child = context.Pipe()
-            process = context.Process(
-                target=worker,
-                args=(
-                    child,
-                    str(args.repo),
-                    chunk,
-                    args.engine,
-                    str(args.library),
-                    allowed_cpus[index],
-                    args.max_scc_iterations,
-                    args.accuracy,
-                    args.electronic_temperature_kelvin,
-                ),
-            )
-            process.daemon = True
-            process.start()
-            child.close()
-            parents.append(parent)
-            processes.append(process)
-        ready = [connection.recv() for connection in parents]
-        startup_ms = (time.perf_counter_ns() - startup) * 1e-6
-        if any(message["state"] != "ready" for message in ready):
-            raise PoolError(f"worker setup failed: {ready}")
-        worker_pids = [int(message["pid"]) for message in ready]
-
-        def invoke(
-            parent_connections: tuple[Any, ...] = tuple(parents),
-            item_chunks: tuple[tuple[Any, ...], ...] = tuple(
-                tuple(chunk) for chunk in chunk_items
-            ),
-            worker_process_ids: tuple[int, ...] = tuple(worker_pids),
-        ) -> dict[str, Any]:
-            parent_cpu_start = time.process_time_ns()
-            start = time.perf_counter_ns()
-            for connection in parent_connections:
-                connection.send("run")
-            responses: list[dict[str, Any] | None] = [None] * len(parent_connections)
-            pending = set(range(len(parent_connections)))
-            rss_samples: list[dict[str, int]] = []
-            rss_sample_count = 0
-            while pending:
-                # The deployable reference is the complete process group, not
-                # just its workers: include this coordinating parent in the
-                # concurrent RSS sample taken on the same time axis.
-                aggregate_rss = current_rss_bytes(os.getpid()) + sum(
-                    current_rss_bytes(pid) for pid in worker_process_ids
+        with pool_lifecycle(parents, processes):
+            for index, chunk in enumerate(chunks):
+                parent, child = context.Pipe()
+                process = context.Process(
+                    target=worker,
+                    args=(
+                        child,
+                        str(args.repo),
+                        chunk,
+                        args.engine,
+                        str(args.library),
+                        allowed_cpus[index],
+                        args.max_scc_iterations,
+                        args.accuracy,
+                        args.electronic_temperature_kelvin,
+                    ),
                 )
-                rss_sample_count += 1
-                row = {
-                    "elapsed_ns": time.perf_counter_ns() - start,
-                    "aggregate_current_rss_bytes": aggregate_rss,
+                process.daemon = True
+                parents.append(parent)
+                try:
+                    process.start()
+                finally:
+                    child.close()
+                processes.append(process)
+            ready = receive_ready(parents, args.worker_timeout_seconds)
+            startup_ms = (time.perf_counter_ns() - startup) * 1e-6
+            if any(message["state"] != "ready" for message in ready):
+                raise PoolError(f"worker setup failed: {ready}")
+            worker_pids = [int(message["pid"]) for message in ready]
+
+            def invoke(
+                parent_connections: tuple[Any, ...] = tuple(parents),
+                item_chunks: tuple[tuple[Any, ...], ...] = tuple(
+                    tuple(chunk) for chunk in chunk_items
+                ),
+                worker_process_ids: tuple[int, ...] = tuple(worker_pids),
+            ) -> dict[str, Any]:
+                parent_cpu_start = time.process_time_ns()
+                start = time.perf_counter_ns()
+                for connection in parent_connections:
+                    connection.send("run")
+                complete_responses, rss_samples, rss_sample_count = collect_responses(
+                    parent_connections,
+                    worker_process_ids,
+                    args.worker_timeout_seconds,
+                    start,
+                )
+                wall_ns = time.perf_counter_ns() - start
+                parent_cpu_ns = time.process_time_ns() - parent_cpu_start
+                if any(message["state"] != "done" for message in complete_responses):
+                    raise PoolError(f"worker inference failed: {complete_responses}")
+                peak_concurrent_rss = max(
+                    (sample["aggregate_current_rss_bytes"] for sample in rss_samples),
+                    default=0,
+                )
+                if peak_concurrent_rss <= 0:
+                    raise PoolError(
+                        "concurrent worker RSS sampling produced no usable value"
+                    )
+                maximums = {"energy": 0.0, "forces": 0.0}
+                result_names = {
+                    "energy": "energies_hartree",
+                    "forces": "forces_hartree_per_bohr",
                 }
-                if (
-                    not rss_samples
-                    or aggregate_rss != rss_samples[-1]["aggregate_current_rss_bytes"]
-                    or rss_sample_count % 100 == 0
+                for members, response in zip(
+                    item_chunks, complete_responses, strict=True
                 ):
-                    rss_samples.append(row)
-                completed = []
-                for index in pending:
-                    if parent_connections[index].poll():
-                        responses[index] = parent_connections[index].recv()
-                        completed.append(index)
-                pending.difference_update(completed)
-                if pending:
-                    time.sleep(0.002)
-            wall_ns = time.perf_counter_ns() - start
-            parent_cpu_ns = time.process_time_ns() - parent_cpu_start
-            assert all(response is not None for response in responses)
-            complete_responses = [
-                response for response in responses if response is not None
-            ]
-            if any(message["state"] != "done" for message in complete_responses):
-                raise PoolError(f"worker inference failed: {complete_responses}")
-            peak_concurrent_rss = max(
-                (sample["aggregate_current_rss_bytes"] for sample in rss_samples),
-                default=0,
-            )
-            if peak_concurrent_rss <= 0:
-                raise PoolError(
-                    "concurrent worker RSS sampling produced no usable value"
-                )
-            maximums = {"energy": 0.0, "forces": 0.0}
-            result_names = {
-                "energy": "energies_hartree",
-                "forces": "forces_hartree_per_bohr",
-            }
-            for members, response in zip(item_chunks, complete_responses, strict=True):
-                result = response["result"]
-                atom_cursor = 0
-                for index, item in enumerate(members):
-                    reference = references[(args.dataset, item.system_id)]["results"]
-                    atoms = len(item.system.atomic_numbers)
-                    for quantity, result_name in result_names.items():
-                        field = reference.get(quantity, {})
-                        if (
-                            field.get("availability") != "available"
-                            or result_name not in result
-                        ):
-                            raise PoolError(
-                                f"missing required {quantity} for {item.system_id}"
-                            )
-                        expected = field["value"]
-                        if quantity == "energy":
-                            actual_values = [float(result[result_name][index])]
-                            expected_values = [float(expected)]
-                        else:
-                            flat_expected: list[float] = []
-                            stack = (
-                                list(expected)
-                                if isinstance(expected, list)
-                                else [expected]
-                            )
-                            while stack:
-                                value = stack.pop(0)
-                                if isinstance(value, list):
-                                    stack[0:0] = value
-                                else:
-                                    flat_expected.append(float(value))
-                            width = (3 if quantity == "forces" else 1) * atoms
-                            begin = (3 if quantity == "forces" else 1) * atom_cursor
-                            actual_values = [
-                                float(value)
-                                for value in result[result_name][begin : begin + width]
-                            ]
-                            expected_values = flat_expected
-                        if (
-                            len(actual_values) != len(expected_values)
-                            or not actual_values
-                        ):
-                            raise PoolError(
-                                f"shape mismatch for {quantity}: {item.system_id}"
-                            )
-                        if not all(
-                            math.isfinite(value)
-                            for value in (*actual_values, *expected_values)
-                        ):
-                            raise PoolError(f"non-finite {quantity}: {item.system_id}")
-                        maximums[quantity] = max(
-                            maximums[quantity],
-                            max(
-                                abs(a - b)
-                                for a, b in zip(
-                                    actual_values, expected_values, strict=True
+                    result = response["result"]
+                    atom_cursor = 0
+                    for index, item in enumerate(members):
+                        reference = references[(args.dataset, item.system_id)][
+                            "results"
+                        ]
+                        atoms = len(item.system.atomic_numbers)
+                        for quantity, result_name in result_names.items():
+                            field = reference.get(quantity, {})
+                            if (
+                                field.get("availability") != "available"
+                                or result_name not in result
+                            ):
+                                raise PoolError(
+                                    f"missing required {quantity} for {item.system_id}"
                                 )
-                            ),
-                        )
-                    atom_cursor += atoms
-            limits = {"energy": args.energy_atol, "forces": args.force_atol}
-            if any(maximums[name] > limits[name] for name in limits):
-                raise PoolError(f"process-pool correctness gate failed: {maximums}")
-            return {
-                "wall_ms": wall_ns * 1e-6,
-                "aggregate_cpu_ms": (
-                    parent_cpu_ns
-                    + sum(message["cpu_ns"] for message in complete_responses)
-                )
-                * 1e-6,
-                "parent_cpu_ms": parent_cpu_ns * 1e-6,
-                "sampled_peak_concurrent_rss_bytes": peak_concurrent_rss,
-                "sum_worker_hwm_bytes_upper_bound": sum(
-                    message["rss"] for message in complete_responses
-                ),
-                "rss_sample_count": rss_sample_count,
-                "retained_rss_samples": rss_samples,
-                "correctness_max_abs": maximums,
-            }
+                            expected = field["value"]
+                            if quantity == "energy":
+                                actual_values = [float(result[result_name][index])]
+                                expected_values = [float(expected)]
+                            else:
+                                flat_expected: list[float] = []
+                                stack = (
+                                    list(expected)
+                                    if isinstance(expected, list)
+                                    else [expected]
+                                )
+                                while stack:
+                                    value = stack.pop(0)
+                                    if isinstance(value, list):
+                                        stack[0:0] = value
+                                    else:
+                                        flat_expected.append(float(value))
+                                width = (3 if quantity == "forces" else 1) * atoms
+                                begin = (3 if quantity == "forces" else 1) * atom_cursor
+                                actual_values = [
+                                    float(value)
+                                    for value in result[result_name][
+                                        begin : begin + width
+                                    ]
+                                ]
+                                expected_values = flat_expected
+                            if (
+                                len(actual_values) != len(expected_values)
+                                or not actual_values
+                            ):
+                                raise PoolError(
+                                    f"shape mismatch for {quantity}: {item.system_id}"
+                                )
+                            if not all(
+                                math.isfinite(value)
+                                for value in (*actual_values, *expected_values)
+                            ):
+                                raise PoolError(
+                                    f"non-finite {quantity}: {item.system_id}"
+                                )
+                            maximums[quantity] = max(
+                                maximums[quantity],
+                                max(
+                                    abs(a - b)
+                                    for a, b in zip(
+                                        actual_values, expected_values, strict=True
+                                    )
+                                ),
+                            )
+                        atom_cursor += atoms
+                limits = {"energy": args.energy_atol, "forces": args.force_atol}
+                if any(maximums[name] > limits[name] for name in limits):
+                    raise PoolError(f"process-pool correctness gate failed: {maximums}")
+                return {
+                    "wall_ms": wall_ns * 1e-6,
+                    "aggregate_cpu_ms": (
+                        parent_cpu_ns
+                        + sum(message["cpu_ns"] for message in complete_responses)
+                    )
+                    * 1e-6,
+                    "parent_cpu_ms": parent_cpu_ns * 1e-6,
+                    "sampled_peak_concurrent_rss_bytes": peak_concurrent_rss,
+                    "sum_worker_hwm_bytes_upper_bound": sum(
+                        message["rss"] for message in complete_responses
+                    ),
+                    "rss_sample_count": rss_sample_count,
+                    "retained_rss_samples": rss_samples,
+                    "correctness_max_abs": maximums,
+                }
 
-        for _ in range(args.warmups):
-            invoke()
-        samples = [invoke() for _ in range(args.repetitions)]
-        for connection in parents:
-            connection.send("close")
-        for process in processes:
-            process.join()
-            if process.exitcode != 0:
-                raise PoolError(f"worker exited with {process.exitcode}")
+            for _ in range(args.warmups):
+                invoke()
+            samples = [invoke() for _ in range(args.repetitions)]
         rows.append(
             {
                 "engine": args.engine,
@@ -505,6 +614,7 @@ def main() -> int:
                 "electronic_temperature_kelvin": args.electronic_temperature_kelvin,
                 "timed_output_contract": "energy+analytic-forces",
                 "startup_ms": startup_ms,
+                "worker_timeout_seconds": args.worker_timeout_seconds,
                 "raw_samples": samples,
                 "summary": timing_summary(
                     samples,
@@ -513,6 +623,7 @@ def main() -> int:
                     args.batch_size,
                 ),
                 "availability": "available",
+                "claim_eligible": True,
             }
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)

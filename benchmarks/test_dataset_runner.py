@@ -583,6 +583,46 @@ class AdapterReuseAndSerializationTest(unittest.TestCase):
             parsed = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(parsed["results"]["energy"]["availability"], "unavailable")
 
+    def test_missing_convergence_preserves_native_failures_without_claiming_success(
+        self,
+    ) -> None:
+        """Keep missing diagnostics unavailable without inventing SCC results."""
+        system = dataset_runner.DatasetSystem(
+            dataset="qm9",
+            subset="main",
+            system_id="one",
+            canonical_ordinal=0,
+            atomic_numbers=(1,),
+            positions_bohr=((0.0, 0.0, 0.0),),
+            charge=0,
+            multiplicity=2,
+            unpaired_electrons=1,
+            input_sha256="hash",
+            strata={},
+            manifest={},
+        )
+        item = dataset_runner.LoadedItem("qm9", "main", "one", 0, {}, system, None)
+        storage = dataset_runner.storage_from_systems([system])
+        for native, expected in (
+            (0, "unknown_error"),
+            (7, "scc_not_converged"),
+            (8, "eigensolver_or_numerical_failure"),
+        ):
+            record = dataset_runner._records_from_outputs(
+                "xtbloom",
+                [(0, item)],
+                storage,
+                {"energies_hartree": [-1.0], "per_system_status": [native]},
+                SimpleNamespace(),
+                default_args(Path(".")),
+                {},
+                {"engine": "xtbloom", "adapter": {"settings": {}}},
+            )[0]
+            self.assertEqual(record["status"]["category"], expected)
+            self.assertEqual(
+                record["status"]["scc_converged"]["availability"], "unavailable"
+            )
+
     def test_program_identity_probes_are_constant_per_engine(self) -> None:
         """Avoid per-record Git subprocesses and repeated library hashing."""
         with tempfile.TemporaryDirectory() as temporary:

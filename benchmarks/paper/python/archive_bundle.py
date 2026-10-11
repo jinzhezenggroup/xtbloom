@@ -72,6 +72,7 @@ def verify_stage_checksum(stage: Path) -> list[str]:
         listed.add(lexical_path)
         try:
             lexical_path.relative_to(Path(os.path.abspath(stage)))
+            lexical_path.resolve().relative_to(stage.resolve())
         except ValueError:
             failures.append(f"SHA256SUMS:{line_number}: path escapes stage")
             continue

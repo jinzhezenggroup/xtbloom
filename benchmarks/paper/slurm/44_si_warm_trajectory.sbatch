@@ -23,5 +23,6 @@ paper_run_python "$ROOT/python/warm_trajectory.py" --repo "$PAPER_REPO_ROOT" \
   --electronic-temperature-kelvin "$PAPER_ELECTRONIC_TEMPERATURE_K" \
   --energy-atol "$PAPER_ENERGY_ATOL_HARTREE" \
   --force-atol "$PAPER_FORCE_ATOL_HARTREE_PER_BOHR" --bootstrap-samples "$PAPER_BOOTSTRAP_SAMPLES" \
+  --warmups "$PAPER_WARMUPS" --repetitions "$PAPER_REPETITIONS" \
   --output "$PAPER_OUTPUT_DIR/raw/warm-trajectory.json"
 paper_finish

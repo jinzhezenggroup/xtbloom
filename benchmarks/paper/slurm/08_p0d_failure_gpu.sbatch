@@ -21,7 +21,7 @@ for memory in host device mixed; do
     --source-results "$PAPER_DATA_ROOT/$PAPER_RUN_ID/p0b-dataset-gpu/raw/omol25-main,stress-xtbloom-$memory/results.jsonl" \
     --library "$PAPER_CUDA_LIBRARY" --backend cuda --memory-mode "$memory" \
     --device-id "$PAPER_DEVICE_ID" --cpu-threads 1 --max-scc-iterations "$PAPER_MAX_SCC_ITERATIONS" \
-    --atol "$PAPER_PEER_UNCHANGED_ATOL" \
+    --electronic-temperature-kelvin "$PAPER_ELECTRONIC_TEMPERATURE_K" --atol "$PAPER_PEER_UNCHANGED_ATOL" \
     --output "$PAPER_OUTPUT_DIR/derived/real-peer-$memory.json"
 done
 paper_finish

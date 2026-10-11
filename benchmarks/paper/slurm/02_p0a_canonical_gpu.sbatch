@@ -29,7 +29,7 @@ paper_run "$PAPER_CMAKE" --build "$BUILD" --parallel "$SLURM_CPUS_PER_TASK"
 paper_record_canonical_library "$BUILD/libxtbloom.so" "$PAPER_OUTPUT_DIR/derived/canonical-library.txt"
 GPU_UUID=$PAPER_RESOLVED_GPU_UUID
 GPU_NAME=$PAPER_RESOLVED_GPU_NAME
-printf '%s\t%s\t%s\n' "$(hostname)" "$GPU_UUID" "$GPU_NAME" >"$PAPER_OUTPUT_DIR/derived/hardware-identity.tsv"
+printf '%s\t%s\t%s\t%s\n' "${PAPER_HARDWARE_ID:-development}" "$(hostname)" "$GPU_UUID" "$GPU_NAME" >"$PAPER_OUTPUT_DIR/derived/hardware-identity.tsv"
 paper_run ctest --test-dir "$BUILD" -N | tee "$PAPER_OUTPUT_DIR/logs/ctest-registration.txt"
 paper_run ctest --test-dir "$BUILD" --no-tests=error --output-on-failure \
   --output-junit "$PAPER_OUTPUT_DIR/derived/ctest-results.xml" | tee "$PAPER_OUTPUT_DIR/logs/ctest.txt"
