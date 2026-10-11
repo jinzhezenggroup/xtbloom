@@ -298,6 +298,16 @@ def _run_python_tests(session: nox.Session) -> None:
         "benchmarks.test_evidence_size",
         "benchmarks.test_cuda_crossover",
         "benchmarks.test_cuda_crossover_summary",
+        "benchmarks.test_convergence_grouping",
+        "benchmarks.test_convergence_runner",
+        "benchmarks.test_frozen_inputs",
+        "benchmarks.test_ao_grouping",
+        "benchmarks.test_build_receipt",
+        "benchmarks.test_record_build",
+        "benchmarks.test_build_receipt_runner",
+        "benchmarks.test_runtime_mapped_images",
+        "benchmarks.test_runtime_mapped_images_runner",
+        "benchmarks.test_omol25_inputs",
         env=test_environment,
     )
 
@@ -621,3 +631,4 @@ def full(session: nox.Session) -> None:
     _run_python_tests(session)
     _run_canonical(session)
     _run_package(session)
+

@@ -617,6 +617,13 @@ bool test_spin_channel_abi_v2() {
   CHECK(
       validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &valid.batch, &valid.options, &valid.result)
           .ok());
+
+  Fixture automatic_spin;
+  automatic_spin.unpaired_electrons[1] = 2;
+  automatic_spin.enable_spin_channels({0, 0});
+  CHECK(validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &automatic_spin.batch,
+                                     &automatic_spin.options, &automatic_spin.result)
+            .ok());
   valid.batch.spin_channels.size_bytes += 64;
   CHECK(
       validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &valid.batch, &valid.options, &valid.result)
@@ -648,8 +655,10 @@ bool test_spin_channel_abi_v2() {
          f.batch.spin_channels.memory_space = XTBLOOM_MEMORY_CUDA_DEVICE;
        },
        "context backend is CPU"},
-      {"zero spin channels", [](Fixture& f) { f.enable_spin_channels({1, 0}); }, "one or two"},
-      {"three spin channels", [](Fixture& f) { f.enable_spin_channels({3, 1}); }, "one or two"},
+      {"negative spin channels", [](Fixture& f) { f.enable_spin_channels({1, -1}); },
+       "zero (auto), one, or two"},
+      {"three spin channels", [](Fixture& f) { f.enable_spin_channels({3, 1}); },
+       "zero (auto), one, or two"},
       {"spin channels alias output",
        [](Fixture& f) {
          f.enable_spin_channels();

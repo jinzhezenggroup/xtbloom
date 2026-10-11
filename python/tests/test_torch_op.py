@@ -483,6 +483,40 @@ def test_forward_matches_calculator_host() -> None:
     )
 
 
+def test_default_spin_channels_follow_open_shell() -> None:
+    """Omitted Torch spin channels resolve open shells to two channels."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.zeros((1, 3), dtype=torch.float64)
+    atomic_numbers = torch.tensor([1], dtype=torch.int32)
+    atom_offsets = torch.tensor([0, 1], dtype=torch.int64)
+    molecular_charges = torch.zeros(1, dtype=torch.float64)
+    unpaired_electrons = torch.ones(1, dtype=torch.int32)
+    explicit_spin = torch.tensor([2], dtype=torch.int32)
+
+    automatic, _ = xtbloom_torch(
+        positions,
+        atomic_numbers,
+        atom_offsets,
+        molecular_charges,
+        unpaired_electrons,
+        backend="cpu",
+    )
+    explicit, _ = xtbloom_torch(
+        positions,
+        atomic_numbers,
+        atom_offsets,
+        molecular_charges,
+        unpaired_electrons,
+        explicit_spin,
+        backend="cpu",
+    )
+    assert torch.allclose(automatic, explicit, atol=0.0, rtol=0.0)
+
+
 def test_backward_grad_equals_neg_forces() -> None:
     """The analytic gradient of the summed energy must be exactly ``-F``."""
     reason = _skip_reason()

@@ -328,7 +328,11 @@ __global__ void validate_and_compare_topology_kernel(
     if (candidate.molecular_charges[system] == 0.0) {
       candidate.molecular_charges[system] = 0.0;
     }
-    if (!spin_channels_supplied) candidate.spin_channels[system] = 1;
+    if (!spin_channels_supplied) {
+      candidate.spin_channels[system] = 1;
+    } else if (candidate.spin_channels[system] == 0) {
+      candidate.spin_channels[system] = candidate.unpaired_electrons[system] == 0 ? 1 : 2;
+    }
     if (candidate.spin_channels[system] != 1 && candidate.spin_channels[system] != 2) {
       set_device_failure(report, DeviceError::kInvalidMetadata, Field::kSpinChannels, system);
       return;
@@ -586,7 +590,7 @@ void set_semantic_error(const Diagnostic& diagnostic, std::string& error) {
   if (diagnostic.error == Error::kCountOverflow) {
     error = "the dense charge-response topology overflows int64_t";
   } else if (diagnostic.field == Field::kSpinChannels) {
-    error = "spin_channels values must be one or two";
+    error = "spin_channels values must be zero (auto), one, or two";
   } else if (diagnostic.error == Error::kNotSupported) {
     error = "one- and two-dimensional native periodic axes are reserved but not supported";
   } else if (diagnostic.field == Field::kPeriodicAxes) {
