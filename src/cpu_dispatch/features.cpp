@@ -20,14 +20,8 @@ constexpr const char* kCpuIsaEnvironment = "XTBLOOM_CPU_ISA";
 #else
 #define XTBLOOM_HAS_CPU_BUILTINS 1
 #endif
-#if defined(__has_attribute)
-#define XTBLOOM_HAS_AVX512_TARGET_ATTRIBUTE __has_attribute(target)
-#else
-#define XTBLOOM_HAS_AVX512_TARGET_ATTRIBUTE 1
-#endif
 #else
 #define XTBLOOM_HAS_CPU_BUILTINS 0
-#define XTBLOOM_HAS_AVX512_TARGET_ATTRIBUTE 0
 #endif
 
 }  // namespace
@@ -53,10 +47,7 @@ bool cpu_avx2_fma_kernels_built() noexcept {
 }
 
 bool cpu_avx512_fma_kernels_built() noexcept {
-#if defined(XTBLOOM_HAS_AVX2_FMA_KERNELS) && XTBLOOM_HAS_AVX512_TARGET_ATTRIBUTE
-  /* The experimental AVX-512 leaf is emitted from the isolated AVX2/FMA
-   * translation unit with a per-function target attribute. MSVC deliberately
-   * reports false until it has a separately compiled /arch:AVX512 object. */
+#if defined(XTBLOOM_HAS_AVX512_FMA_KERNELS)
   return true;
 #else
   return false;
@@ -177,5 +168,4 @@ xtbloom_status_t resolve_cpu_isa_from_environment(CpuIsa& selected, std::string&
 
 }  // namespace xtbloom::detail
 
-#undef XTBLOOM_HAS_AVX512_TARGET_ATTRIBUTE
 #undef XTBLOOM_HAS_CPU_BUILTINS
