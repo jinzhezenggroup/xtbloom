@@ -317,7 +317,8 @@ jobs:
         run: >-
           test "$(node
           tools/cloudflare-pages/node_modules/wrangler/bin/wrangler.js
-          --version)" = "4.131.0"
+          --version)" = "$(node -p
+          "require('./tools/cloudflare-pages/package.json').dependencies.wrangler")"
 
       - name: Archive locked Cloudflare Pages deployer
         run: >-
