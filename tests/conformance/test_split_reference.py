@@ -431,6 +431,63 @@ class SplitReferenceTest(unittest.TestCase):
                     fixture.manifest_path, allow_derived_tblite=True
                 )
 
+    def test_recorded_cli_input_link_does_not_attest_execution_or_admission(
+        self,
+    ) -> None:
+        """A complete new byte record is distinct from missing historical evidence."""
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticSplitReference(Path(temporary))
+            fixture.cli["provenance"].update(
+                input_sha256=fixture.case["input_sha256"],
+                input_byte_count=len(fixture.input_path.read_bytes()),
+            )
+            fixture.persist()
+            output = StringIO()
+            with redirect_stdout(output):
+                CONFORMANCE.check_manifest(
+                    fixture.manifest_path, allow_derived_tblite=True
+                )
+            self.assertIn(
+                "descriptors match retained case bytes: 1/1", output.getvalue()
+            )
+            self.assertIn("missing-digest links UNVERIFIED: 0", output.getvalue())
+            self.assertIn("actual CLI execution remains UNVERIFIED", output.getvalue())
+            self.assertIn("no scientific or performance admission", output.getvalue())
+
+    def test_rejects_partial_or_mismatching_recorded_cli_input_bytes(self) -> None:
+        """Malformed evidence must not fall back to the legacy missing-digest path."""
+        records = (
+            {"input_sha256": _sha256(COORD_BYTES)},
+            {"input_byte_count": len(COORD_BYTES)},
+            {"input_sha256": None, "input_byte_count": len(COORD_BYTES)},
+            {"input_sha256": "g" * 64, "input_byte_count": len(COORD_BYTES)},
+            {"input_sha256": "0" * 64, "input_byte_count": len(COORD_BYTES)},
+            {"input_sha256": _sha256(COORD_BYTES), "input_byte_count": True},
+            {"input_sha256": _sha256(COORD_BYTES), "input_byte_count": 1.0},
+            {"input_sha256": _sha256(COORD_BYTES), "input_byte_count": -1},
+            {
+                "input_sha256": _sha256(COORD_BYTES),
+                "input_byte_count": len(COORD_BYTES) + 1,
+            },
+        )
+        for record in records:
+            with (
+                self.subTest(record=record),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                fixture = SyntheticSplitReference(Path(temporary))
+                fixture.cli["provenance"].update(record)
+                fixture.persist()
+                with (
+                    redirect_stdout(StringIO()),
+                    self.assertRaisesRegex(
+                        CONFORMANCE.ConformanceError, "input-byte provenance"
+                    ),
+                ):
+                    CONFORMANCE.check_manifest(
+                        fixture.manifest_path, allow_derived_tblite=True
+                    )
+
     def test_default_check_rejects_split_source_and_cli_flag_is_opt_in(self) -> None:
         """The canonical default refuses derived records without the flag."""
         with tempfile.TemporaryDirectory() as temporary:

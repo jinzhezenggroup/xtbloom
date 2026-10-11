@@ -1024,6 +1024,37 @@ def _check_split_tblite_reference(
     return cli_provenance, gradient
 
 
+def _check_tblite_input_provenance(
+    manifest_path: Path, case: dict[str, Any], provenance: dict[str, Any]
+) -> bool:
+    """Check a recorded input artifact link, without attesting CLI execution.
+
+    Historical records lack these fields and remain explicitly unverified.
+    A partial record is not legacy provenance: it must fail rather than silently
+    discard a malformed claim of byte identity.
+    """
+    fields = ("input_sha256", "input_byte_count")
+    if not any(field in provenance for field in fields):
+        return False
+    digest = provenance.get("input_sha256")
+    byte_count = provenance.get("input_byte_count")
+    if (
+        not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or type(byte_count) is not int
+        or byte_count < 0
+    ):
+        raise ConformanceError("tblite recorded input-byte provenance is malformed")
+    input_path = resolve_manifest_path(manifest_path, case["input"])
+    if (
+        digest != case["input_sha256"]
+        or sha256_file(input_path) != digest
+        or input_path.stat().st_size != byte_count
+    ):
+        raise ConformanceError("tblite recorded input-byte provenance mismatch")
+    return True
+
+
 def check_manifest(manifest_path: Path, *, allow_derived_tblite: bool = False) -> None:
     """Validate corpus identity; derived references require explicit offline opt-in."""
     manifest = load_json(manifest_path)
@@ -1069,6 +1100,7 @@ def check_manifest(manifest_path: Path, *, allow_derived_tblite: bool = False) -
         )
     point_hardness = xtb_reference["point_charge_hardness_hartree"]
     derived_references = 0
+    derived_recorded_inputs = 0
     derived_cli_exits: set[int] = set()
     for case in cases:
         backends = case.get("xtbloom_backends", ["cpu", "cuda"])
@@ -1198,6 +1230,14 @@ def check_manifest(manifest_path: Path, *, allow_derived_tblite: bool = False) -
                 f"golden {golden_path} does not pin the primary oracle accuracy"
             )
         if reference_engine == "tblite":
+            recorded_input = _check_tblite_input_provenance(
+                manifest_path, case, oracle_provenance
+            )
+            if (
+                provenance.get("generation_mode") == "derived-live-cli-and-live-c-api"
+                and recorded_input
+            ):
+                derived_recorded_inputs += 1
             accepted_templates = accepted_tblite_command_templates(
                 tblite_reference, case
             )
@@ -1362,10 +1402,19 @@ def check_manifest(manifest_path: Path, *, allow_derived_tblite: bool = False) -
             f"derived tblite source consistency only: {derived_references} cases; "
             "no scientific or performance admission"
         )
-        print(  # noqa: T201 - CLI validation report
-            "CLI input-byte link remains UNVERIFIED; retained declared CLI "
-            f"aggregate exit codes: {sorted(derived_cli_exits)}"
-        )
+        if derived_recorded_inputs:
+            print(  # noqa: T201 - CLI validation report
+                "CLI recorded input-byte descriptors match retained case bytes: "
+                f"{derived_recorded_inputs}/{derived_references}; missing-digest "
+                f"links UNVERIFIED: {derived_references - derived_recorded_inputs}; "
+                "actual CLI execution remains UNVERIFIED; retained declared CLI "
+                f"aggregate exit codes: {sorted(derived_cli_exits)}"
+            )
+        else:
+            print(  # noqa: T201 - CLI validation report
+                "CLI input-byte link remains UNVERIFIED; retained declared CLI "
+                f"aggregate exit codes: {sorted(derived_cli_exits)}"
+            )
 
 
 def _validate_nested_shape(
@@ -1631,7 +1680,7 @@ def generate_with_tblite(
     output_dir: Path,
     case_names: list[str] | None,
 ) -> None:
-    """Run a tblite executable and emit normalized, provenance-rich golden JSON."""
+    """Run tblite on pinned private input copies and record their byte identity."""
     manifest = load_json(manifest_path)
     selected = selected_cases(manifest, case_names)
     unsupported = [case["id"] for case in selected if case.get("input_schema")]
@@ -1650,6 +1699,16 @@ def generate_with_tblite(
             and not case.get("input_schema")
         ]
     )
+    captured_inputs = []
+    # Validate the entire selection before any version probe or model call.
+    # Private copies keep another process's source edit from changing CLI input.
+    for case in cases:
+        input_path = resolve_manifest_path(manifest_path, case["input"])
+        input_bytes = input_path.read_bytes()
+        input_digest = hashlib.sha256(input_bytes).hexdigest()
+        if input_digest != case.get("input_sha256"):
+            raise ConformanceError(f"tblite input checksum mismatch for {case['id']}")
+        captured_inputs.append((case, input_path, input_bytes, input_digest))
     resolved_executable = Path(shutil.which(str(executable)) or executable).resolve()
     if not resolved_executable.is_file():
         raise ConformanceError(f"tblite executable does not exist: {executable}")
@@ -1670,13 +1729,23 @@ def generate_with_tblite(
 
     with tempfile.TemporaryDirectory(prefix="xtbloom-conformance-") as temporary:
         work = Path(temporary)
-        for case in cases:
-            input_path = resolve_manifest_path(manifest_path, case["input"])
-            raw_output = work / f"{case['id']}.json"
-            command = tblite_command(resolved_executable, case, input_path, raw_output)
+        for case_index, (
+            case,
+            input_path,
+            input_bytes,
+            input_digest,
+        ) in enumerate(captured_inputs):
+            case_work = work / str(case_index)
+            case_work.mkdir()
+            materialized_input = case_work / input_path.name
+            materialized_input.write_bytes(input_bytes)
+            raw_output = case_work / "tblite.json"
+            command = tblite_command(
+                resolved_executable, case, materialized_input, raw_output
+            )
             completed = subprocess.run(
                 command,
-                cwd=work,
+                cwd=case_work,
                 env=environment,
                 check=False,
                 text=True,
@@ -1688,6 +1757,13 @@ def generate_with_tblite(
                     f"tblite failed for {case['id']} with status "
                     f"{completed.returncode}:\n"
                     f"{completed.stdout}"
+                )
+            if (
+                sha256_file(input_path) != input_digest
+                or sha256_file(materialized_input) != input_digest
+            ):
+                raise ConformanceError(
+                    f"tblite input bytes changed during generation for {case['id']}"
                 )
             raw = load_json(raw_output)
             properties = normalize_tblite_output(raw, case)
@@ -1703,6 +1779,8 @@ def generate_with_tblite(
                 "executable_version": version,
                 "generation_mode": "live-cli",
                 "input": case["input"],
+                "input_sha256": input_digest,
+                "input_byte_count": len(input_bytes),
                 "runtime": runtime,
                 "source_output_sha256": sha256_json(properties),
                 "source_revision": reference["revision"],

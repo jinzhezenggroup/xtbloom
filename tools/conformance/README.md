@@ -202,11 +202,18 @@ paths, parent traversal, and symlink escapes are rejected. Historical
 `source_path` strings are informational and are never opened. Producer and
 prospective IDs are linked by the explicit `label_mapping`.
 
-The historical CLI record has no input-byte digest. Its declared input
+Historical CLI records lack an input-byte digest. Their declared input
 basename must match the producer ID, but this is not a byte-level binding
-to the case. The checker explicitly reports that CLI input-byte link as
-`UNVERIFIED`; only the API input is hash-bound here. A separate reviewed
-capture/provenance chain is still required before scientific admission.
+to the case; those links remain explicitly `UNVERIFIED`. Do not backfill
+old records with a digest inferred from matching output or filenames.
+New CLI provenance may record `input_sha256` and `input_byte_count` together.
+The checker validates their exact types, SHA-256 and size against the retained
+case input; partial or mismatching records fail rather than reverting to the
+legacy path. When recorded links exist, it separately counts those artifact
+links and missing-digest links; legacy-only reports retain their historical
+`UNVERIFIED` wording. Even a matching recorded descriptor does not witness actual CLI
+execution, source origin, loaded dependencies or scientific admission; the
+same no-claim boundary and separate reviewed capture chain remain required.
 
 The CLI source retains the canonical method/units, command, version,
 revision, accuracy, runtime-library and thread-environment pins. Its exact
@@ -239,6 +246,14 @@ primary goldens because their original convergence setting was not recorded:
 python3 tools/conformance/xtbloom_conformance.py import-tblite-snapshot \
   --source-root /path/to/tblite
 ```
+
+New tblite captures validate the hashes of every selected manifest input before
+any subprocess, then pass private byte-identical copies to the CLI. Both the
+original and materialized input hashes are checked after each successful call
+before its golden is published. Newly generated provenance records the input
+SHA-256 and byte count without changing numerical settings or reference values.
+This does not add those missing fields to old captures or prove a historical
+producer's input identity; legacy goldens remain unchanged.
 
 Regenerate the tblite-primary cases with a built executable from the
 pinned revision. The generator verifies tblite 0.7.0, records the resolved
