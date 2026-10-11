@@ -20,9 +20,12 @@ class CudaDistributionEvidenceTests(unittest.TestCase):
 
     def test_summary_uses_compact_json_with_final_newline(self) -> None:
         """Avoid reintroducing indentation that exceeds the aggregate budget."""
-        contents = (BUNDLE / "distribution-summary.json").read_text(encoding="utf-8")
+        contents = (BUNDLE / "distribution-summary.json").read_bytes()
         self.assertEqual(
-            contents, json.dumps(json.loads(contents), separators=(",", ":")) + "\n"
+            contents,
+            (json.dumps(json.loads(contents), separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            ),
         )
 
     def test_summary_regenerates_exact_json_and_csv(self) -> None:

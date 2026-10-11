@@ -711,6 +711,7 @@ def write_distribution_summary(
         )
         + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
     csv_path = output_dir / "distribution-summary.csv"
