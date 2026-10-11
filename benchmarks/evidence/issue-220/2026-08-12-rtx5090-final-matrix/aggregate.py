@@ -706,7 +706,8 @@ def write_distribution_summary(
     json_path = output_dir / "distribution-summary.json"
     json_path.write_text(
         json.dumps(
-            {"schema_version": 1, "decisions": decisions, "rows": rows}, indent=2
+            {"schema_version": 1, "decisions": decisions, "rows": rows},
+            separators=(",", ":"),
         )
         + "\n",
         encoding="utf-8",

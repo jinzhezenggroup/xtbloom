@@ -101,6 +101,22 @@ field for even-sized distributions. The retained raw CUDA-event samples are
 authoritative: `aggregate.py` recomputes conventional medians as the mean of
 the two middle values, and the harness is corrected for future measurements.
 
+## Lossless storage compaction
+
+The 2026-10-11 storage repair removes only insignificant JSON whitespace from
+`distribution-summary.json`: 624,436 bytes become 472,104 bytes, including the
+final newline. All 728 rows, all 14,560 raw samples, string contents, numeric
+lexemes, ordering, and provenance are unchanged. No samples were rerun, rounded,
+or omitted. The matching `aggregate.py` serializer emits compact JSON, and
+`benchmarks/test_cuda_distribution_evidence.py` regenerates both the JSON and
+CSV byte-for-byte from the retained authoritative inputs.
+
+The previous pretty-printed bytes remain recoverable from Git revision
+`5cb79785124479df9e92179c836eef433936e149` at this same path. Their SHA-256 is
+`eb1b465aae43a6873006559023802cbfe9014726e59f82ef923d9f6002e0018b`;
+the current compact artifact is covered by `SHA256SUMS`. This is a storage-only
+change, not new scientific evidence.
+
 ## Reproduction commands
 
 The pair-list matrix was generated with:
