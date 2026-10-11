@@ -631,4 +631,3 @@ def full(session: nox.Session) -> None:
     _run_python_tests(session)
     _run_canonical(session)
     _run_package(session)
-

@@ -262,4 +262,3 @@ as `*.nsys-rep`, `*.ncu-rep`, `*.qdstrm`, `*.sqlite`, and `*.prof` are
 prohibited. Archive only reviewed derived CSV, JSON, or text summaries with the
 profiler version and extraction command. See
 [profiler evidence policy](profiler-evidence.md).
-

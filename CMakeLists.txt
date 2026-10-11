@@ -5192,4 +5192,3 @@ if(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE)
       PROPERTIES LABELS "external-energy;public-api")
   endif()
 endif()
-
