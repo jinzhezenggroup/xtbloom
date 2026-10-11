@@ -272,6 +272,81 @@ int test_composed_coordinate_vjp() {
   return 0;
 }
 
+int test_zero_overlap_angular_pair_force() {
+  const std::vector<std::int64_t> atom_offsets{0, 2};
+  const std::vector<std::int32_t> atomic_numbers{8, 1};
+  const std::vector<double> positions{0.0, 0.0, 0.0, 1.8, 0.0, 0.0};
+  Evaluation evaluation;
+  std::string error;
+  CHECK(make_evaluation(1, atom_offsets, atomic_numbers, evaluation, error));
+  CHECK(evaluation.basis.angular_momenta == std::vector<std::uint8_t>({0, 1, 0}));
+
+  std::vector<double> coordination;
+  std::vector<double> overlap;
+  std::vector<double> hamiltonian;
+  CHECK(evaluate_full(evaluation, positions, coordination, overlap, hamiltonian, error));
+  const auto oxygen_py = static_cast<std::size_t>(evaluation.basis.shell_orbital_offsets[1]);
+  const auto hydrogen_s = static_cast<std::size_t>(evaluation.basis.shell_orbital_offsets[2]);
+  const auto orbital_count = static_cast<std::size_t>(evaluation.basis.total_orbitals);
+  const std::size_t selected = oxygen_py * orbital_count + hydrogen_s;
+  CHECK(std::abs(overlap[selected]) < 1.0e-12);
+  CHECK(std::abs(hamiltonian[selected]) < 1.0e-12);
+
+  /*
+   * Real p orbitals are ordered [y, z, x]. This collinear p-y/s overlap vanishes,
+   * but its transverse derivative does not: pruning the pair or forming H0/S
+   * would lose it. A directed fixed cotangent isolates this term without an SCC
+   * density fixture or a claim about the independently gated total energy.
+   */
+  std::vector<double> weights(hamiltonian.size(), 0.0);
+  weights[selected] = 1.0;
+  std::vector<double> dE_doverlap(hamiltonian.size(), 0.0);
+  std::vector<double> dE_dcn(atomic_numbers.size(), 0.0);
+  std::vector<double> gradients(positions.size(), 0.0);
+  CHECK(xtbloom::detail::gfn2::add_h0_vjp_cpu(evaluation.basis, evaluation.integrals, evaluation.h0,
+                                              positions.data(), coordination.data(), overlap.data(),
+                                              weights.data(), dE_doverlap.data(), dE_dcn.data(),
+                                              gradients.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::isfinite(dE_doverlap[selected]));
+  CHECK(std::abs(dE_doverlap[selected]) > 1.0e-6);
+  CHECK(xtbloom::detail::gfn2::add_overlap_gradient_cpu(
+            evaluation.basis, evaluation.integrals, positions.data(), dE_doverlap.data(),
+            gradients.data(), evaluation.workspace.data(),
+            evaluation.workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_coordination_gradient_cpu(
+            evaluation.coordination, positions.data(), dE_dcn.data(), gradients.data(), error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::isfinite(gradients[4]));
+  CHECK(std::abs(gradients[4]) > 1.0e-6);
+
+  for (const double step : {2.0e-5, 1.0e-5}) {
+    for (const std::size_t coordinate : {1u, 4u}) {
+      auto right_positions = positions;
+      auto left_positions = positions;
+      right_positions[coordinate] += step;
+      left_positions[coordinate] -= step;
+      std::vector<double> right_coordination;
+      std::vector<double> right_overlap;
+      std::vector<double> right_hamiltonian;
+      std::vector<double> left_coordination;
+      std::vector<double> left_overlap;
+      std::vector<double> left_hamiltonian;
+      CHECK(evaluate_full(evaluation, right_positions, right_coordination, right_overlap,
+                          right_hamiltonian, error));
+      CHECK(evaluate_full(evaluation, left_positions, left_coordination, left_overlap,
+                          left_hamiltonian, error));
+      const double numerical =
+          (contraction(right_hamiltonian, weights) - contraction(left_hamiltonian, weights)) /
+          (2.0 * step);
+      CHECK(near(gradients[coordinate], numerical, 2.0e-8));
+    }
+  }
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    CHECK(near(gradients[axis] + gradients[3u + axis], 0.0, 2.0e-12));
+  }
+  return 0;
+}
+
 int test_validation() {
   const std::vector<std::int64_t> atom_offsets{0, 2};
   const std::vector<std::int32_t> atomic_numbers{1, 1};
@@ -327,6 +402,9 @@ int main() {
     return status;
   }
   if (const int status = test_composed_coordinate_vjp(); status != 0) {
+    return status;
+  }
+  if (const int status = test_zero_overlap_angular_pair_force(); status != 0) {
     return status;
   }
   return test_validation();
