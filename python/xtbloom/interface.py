@@ -3294,7 +3294,7 @@ def _bind_outputs(
             for public_name, field_name, shape, dtype in specs
             if requested[public_name]
             and public_name not in out_spec
-            and (shape and _dlpack._dlpack_bytes(shape, 1) != 0)
+            and _dlpack._dlpack_bytes(shape, 1) != 0
         ]
         if cuda_owned:
             arena, offsets = _allocate_result_arena(context, cuda_owned)
