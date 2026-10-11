@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.10.7"
           enable-cache: true
@@ -59,16 +59,19 @@ jobs:
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
           # Tests execute concurrently, so atomic profile updates prevent
           # corrupt negative gcov counters in shared library objects.
-          COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage -fprofile-update=atomic' || '' }}
+          # Spell out the compile switches so dependency-free targets can
+          # cancel instrumentation without inheriting libgcov at link time.
+          COVERAGE_COMPILE_FLAGS: ${{ matrix.compiler == 'gcc' && '-fprofile-arcs -ftest-coverage -fprofile-update=atomic' || '' }}
+          COVERAGE_LINK_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
         run: |
           cmake -S . -B build -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_CXX_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_FLAGS}"
+            -DCMAKE_C_FLAGS="${COVERAGE_COMPILE_FLAGS}" \
+            -DCMAKE_CXX_FLAGS="${COVERAGE_COMPILE_FLAGS}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_LINK_FLAGS}"
       - name: Build
         run: cmake --build build --parallel
       - name: Show ccache statistics
@@ -108,7 +111,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           # Generate against uv.lock with the matching uv version, then bump
           # `version` and regenerate the lock together.
@@ -235,7 +238,7 @@ jobs:
         # fail_ci_if_error covers CLI upload errors; continue-on-error also
         # covers action setup, integrity-check, and OIDC failures.
         continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           files: ${{ matrix.files }}
           flags: ${{ matrix.flag }}
@@ -253,7 +256,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -297,7 +300,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -354,7 +357,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -383,13 +386,14 @@ jobs:
           test -f "${openblas}"
           cmake -S . -B build-public -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE=ON \
             -DXTBLOOM_CPU_LINALG_LIBRARY="${openblas}" \
             -DPython3_EXECUTABLE="${PWD}/.venv/bin/python" \
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_FLAGS="--coverage -fprofile-update=atomic" \
-            -DCMAKE_CXX_FLAGS="--coverage -fprofile-update=atomic" \
+            -DCMAKE_C_FLAGS="-fprofile-arcs -ftest-coverage -fprofile-update=atomic" \
+            -DCMAKE_CXX_FLAGS="-fprofile-arcs -ftest-coverage -fprofile-update=atomic" \
             -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -433,6 +437,6 @@ jobs:
     if: always()
     steps:
       - name: Decide whether the needed jobs succeeded or failed
-        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
         with:
           jobs: ${{ toJSON(needs) }}

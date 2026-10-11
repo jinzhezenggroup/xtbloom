@@ -74,6 +74,7 @@ def _fake_computed(
         charges=np.empty(total_atoms, dtype=np.float64),
         point_charge_forces=None,
         dipole_moments=None,
+        strain_derivatives=None,
         scc_iterations=iterations,
         scc_converged=converged,
         per_system_status=statuses,

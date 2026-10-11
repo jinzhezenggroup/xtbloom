@@ -1,0 +1,163 @@
+{
+  "arrays": {
+    "atomic_numbers": {
+      "kind": "integer",
+      "shape": [
+        3
+      ],
+      "values": [
+        8,
+        1,
+        1
+      ]
+    },
+    "gradient_hartree_per_bohr": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        -0.08084602403649756,
+        0.02459377252590664,
+        0.17240654162296565,
+        -0.07848145084794492,
+        -0.004179738922418421,
+        -0.057750242003783286,
+        0.1593274748844425,
+        -0.02041403360348822,
+        -0.11465629961918236
+      ]
+    },
+    "lattice_vectors_bohr_columns": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        11.7,
+        0.0,
+        0.0,
+        1.1,
+        12.9,
+        0.0,
+        -0.7,
+        0.8,
+        14.3
+      ]
+    },
+    "per_atom_energy_hartree": {
+      "kind": "real",
+      "shape": [
+        3
+      ],
+      "values": [
+        0.0299248514281825,
+        0.010153257561506077,
+        0.020822630121013735
+      ]
+    },
+    "positions_bohr": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.42,
+        0.08,
+        1.08,
+        -1.31,
+        0.17,
+        0.96
+      ]
+    },
+    "strain_derivatives_hartree": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        -0.32016266111962055,
+        0.02080715466233598,
+        0.06819440897329054,
+        0.020807154662335983,
+        -0.003804764829448717,
+        -0.02411159029556844,
+        0.06819440897329057,
+        -0.02411159029556844,
+        -0.17244030899864174
+      ]
+    },
+    "total_energy_hartree": {
+      "kind": "real",
+      "shape": [],
+      "values": [
+        0.06090073911070231
+      ]
+    }
+  },
+  "finite_difference": [
+    {
+      "analytic": -0.07848145084794492,
+      "indices_zero_based": [],
+      "kind": "cartesian",
+      "samples": [
+        {
+          "absolute_error": 1.353239603707479e-09,
+          "estimate": -0.07848145220118452,
+          "minus": 0.06090858862857807,
+          "minus_raw_sha256": "328f92fdebc05299093aad9b5c85df06af80e067ccff47bba302fd61bdfc5337",
+          "plus": 0.060892892338137834,
+          "plus_raw_sha256": "1dcab162e37a15a2ac84e9314a18ee6fa94869db41245901ddbcb7d5242c95a1",
+          "step": 0.0001
+        },
+        {
+          "absolute_error": 3.382875923829687e-10,
+          "estimate": -0.07848145118623251,
+          "minus": 0.060904663526425554,
+          "minus_raw_sha256": "6313fa7ad2f82770025f5d6aa22e4193809190f9e219b519ff193c578e501238",
+          "plus": 0.06089681538130693,
+          "plus_raw_sha256": "98c0fce705c6fcf4eaf63ba9619bf9c0d18601ae76a7f4b484ab8643b0d7051f",
+          "step": 5e-05
+        }
+      ],
+      "value": "total_energy_hartree"
+    },
+    {
+      "analytic": -0.32016266111962055,
+      "indices_zero_based": [],
+      "kind": "affine_strain",
+      "samples": [
+        {
+          "absolute_error": 1.012980932468821e-08,
+          "estimate": -0.3201626712494299,
+          "minus": 0.060932762954188785,
+          "minus_raw_sha256": "a3d9cde922f6f8a7eb67abe4cc5f708d2b6309cc2315c10c88e08a9bf8304c48",
+          "plus": 0.0608687304199389,
+          "plus_raw_sha256": "8c05eadf5dcdebfc854d462f3232c8f333673c11b3f195c7346994aa2d01019b",
+          "step": 0.0001
+        },
+        {
+          "absolute_error": 2.5326919450563423e-09,
+          "estimate": -0.3201626636523125,
+          "minus": 0.060916749137975276,
+          "minus_raw_sha256": "78750609c3266a8647246a8ac294ccb6a1ae5a66f46f323800c4a9bc6cbd0a0f",
+          "plus": 0.060884732871610045,
+          "plus_raw_sha256": "47ede4840097b585296f99ee8dcb0055238ab61254f4e7bfef1cf7bcd68a9fb2",
+          "step": 5e-05
+        }
+      ],
+      "value": "total_energy_hartree"
+    }
+  ],
+  "input_id": "water_skew",
+  "mode": "repulsion",
+  "schema": "xtbloom-periodic-gfn2-term-fixture-v1",
+  "storage_order": "fortran-column-major"
+}

@@ -9,7 +9,9 @@
 #include <string>
 
 #include "cpu_dispatch/features.hpp"
+#include "model/gfn2/scc_driver.hpp"
 #include "xtbloom/xtbloom.h"
+#include "xtbloom/xtbloom_external_energy.h"
 
 namespace xtbloom::detail {
 
@@ -50,6 +52,12 @@ struct Context {
    * construction here establishes the production context lifetime now.
    */
   std::shared_ptr<Gfn2CudaExecutionCache> gfn2_cuda_execution_cache;
+
+  /* Unreleased local external energy callback state.  The C ABI adapter stores the
+   * caller's callback here while the SCC driver receives a stable Context*
+   * trampoline as its opaque pointer. */
+  xtbloom_external_energy_callback_t external_energy_callback = nullptr;
+  void* external_energy_opaque = nullptr;
 };
 
 xtbloom_status_t create_context(const xtbloom_context_options_t& options, Context*& context,
@@ -60,6 +68,12 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
  * execution, and publication. */
 xtbloom_status_t ensure_gfn1_cpu_execution_cache(Context& context, std::string& error);
 xtbloom_status_t ensure_gfn2_cpu_execution_cache(Context& context, std::string& error);
+
+/* Install the isolated external energy callback on a CPU context.  This is a local
+ * C++ integration seam and intentionally is not part of xtbloom.h. */
+xtbloom_status_t set_external_energy_callback(Context& context,
+                                              gfn2::ExternalEnergyCallback callback, void* opaque,
+                                              std::string& error);
 
 #if defined(XTBLOOM_HAS_CUDA)
 bool resolve_cuda_device(std::int32_t requested_device, std::int32_t& resolved_device,

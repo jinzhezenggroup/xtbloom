@@ -352,6 +352,60 @@ int test_atm_gradient_and_charge_independence() {
   return 0;
 }
 
+int test_atm_molecular_cutoff() {
+  constexpr std::array<std::int64_t, 2> offsets{0, 3};
+  constexpr std::array<std::int32_t, 3> atomic_numbers{6, 6, 6};
+  constexpr std::array<double, 9> inside_positions{
+      0.0, 0.0, 0.0, 16.0, 0.0, 0.0, 0.0, 19.0, 0.0,
+  };
+  constexpr std::array<double, 9> outside_positions{
+      0.0, 0.0, 0.0, 16.0, 0.0, 0.0, 0.0, 20.0, 0.0,
+  };
+
+  // The squared edges are 256/361/617 inside and 256/400/656 outside: one
+  // leg crosses the native 25-bohr cutoff but stays below the older source's
+  // 40-bohr cutoff; all legs remain within the 30-bohr D4-CN radius. This
+  // term-level check is not full-SCC reference validation or adoption of
+  // another implementation.
+  D4Plan plan;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_d4_plan(1, 3, offsets.data(), atomic_numbers.data(), plan,
+                                            error) == XTBLOOM_STATUS_SUCCESS);
+  AlignedWorkspace storage(plan.workspace_size_bytes());
+  D4Workspace workspace;
+  CHECK(xtbloom::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
+                                                 workspace, error) == XTBLOOM_STATUS_SUCCESS);
+  std::vector<double> pair_data(static_cast<std::size_t>(plan.total_pairs()) *
+                                xtbloom::detail::gfn2::kD4PairDataElements);
+  std::vector<double> coordination(static_cast<std::size_t>(plan.total_atoms()));
+  D4GeometryCache cache;
+  std::uint64_t generation = 1u;
+  CHECK(xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
+            plan, inside_positions.data(), generation++, pair_data.data(), pair_data.size(),
+            coordination.data(), coordination.size(), workspace, cache,
+            error) == XTBLOOM_STATUS_SUCCESS);
+  std::array<double, 1> energies{};
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_atm_cpu(plan, cache, energies.data(), workspace,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::isfinite(energies[0]));
+  CHECK(energies[0] != 0.0);
+
+  CHECK(xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
+            plan, outside_positions.data(), generation++, pair_data.data(), pair_data.size(),
+            coordination.data(), coordination.size(), workspace, cache,
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_atm_cpu(plan, cache, energies.data(), workspace,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(energies[0] == 0.0);
+
+  std::array<double, 9> gradients{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
+  const auto unchanged_gradients = gradients;
+  CHECK(xtbloom::detail::gfn2::add_d4_atm_gradient_cpu(plan, cache, gradients.data(), workspace,
+                                                       error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(gradients == unchanged_gradients);
+  return 0;
+}
+
 int test_validation_and_zero_allocation_hot_path() {
   Fixture fixture;
   std::string error;
@@ -480,6 +534,9 @@ int main() {
     return line;
   }
   if (const int line = test_atm_gradient_and_charge_independence(); line != 0) {
+    return line;
+  }
+  if (const int line = test_atm_molecular_cutoff(); line != 0) {
     return line;
   }
   return test_validation_and_zero_allocation_hot_path();

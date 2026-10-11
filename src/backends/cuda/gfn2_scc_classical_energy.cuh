@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_electric_field.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -59,6 +60,7 @@ struct Gfn2SccClassicalEnergyDeviceBatch {
   std::uint64_t plan_token = 0u;
   /* Zero plan_token keeps legacy field-free bindings valid. */
   Gfn2ElectricFieldDeviceBatch electric_field{};
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /*

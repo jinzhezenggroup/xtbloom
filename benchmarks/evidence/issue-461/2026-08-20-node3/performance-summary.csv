@@ -1,0 +1,9 @@
+group,natoms,ao_count,batch_size,start_mode,baseline_median_ms,candidate_median_ms,speedup_x,improvement_percent,baseline_samples,candidate_samples,baseline_iteration_median,candidate_iteration_median,baseline_correctness,candidate_correctness,baseline_fresh_reference,candidate_fresh_reference
+large_ao,362,722,1,fresh,1267.696307,1194.240366,1.061509,5.794443,30,30,17.0,17.0,pass,pass,not_requested,not_requested
+large_ao,362,722,1,warm,298.582041,289.851945,1.030119,2.923852,30,30,2.0,2.0,pass,pass,pass,pass
+controls,62,122,8,fresh,142.713754,140.679842,1.014458,1.425169,30,30,18.0,18.0,pass,pass,not_requested,not_requested
+controls,62,122,32,fresh,195.282440,193.658417,1.008386,0.831628,30,30,18.0,18.0,pass,pass,not_requested,not_requested
+controls,62,122,128,fresh,440.022614,437.952549,1.004727,0.470445,30,30,18.0,18.0,pass,pass,not_requested,not_requested
+controls_stabilized_abba,62,122,8,warm,35.604319,32.893320,1.082418,7.614241,60,60,2.0,2.0,pass,pass,pass,pass
+controls,62,122,32,warm,60.399318,60.206612,1.003201,0.319054,30,30,2.0,2.0,pass,pass,pass,pass
+controls,62,122,128,warm,179.317363,179.350302,0.999816,-0.018369,30,30,2.0,2.0,pass,pass,pass,pass

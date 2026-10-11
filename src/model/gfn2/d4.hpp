@@ -13,6 +13,10 @@
 
 namespace xtbloom::detail::gfn2 {
 
+class PeriodicShortRangePlan;
+struct PeriodicShortRangeGeometry;
+struct PeriodicShortRangeWorkspace;
+
 inline constexpr std::size_t kD4WorkspaceAlignment = 64u;
 inline constexpr std::size_t kD4MaximumReferences = 7u;
 inline constexpr std::size_t kD4PairDataElements = 5u;
@@ -167,9 +171,11 @@ xtbloom_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4Geomet
 
 /*
  * Overwrite the non-self-consistent q=0 reference-weighted ATM energy. The
- * finite-system implementation uses the GFN2 s9/a1/a2 parameters and the
- * same 25-bohr sharp cutoff as pinned tblite. The output must be disjoint from
- * the geometry cache, workspace, plan storage, and descriptors.
+ * molecular finite-system implementation uses the GFN2 s9/a1/a2 parameters
+ * and the existing 25-bohr sharp cutoff as pinned tblite. The periodic ATM
+ * path below uses its separately documented smooth outer switch. The output
+ * must be disjoint from the geometry cache, workspace, plan storage, and
+ * descriptors.
  */
 xtbloom_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& cache,
                                      double* energies, const D4Workspace& workspace,
@@ -183,6 +189,81 @@ xtbloom_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& 
 xtbloom_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
                                          double* gradients, const D4Workspace& workspace,
                                          std::string& error);
+
+/*
+ * Periodic D4 uses the complete real-space image lists owned by the shared
+ * short-range plan.  The D4 plan still owns all element/reference data, while
+ * the prepared periodic geometry supplies wrapped central-cell coordinates.
+ * D4 coordination retains its sharp 30-bohr cutoff. The periodic two-body
+ * and ATM terms use the pinned tblite 0.05-bohr (in bohr) quintic switch at
+ * their 50- and 25-bohr outer cutoffs, including the switch derivative in
+ * Cartesian and affine-cell adjoints. ATM applies the product of the three
+ * pair switches and the complete product-rule derivative. The output of each
+ * evaluate_* operation is overwritten only after its complete image sum
+ * succeeds; add_* operations accumulate only after their complete derivative
+ * sum succeeds. Workspace scratch may be changed on failure, but active
+ * inputs, outputs, workspaces, plans, and descriptors must be disjoint.
+ */
+xtbloom_status_t evaluate_periodic_d4_coordination_cpu(const D4Plan& plan,
+                                                       const PeriodicShortRangePlan& periodic_plan,
+                                                       const PeriodicShortRangeGeometry& geometry,
+                                                       double* coordination_numbers,
+                                                       const PeriodicShortRangeWorkspace& workspace,
+                                                       std::string& error);
+
+/* Accumulate the D4-CN VJP into dE/dR and row-major dE/d epsilon. */
+xtbloom_status_t add_periodic_d4_coordination_gradient_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* dE_dcn, double* gradients,
+    double* strain_derivatives, const PeriodicShortRangeWorkspace& workspace, std::string& error);
+
+/*
+ * Evaluate the charge-dependent periodic two-body term.  Per-atom energies
+ * use the tblite lower-triangle accounting (one half to each endpoint and a
+ * half-weighted self image). For first == second, the zero translation is
+ * excluded. Each nonzero self-image pair is half-weighted because opposite
+ * directed self images would otherwise be counted twice; its Cartesian
+ * derivative cancels because both image endpoints follow the same central
+ * atom coordinate, while its affine strain derivative remains. Potentials
+ * are dE/dq in Hartree per electron.
+ */
+xtbloom_status_t evaluate_periodic_d4_two_body_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    const double* atomic_charges, double* per_atom_energies, double* atomic_potentials,
+    const D4Workspace& d4_workspace, const PeriodicShortRangeWorkspace& workspace,
+    std::string& error);
+
+/* Add periodic two-body dE/dR and dE/d epsilon, including the D4-CN path. */
+xtbloom_status_t add_periodic_d4_two_body_gradient_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    const double* atomic_charges, double* gradients, double* strain_derivatives,
+    const D4Workspace& d4_workspace, const PeriodicShortRangeWorkspace& workspace,
+    std::string& error);
+
+/*
+ * Evaluate the zero-charge/non-SCC periodic ATM term into per-atom energies.
+ * The lower-triangular central-atom loops use multiplicities 1, 1/2, and 1/6
+ * for three distinct, two equal, and three equal central-atom labels. This
+ * handles permutation multiplicity only: lattice translations remain fully
+ * enumerated and receive no Wigner--Seitz 1/n weight. Zero self translations
+ * are excluded on repeated legs, and the validated coincident image rule is
+ * applied to the remaining edges.
+ */
+xtbloom_status_t evaluate_periodic_d4_atm_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    double* per_atom_energies, const D4Workspace& d4_workspace,
+    const PeriodicShortRangeWorkspace& workspace, std::string& error);
+
+/* Add periodic ATM dE/dR and dE/d epsilon, including its D4-CN path and the
+ * product-rule derivative of the three pair cutoff switches. */
+xtbloom_status_t add_periodic_d4_atm_gradient_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    double* gradients, double* strain_derivatives, const D4Workspace& d4_workspace,
+    const PeriodicShortRangeWorkspace& workspace, std::string& error);
 
 }  // namespace xtbloom::detail::gfn2
 

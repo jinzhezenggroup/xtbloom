@@ -34,7 +34,9 @@ from .interface import (
     numbers_to_symbols,
     symbols_to_numbers,
 )
+from .optimize import OptimizationResult, optimize, optimize_batch
 from .torch import xtbloom_torch
+from .vibrations import VibrationalResult, analyze_vibrations, vibrations
 
 # The build backend records exact release tags or revision-aware development
 # versions in the installed distribution metadata. Reading it here avoids a
@@ -52,16 +54,22 @@ __all__ = [
     "ChargeResponse",
     "Context",
     "DLPackResultBuffer",
+    "OptimizationResult",
     "PointCharge",
     "Result",
     "Structure",
+    "VibrationalResult",
     "XTBloomError",
     "XTBloomNotSupportedError",
     "XTBloomRuntimeError",
     "XTBloomValueError",
     "__version__",
+    "analyze_vibrations",
     "compute_arrays",
     "numbers_to_symbols",
+    "optimize",
+    "optimize_batch",
     "symbols_to_numbers",
+    "vibrations",
     "xtbloom_torch",
 ]

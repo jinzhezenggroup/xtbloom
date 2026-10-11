@@ -6,11 +6,11 @@ xTBloom provides batched GFN1/GFN2-xTB energies, analytic forces, and charges
 through a NumPy-friendly interface backed by the same stable C ABI used by
 native C and C++ applications.
 
-GFN2-xTB supports CPU and CUDA. GFN1-xTB supports CPU through `Calculator`,
+GFN1-xTB and GFN2-xTB support CPU and CUDA through `Calculator`,
 `BatchCalculator`, ASE, and dpdata. Both models support native ragged batches,
 explicit point charges with force output, and caller-supplied periodic charge
-response. Array API/DLPack, PyTorch autograd, and the browser demo remain
-explicitly GFN2-only surfaces.
+response. The packed Array API/DLPack surface and PyTorch positions-only
+autograd also support both models.
 
 ## Installation
 
@@ -138,12 +138,9 @@ does not change the narrower PyTorch autograd contract described below.
 Set `backend="cpu"` or `backend="cuda"` to require one backend. The CUDA
 quickstart above deliberately uses `"cuda"` so an unavailable GPU fails clearly
 instead of running on CPU. `"auto"` prefers CUDA but falls back to CPU.
-For GFN1-xTB, high-level `"auto"` selects CPU because CUDA support is not
-published; an explicit `backend="cuda"` request is not redirected. A
-CUDA-capable native build returns `NOT_SUPPORTED`, while a build without CUDA
-may return `BACKEND_UNAVAILABLE` when creating the context.
-Passing a nonnegative `device_id` with GFN1 `backend="auto"` is rejected instead
-of silently ignoring the requested GPU.
+The same AUTO policy applies to GFN1-xTB and GFN2-xTB. A build without CUDA may
+return `BACKEND_UNAVAILABLE` when creating an explicitly requested CUDA
+context; a nonnegative `device_id` can be used with AUTO or CUDA.
 Compatible calls can opt into electronic warm starts; the default is an
 independent fresh SCC solve.
 
@@ -184,10 +181,12 @@ conservative CUDA chunks while preserving input order.
 
 ## Advanced array and CUDA paths
 
-`ArrayBatch` is currently GFN2-xTB-only. It accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
-PyTorch arrays through `__dlpack__` and `__dlpack_device__`. Host arrays map
-to host descriptors; CUDA arrays can remain device-resident. By default,
-results return as host NumPy arrays.
+`ArrayBatch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB retained as the default. It accepts
+packed ragged descriptors from eager NumPy, CuPy, JAX, or PyTorch arrays through
+`__dlpack__` and `__dlpack_device__`. Host arrays map to host descriptors; CUDA
+arrays can remain device-resident. By default, results return as host NumPy
+arrays.
 
 Use an `out=` mapping for caller-owned NumPy, CuPy, or PyTorch output buffers,
 or `result_memory="cuda"` for one xTBloom-owned packed device arena exported as
@@ -195,28 +194,42 @@ DLPack producers. Exact dtype, shape, layout, lifetime, stream, and ownership
 rules are documented in the
 [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md#array-api-and-dlpack-input-arrays).
 
-`xtbloom_torch` is currently GFN2-xTB-only. `xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
-unpaired_electrons, ...)` runs xTBloom inference on PyTorch tensors (host or
-CUDA) and is the only autograd entry point in the Python API. It supports
-exactly the positions gradient `dE/dR = -F`; autograd on any other input, or a
-gradient flowing through the `forces` output (the Hessian), raises
-`XTBloomNotSupportedError`. Higher-order differentiation is likewise rejected
-explicitly rather than returning a partial or zero Hessian. The native data
-plane is a compiled extension written against the LibTorch Stable ABI
-(torch >= 2.10), so a single binary works across torch releases; its stable
-headers are vendored in `cmake/3rdparty/torch-stable` and it links a
-build-time-only stub, so building xTBloom never downloads or requires torch
-(torch is still required at runtime to call `xtbloom_torch`). PyTorch is
-imported only when the op is called. CPU execution is synchronous; CUDA follows
-`torch.cuda.current_stream()` and returns the ordinary `(energies, forces)`
-pair. See
-`docs/user-guide/python.md` for the full contract.
+`xtbloom_torch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB retained as the default. For example:
+
+```python
+energies, forces = xtbloom_torch(
+    positions,
+    atomic_numbers,
+    atom_offsets,
+    molecular_charges,
+    unpaired_electrons,
+    method="GFN1-xTB",
+    backend="cuda",
+)
+```
+
+It runs xTBloom inference on PyTorch tensors (host or CUDA) and is the only
+autograd entry point in the Python API. It supports exactly the positions
+gradient `dE/dR = -F`; autograd on any other input, or a gradient flowing
+through the `forces` output (the Hessian), raises `XTBloomNotSupportedError`.
+Higher-order differentiation is likewise rejected explicitly rather than
+returning a partial or zero Hessian. The native data plane is a compiled
+extension written against the LibTorch Stable ABI (torch >= 2.10), so a single
+binary works across torch releases; its stable headers are vendored in
+`cmake/3rdparty/torch-stable` and it links a build-time-only stub, so building
+xTBloom never downloads or requires torch (torch is still required at runtime
+to call `xtbloom_torch`). PyTorch is imported only when the op is called. CPU
+execution is synchronous; CUDA follows `torch.cuda.current_stream()` and
+returns the ordinary `(energies, forces)` pair. See `docs/user-guide/python.md`
+for the full contract.
 
 ## Charge, spin, and embedding
 
 Use either `multiplicity` or `uhf = multiplicity - 1` for open-shell
-calculations. Open-shell Python calculations default to two unrestricted spin
-channels; `spin_channels=1` requests the restricted open-shell form.
+calculations. All Python entry points default open-shell systems to two
+unrestricted spin channels and closed-shell systems to one restricted channel;
+`spin_channels=1` explicitly requests the restricted open-shell form.
 
 `PointCharge` inputs participate in every SCC iteration, and xTBloom can
 return forces on both QM atoms and point charges. `ChargeResponse(shifts=b,
@@ -257,14 +270,16 @@ geometry optimization in the C ABI.
 
 ## Scope
 
-GFN1-xTB CUDA execution, GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs,
-solvation, native geometry optimization, molecular dynamics, native/analytic
-Hessians, vibrational analysis, and
-higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
-available through Python `Calculator.hessian()` and `BatchCalculator.hessian()`.
+GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs, solvation, native
+geometry-optimization and molecular-dynamics drivers, native/analytic Hessians,
+and higher-order autograd are not implemented. Python provides numerical QM
+Cartesian Hessians and [vibrational analysis](../docs/user-guide/vibrations.md),
+while standard ASE integrators provide [molecular dynamics](../docs/user-guide/ase-md.md)
+over repeated xTBloom calculations.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
-direct device and mixed descriptors are exposed through the GFN2-only
-`ArrayBatch` surface and the low-level C ABI.
+direct device and mixed descriptors are exposed through the model-aware
+`ArrayBatch` surface and the low-level C ABI. PyTorch autograd supports GFN1 and
+GFN2 with the positions-only `dE/dR = -F` contract.
 
 ## More documentation
 

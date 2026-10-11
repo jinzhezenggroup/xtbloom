@@ -324,11 +324,12 @@ def test_abi_struct_sizes() -> None:
     assert library.ComputeOptions.scc_mixer_damping.offset == 64
     assert library.ComputeOptions.determinism.offset == 72
     assert library.ComputeOptions.reserved_v3.offset == 76
-    assert ctypes.sizeof(library.BatchResult) == 280
+    assert ctypes.sizeof(library.BatchResult) == 304
     assert library.BatchResult.dipole_moments.offset == 184
     assert library.BatchResult.quadrupole_moments.offset == 208
     assert library.BatchResult.wiberg_orders.offset == 232
     assert library.BatchResult.spin_populations.offset == 256
+    assert library.BatchResult.strain_derivatives.offset == 280
     assert ctypes.sizeof(library.Interaction) == 32
     assert library.Interaction.type.offset == 0
     assert library.Interaction.flags.offset == 4
@@ -337,6 +338,7 @@ def test_abi_struct_sizes() -> None:
     assert library.Interaction.payload_size.offset == 24
     assert library.RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES == 1
     assert library.RESULT_DIPOLE_MOMENTS == 1 << 4
+    assert library.RESULT_STRAIN_DERIVATIVES == 1 << 5
     assert ctypes.sizeof(library.ResultOwnerOptions) == 32
     assert library.ResultOwnerOptions.memory_space.offset == 8
     assert library.ResultOwnerOptions.size_bytes.offset == 16
@@ -394,7 +396,7 @@ def test_abi_struct_sizes() -> None:
 
 
 def test_method_aliases_and_gfn1_backend_policy() -> None:
-    """Resolve both model aliases without silently selecting CUDA for GFN1."""
+    """Resolve both model aliases through the shared native AUTO policy."""
     from xtbloom.interface import BatchCalculator, Calculator, Structure
 
     with pytest.raises(XTBloomValueError):
@@ -403,23 +405,24 @@ def test_method_aliases_and_gfn1_backend_policy() -> None:
     for method in ("GFN1-xTB", "GFN1"):
         calculator = Calculator(method, np.array([1]), np.zeros((1, 3)))
         assert calculator._settings.model == library.MODEL_GFN1_XTB
-        assert calculator._context._requested == library.BACKEND_CPU
+        assert calculator._context._requested == library.BACKEND_AUTO
 
     explicit_cuda = Calculator(
         "GFN1-xTB", np.array([1]), np.zeros((1, 3)), backend="cuda"
     )
     assert explicit_cuda._context._requested == library.BACKEND_CUDA
-    with pytest.raises(XTBloomValueError, match="cannot use a CUDA device_id"):
-        Calculator(
-            "GFN1-xTB",
-            np.array([1]),
-            np.zeros((1, 3)),
-            device_id=0,
-        )
+    auto_device = Calculator(
+        "GFN1-xTB",
+        np.array([1]),
+        np.zeros((1, 3)),
+        device_id=0,
+    )
+    assert auto_device._context._requested == library.BACKEND_AUTO
+    assert auto_device._context._device_id == 0
 
     batch = BatchCalculator([Structure(np.array([1]), np.zeros((1, 3)))], method="GFN1")
     assert batch._settings.model == library.MODEL_GFN1_XTB
-    assert batch._context._requested == library.BACKEND_CPU
+    assert batch._context._requested == library.BACKEND_AUTO
 
 
 def test_gfn1_rejects_unpublished_field_and_dipole_path() -> None:

@@ -1,0 +1,253 @@
+{
+  "arrays": {
+    "atomic_numbers": {
+      "kind": "integer",
+      "shape": [
+        3
+      ],
+      "values": [
+        8,
+        1,
+        1
+      ]
+    },
+    "ewald_alpha_bohr_inverse": {
+      "kind": "real",
+      "shape": [],
+      "values": [
+        0.21875
+      ]
+    },
+    "fixed_atomic_charges_e": {
+      "kind": "real",
+      "shape": [
+        3
+      ],
+      "values": [
+        -0.2,
+        0.1,
+        0.1
+      ]
+    },
+    "fixed_shell_charges_e": {
+      "kind": "real",
+      "shape": [
+        4
+      ],
+      "values": [
+        -0.12,
+        -0.08,
+        0.1,
+        0.1
+      ]
+    },
+    "gradient_hartree_per_bohr": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        2.6622831568596768e-05,
+        -0.00021370465928710153,
+        -0.001749685072728809,
+        0.0006465075845436515,
+        8.000299182139346e-05,
+        0.0008594763229426282,
+        -0.0006731304161122483,
+        0.00013370166746570804,
+        0.0008902087497861808
+      ]
+    },
+    "lattice_vectors_bohr_columns": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        11.7,
+        0.0,
+        0.0,
+        1.1,
+        12.9,
+        0.0,
+        -0.7,
+        0.8,
+        14.3
+      ]
+    },
+    "per_atom_energy_hartree": {
+      "kind": "real",
+      "shape": [
+        3
+      ],
+      "values": [
+        0.002433921723358333,
+        -6.940664091480455e-05,
+        -0.0001791571113838122
+      ]
+    },
+    "positions_bohr": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        0.0,
+        0.0,
+        0.0,
+        1.42,
+        0.08,
+        1.08,
+        -1.31,
+        0.17,
+        0.96
+      ]
+    },
+    "shell_charge_potential_hartree_per_e": {
+      "kind": "real",
+      "shape": [
+        4,
+        1
+      ],
+      "values": [
+        -0.022982040334405027,
+        -0.02637498258235079,
+        -0.0013881328182960909,
+        -0.0035831422276762434
+      ]
+    },
+    "shell_coulomb_matrix_hartree_per_e2": {
+      "kind": "real",
+      "shape": [
+        4,
+        4
+      ],
+      "values": [
+        0.26345127436421106,
+        0.2974717749054976,
+        0.15699693753585875,
+        0.16730160828154234,
+        0.2974717749054976,
+        0.3314563325077212,
+        0.17320037928526977,
+        0.18518099078399636,
+        0.15699693753585875,
+        0.17320037928526977,
+        0.21697998497833088,
+        0.09609531530995452,
+        0.16730160828154234,
+        0.18518099078399636,
+        0.09609531530995452,
+        0.21697998497833088
+      ]
+    },
+    "shell_offsets_per_atom_zero_based": {
+      "kind": "integer",
+      "shape": [
+        3
+      ],
+      "values": [
+        0,
+        2,
+        3
+      ]
+    },
+    "shells_per_atom": {
+      "kind": "integer",
+      "shape": [
+        3
+      ],
+      "values": [
+        2,
+        1,
+        1
+      ]
+    },
+    "strain_derivatives_hartree": {
+      "kind": "real",
+      "shape": [
+        3,
+        3
+      ],
+      "values": [
+        0.0018582654412822239,
+        -6.496937832525031e-05,
+        4.9462158520612986e-05,
+        -6.496937832525052e-05,
+        2.1251882874110574e-07,
+        0.00021658193731133714,
+        4.9462158520611685e-05,
+        0.00021658193731133725,
+        0.0019193065362002905
+      ]
+    },
+    "total_energy_hartree": {
+      "kind": "real",
+      "shape": [],
+      "values": [
+        0.0021853579710597168
+      ]
+    }
+  },
+  "finite_difference": [
+    {
+      "analytic": 0.0006465075845436515,
+      "indices_zero_based": [],
+      "kind": "cartesian",
+      "samples": [
+        {
+          "absolute_error": 1.226714042845689e-12,
+          "estimate": 0.0006465075833169374,
+          "minus": 0.0021852933219695123,
+          "minus_raw_sha256": "5554f023f591e0135e9342d1581dc66f34872dd1bc06be12620d598ca0398227",
+          "plus": 0.0021854226234861757,
+          "plus_raw_sha256": "e91e12ca2b9c1fd250a0b01c7c2019a4150117cdd1e127546b408da51e119347",
+          "step": 0.0001
+        },
+        {
+          "absolute_error": 2.9213177016318426e-13,
+          "estimate": 0.0006465075842515197,
+          "minus": 0.0021853256460975332,
+          "minus_raw_sha256": "ebf345841252c6455049d28a582309dafb3fc3458c29d20292811ce4eba276ae",
+          "plus": 0.0021853902968559584,
+          "plus_raw_sha256": "6c614ce5c1e801b9317b7b461e2c8f5583da68665e71462131857b210c47e61d",
+          "step": 5e-05
+        }
+      ],
+      "value": "total_energy_hartree"
+    },
+    {
+      "analytic": 0.0018582654412822239,
+      "indices_zero_based": [],
+      "kind": "affine_strain",
+      "samples": [
+        {
+          "absolute_error": 4.483833443424956e-12,
+          "estimate": 0.0018582654367983904,
+          "minus": 0.0021851721532716363,
+          "minus_raw_sha256": "45a56968d776122f623fa33873ed8f0652fa3dd7bcb4de0d0422c846ac0a98ec",
+          "plus": 0.002185543806358996,
+          "plus_raw_sha256": "2e5ad8b63f6883459c267ad7d5e7dea206a56fc87a7f27d1a3cd6bb52d58c0f9",
+          "step": 0.0001
+        },
+        {
+          "absolute_error": 1.1856904347240516e-12,
+          "estimate": 0.0018582654400965334,
+          "minus": 0.0021852650599766066,
+          "minus_raw_sha256": "17d64b63a251a27933d44dee54af2f28377c84b5c69defc1a4374fa70678297e",
+          "plus": 0.0021854508865206163,
+          "plus_raw_sha256": "df90d938e43113b0571a2a505531666e93e7ced0608177a088a50d3d9a2a59a6",
+          "step": 5e-05
+        }
+      ],
+      "value": "total_energy_hartree"
+    }
+  ],
+  "input_id": "water_skew",
+  "mode": "charge-ewald",
+  "schema": "xtbloom-periodic-gfn2-term-fixture-v1",
+  "storage_order": "fortran-column-major"
+}

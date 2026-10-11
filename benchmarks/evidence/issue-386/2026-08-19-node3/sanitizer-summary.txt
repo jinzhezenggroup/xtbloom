@@ -1,0 +1,36 @@
+source_revision=1c9c5b7264e522cde4b875d73d254470ad1e5116
+source_tree=fe35c0f4c4e8ceb030f8209d711f972ef35b957a
+binary_sha256=dac01fc33bc6c7e14680a728cc7e2348acb1eed8beda396f7c0e99984dfdaab7
+compute_sanitizer_version=2025.2.1.0 build 35969825
+gpu=NVIDIA GeForce RTX 5090, compute capability 12.0
+driver=580.95.05
+cuda_compiler_version=12.9.86
+test_binary=build/nox/cuda/xtbloom_cuda_public_api_test
+test_mode=--gfn1-sanitizer
+
+command_template=srun --partition=main --nodelist=node3 --nodes=1 --ntasks=1 --cpus-per-task=4 --gres=gpu:5090:1 --mem=16G --time=00:20:00 env LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib /group/software/cuda-12.9.1/bin/compute-sanitizer --tool <tool> --error-exitcode=99 --log-file <outside-repository-log> build/nox/cuda/xtbloom_cuda_public_api_test --gfn1-sanitizer
+
+memcheck_exit=0
+memcheck_summary=ERROR SUMMARY: 0 errors
+memcheck_log_sha256=a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425
+
+racecheck_exit=0
+racecheck_summary=RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+racecheck_log_sha256=91dbb142f8feb8786cd6fde6ac035e816b67db14e4b7b400a01386ec106b75c4
+
+initcheck_exit=0
+initcheck_summary=ERROR SUMMARY: 0 errors
+initcheck_log_sha256=a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425
+
+synccheck_exit=99
+synccheck_summary=ERROR SUMMARY: 256 errors; 100 printed and 156 suppressed by the default print limit
+synccheck_printed_signatures=100/100 Barrier error detected. Divergent thread(s) in warp at reduce_spin_atomic_charges_kernel+0x2b0
+synccheck_launch_path=device-launched CUDA Graph
+synccheck_log_sha256=75856956d53c23eadbc7d4e17cbdcca1dd6991404745821f3f6977fb90c4d2d6
+synccheck_classification=PASS (OWNER-DISPOSITIONED UPSTREAM TOOL DEFECT); exact issue #279 environment, kernel, PC, report class, and launch path; tool did not return a clean pass
+
+synccheck_control_binary=build/nox/cuda/xtbloom_cuda_scc_potential_test
+synccheck_control_scope=direct plus host-Graph SCC-potential path
+synccheck_control_exit=0
+synccheck_control_summary=ERROR SUMMARY: 0 errors
+synccheck_control_log_sha256=a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425

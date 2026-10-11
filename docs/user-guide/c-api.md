@@ -43,9 +43,8 @@ line to `XTBLOOM_BACKEND_CUDA` to verify the CUDA build explicitly.
 
 `xtbloom_compute_options_init` defaults `compute_options.model` to
 `XTBLOOM_MODEL_GFN2_XTB`. Set it explicitly to `XTBLOOM_MODEL_GFN1_XTB` for
-GFN1 CPU execution. A GFN1 request on a CUDA context returns
-`XTBLOOM_STATUS_NOT_SUPPORTED` transactionally; the library never substitutes
-GFN2. GFN1 publishes energy, forces, charges, and point-charge forces, and
+GFN1 execution on CPU or CUDA; the library never substitutes GFN2. GFN1
+publishes energy, forces, charges, and point-charge forces, and
 accepts caller-supplied `b` and `A` fields for the `b + A*q` response. It does
 not support electric-field attachments or the molecular-dipole outlet.
 
@@ -196,7 +195,7 @@ Required batch topology uses flat arrays:
 
 See the public header for every optional field and its exact element type.
 
-## Native cell descriptors (ABI-v4 foundation)
+## Native cell descriptors (ABI-v4)
 
 The ABI-v4 `xtbloom_batch_t` suffix appends `cell_matrices` and
 `periodic_axes`. Both are caller-owned borrowed buffers with one entry per
@@ -210,10 +209,16 @@ reserved but not supported.
 The two buffers must be supplied together. A `NONE` item uses an all-zero cell;
 an `XYZ` item requires a finite, right-handed, nonsingular cell. V1/V2/V3
 callers and V4 batches containing only `NONE` items keep molecular behavior.
-Native periodic GFN2 physics is not released yet: after complete host/CUDA
-descriptor, pointer, and cell validation, any `XYZ` item returns
-`XTBLOOM_STATUS_NOT_IMPLEMENTED` before output publication. This descriptor is
-not the caller-supplied periodic `b + A*q` embedding operator and does not make
+CPU GFN2 accepts complete `XYZ` requests for energy, forces, and atomic
+charges. A CPU GFN2 request may additionally set
+`XTBLOOM_COMPUTE_STRAIN_DERIVATIVES` and provide the ABI-v3 result suffix;
+the nine row-major values are the fixed-alpha derivative `Xi = dE/dε` in
+Hartree for the affine direct-cell deformation documented in
+`docs/theory/periodic-gfn2.md`. CUDA GFN2 `XYZ` requests currently use the same
+validated CPU periodic evaluator through an asynchronous host bridge; they are
+not yet CUDA-native Ewald/multipole execution. GFN1 `XYZ` remains explicitly
+refused until its periodic physics is connected. This descriptor is not the
+caller-supplied periodic `b + A*q` embedding operator and does not make
 solvation periodic.
 
 ## External interaction attachments (ABI-v3)

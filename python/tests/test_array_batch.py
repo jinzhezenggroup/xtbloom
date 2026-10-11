@@ -42,6 +42,12 @@ def _structure(case_id: str) -> Structure:
     return Structure(numbers, positions, charge=charge, uhf=uhf, spin_channels=spin)
 
 
+def _default_spin_structure(case_id: str) -> Structure:
+    """Build a structure while deliberately exercising the Python spin default."""
+    numbers, positions, charge, uhf, _spin = structure_inputs(case_by_id(case_id))
+    return Structure(numbers, positions, charge=charge, uhf=uhf)
+
+
 def _pack_single(structures: list[Structure], *, include_points: bool = True) -> dict:
     """Pack a ragged batch of structures into flat ABI descriptor arrays."""
     atom_offsets = [0]
@@ -156,14 +162,59 @@ def test_unrestricted_system_with_spin_channels() -> None:
     assert result.energies == pytest.approx([reference.energy], rel=1.0e-12)
 
 
-def test_default_spin_channels_is_restricted() -> None:
-    """Without spin_channels, the batch defaults to restricted orbitals."""
-    water = _water()
-    packed = _pack_single([water])
+@pytest.mark.parametrize("method", ["GFN1-xTB", "GFN2-xTB"])
+def test_default_spin_channels_follow_unpaired_electrons(method: str) -> None:
+    """Omitted spin channels select restricted/unrestricted per system."""
+    structures = [
+        _default_spin_structure("ketene"),
+        _default_spin_structure("oh_radical"),
+    ]
+    packed = _pack_single(structures)
     del packed["spin_channels"]
-    result = ArrayBatch(**packed, backend="cpu").compute()
-    reference = water.singlepoint()
-    assert result.energies == pytest.approx([reference.energy], rel=1.0e-12)
+    result = ArrayBatch(**packed, method=method, backend="cpu").compute()
+    reference = BatchCalculator(structures, method=method, backend="cpu").compute()
+    assert result.energies == pytest.approx(reference.energies, rel=1.0e-12)
+    assert result.forces == pytest.approx(reference.forces, abs=1.0e-11)
+
+
+def test_periodic_cell_and_strain_outlet() -> None:
+    """Bind ABI-v4 cell arrays through DLPack and publish ABI-v3 strain."""
+    packed = {
+        "atom_offsets": np.asarray([0, 2], dtype=np.int64),
+        "atomic_numbers": np.asarray([1, 1], dtype=np.int32),
+        "positions": H2_POSITIONS.astype(np.float64),
+        "molecular_charges": np.asarray([0.0], dtype=np.float64),
+        "unpaired_electrons": np.asarray([0], dtype=np.int32),
+        "spin_channels": np.asarray([1], dtype=np.int32),
+        "cell_matrices": np.asarray(
+            [[8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0]], dtype=np.float64
+        ),
+        "periodic_axes": np.asarray([7], dtype=np.int32),
+    }
+    result = ArrayBatch(**packed, backend="cpu").compute(compute_strain=True)
+    assert result.energies.shape == (1,)
+    assert np.isfinite(result.energies).all()
+    assert result.strain_derivatives is not None
+    assert result.strain_derivatives.shape == (1, 9)
+    assert np.isfinite(result.strain_derivatives).all()
+
+
+def test_array_batch_rejects_gfn1_native_periodic_execution() -> None:
+    """Preserve the explicit GFN1 periodic refusal on the packed API."""
+    packed = {
+        "atom_offsets": np.asarray([0, 2], dtype=np.int64),
+        "atomic_numbers": np.asarray([1, 1], dtype=np.int32),
+        "positions": H2_POSITIONS.astype(np.float64),
+        "molecular_charges": np.asarray([0.0], dtype=np.float64),
+        "unpaired_electrons": np.asarray([0], dtype=np.int32),
+        "spin_channels": np.asarray([1], dtype=np.int32),
+        "cell_matrices": np.asarray(
+            [[8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 8.0]], dtype=np.float64
+        ),
+        "periodic_axes": np.asarray([7], dtype=np.int32),
+    }
+    with pytest.raises(XTBloomRuntimeError, match="not implemented"):
+        ArrayBatch(**packed, method="GFN1-xTB", backend="cpu").compute()
 
 
 def test_point_charges_match_calculator() -> None:

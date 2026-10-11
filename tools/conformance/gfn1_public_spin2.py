@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate the public CPU GFN1 two-channel path against the pinned P10 oracle."""
+"""Gate public CPU/CUDA GFN1 two-channel paths against the pinned P10 oracle."""
 
 from __future__ import annotations
 
@@ -67,9 +67,23 @@ def main(argv: Iterable[str] | None = None) -> int:
     """Run singleton and heterogeneous-ragged public P10 comparisons."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
+    parser.add_argument("--backend", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument(
+        "--memory-mode", choices=("host", "device", "mixed"), default="host"
+    )
+    parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--cpu-threads", type=int, default=1)
+    parser.add_argument(
+        "--skip-backend-unavailable",
+        action="store_true",
+        help="return 77 when the explicitly requested backend cannot create a context",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.backend == "cpu" and args.memory_mode != "host":
+            raise conformance.ConformanceError(
+                "CPU GFN1 P10 conformance requires --memory-mode host"
+            )
         manifest = conformance.load_json(GFN1_MANIFEST)
         p10 = load_p10()
         p10_geometry = invariants.Geometry(
@@ -80,16 +94,18 @@ def main(argv: Iterable[str] | None = None) -> int:
             unpaired_electrons=p10.unpaired,
             spin_channels=p10.spin_channels,
         )
-        ketene_case = public_api.supported_cases(manifest, ["gfn1_ketene"], "cpu")
+        ketene_case = public_api.supported_cases(
+            manifest, ["gfn1_ketene"], args.backend
+        )
         ketene = invariants.load_geometries(GFN1_MANIFEST, manifest, ketene_case)[0]
         library = public_api._configure_library(args.library)
         solve = invariants.xtbloom_solver(
             library,
             public_api.XTBLOOM_MODEL_GFN1_XTB,
-            "cpu",
-            0,
+            args.backend,
+            args.device_id,
             args.cpu_threads,
-            "host",
+            args.memory_mode,
         )
         singleton = solve([p10_geometry])[0]
         ragged = solve([ketene, p10_geometry])[1]
@@ -130,8 +146,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         if failures:
             raise conformance.ConformanceError(
-                "public CPU GFN1 P10 failures: " + ", ".join(failures)
+                f"public {args.backend.upper()} GFN1 P10 failures: "
+                + ", ".join(failures)
             )
+    except public_api.BackendUnavailable as error:
+        print(f"error: {error}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
+        return 77 if args.skip_backend_unavailable else 1
     except conformance.ConformanceError as error:
         print(f"error: {error}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 1

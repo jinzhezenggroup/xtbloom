@@ -3,6 +3,10 @@
 
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
+#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) && defined(__linux__)
+#include "runtime/mkl_pthread_tss_bridge.h"
+#endif
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -469,22 +473,30 @@ void close_dynamic_library(void* handle) {
   }
 }
 #elif defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)
-void* open_host_isolated_sibling(const char* soname) {
-  /* A LOCAL handle still resolves relocations against already-global objects.
-   * A new link-map namespace is required to keep a host BLAS implementation
-   * from interposing on xTBloom's private LP64 provider cohort. */
+std::string host_isolated_sibling_path(const char* soname) {
   static const unsigned char kModuleAnchor = 0u;
   Dl_info module{};
   if (dladdr(&kModuleAnchor, &module) == 0 || module.dli_fname == nullptr) {
-    return nullptr;
+    return {};
   }
   std::string path(module.dli_fname);
   const std::size_t separator = path.find_last_of('/');
   if (separator == std::string::npos) {
-    return nullptr;
+    return {};
   }
   path.resize(separator + 1u);
   path += soname;
+  return path;
+}
+
+void* open_host_isolated_sibling(const char* soname) {
+  /* A LOCAL handle still resolves relocations against already-global objects.
+   * A new link-map namespace is required to keep a host BLAS implementation
+   * from interposing on xTBloom's private LP64 provider cohort. */
+  const std::string path = host_isolated_sibling_path(soname);
+  if (path.empty()) {
+    return nullptr;
+  }
 
   void* handle = dlmopen(LM_ID_NEWLM, path.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (handle == nullptr) {
@@ -497,6 +509,106 @@ void* open_host_isolated_sibling(const char* soname) {
   }
   return handle;
 }
+
+#ifdef XTBLOOM_CONFIGURED_CPU_LINALG_SHIM
+struct MklIsolatedProviderHandles {
+  void* provider = nullptr;
+  void* bridge = nullptr;
+  void* base_pthread = nullptr;
+  bool provider_ready = false;
+};
+
+void close_mkl_bootstrap_handles(MklIsolatedProviderHandles& handles) {
+  /* This cleanup is valid only before the provider enters the namespace. Once
+   * provider code can create a base-registry pthread key, its destructor may
+   * point back into the private namespace and every handle must remain loaded
+   * for process life, including on a later verification failure. */
+  if (handles.bridge != nullptr) {
+    static_cast<void>(dlclose(handles.bridge));
+    handles.bridge = nullptr;
+  }
+  if (handles.base_pthread != nullptr) {
+    static_cast<void>(dlclose(handles.base_pthread));
+    handles.base_pthread = nullptr;
+  }
+}
+
+bool load_base_pthread_tss_api(xtbloom_mkl_pthread_tss_api& api, void*& retained_handle) {
+  /* Resolve from a specific base-namespace DSO before creating the private
+   * namespace. On glibc <2.34 pthread lives in libpthread; on newer glibc the
+   * compatibility DSO forwards to libc. If libpthread is not loaded yet,
+   * loading it here adds one base implementation rather than a second private
+   * allocator. The successful handle is retained for the bridge lifetime. */
+  const char* const libraries[] = {"libpthread.so.0", "libc.so.6"};
+  for (const char* library : libraries) {
+    void* handle = dlopen(library, RTLD_NOW | RTLD_LOCAL | RTLD_NOLOAD);
+    if (handle == nullptr && std::strcmp(library, "libpthread.so.0") == 0) {
+      handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
+    }
+    if (handle == nullptr) {
+      continue;
+    }
+
+    xtbloom_mkl_pthread_tss_api candidate{};
+    if (load_symbol(handle, "pthread_key_create", candidate.key_create) &&
+        load_symbol(handle, "pthread_key_delete", candidate.key_delete) &&
+        load_symbol(handle, "pthread_getspecific", candidate.getspecific) &&
+        load_symbol(handle, "pthread_setspecific", candidate.setspecific)) {
+      api = candidate;
+      retained_handle = handle;
+      return true;
+    }
+    static_cast<void>(dlclose(handle));
+  }
+  return false;
+}
+
+MklIsolatedProviderHandles open_mkl_isolated_provider() {
+  MklIsolatedProviderHandles handles;
+  xtbloom_mkl_pthread_tss_api api{};
+  if (!load_base_pthread_tss_api(api, handles.base_pthread)) {
+    return handles;
+  }
+
+  const std::string bridge_path =
+      host_isolated_sibling_path("libxtbloom_mkl_pthread_tss_bridge.so");
+  const std::string provider_path = host_isolated_sibling_path("libxtbloom_mkl_lp64_shim.so");
+  if (bridge_path.empty() || provider_path.empty()) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+
+  /* The first dlmopen admits only the dependency-free bridge. It cannot load
+   * or execute a private libc/libdl before the base function table is set. */
+  handles.bridge = dlmopen(LM_ID_NEWLM, bridge_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handles.bridge == nullptr) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+  Lmid_t namespace_id = LM_ID_BASE;
+  xtbloom_mkl_pthread_tss_bridge_initialize_fn initialize = nullptr;
+  if (dlinfo(handles.bridge, RTLD_DI_LMID, &namespace_id) != 0 || namespace_id == LM_ID_BASE ||
+      !load_symbol(handles.bridge, XTBLOOM_MKL_PTHREAD_TSS_BRIDGE_INITIALIZE_SYMBOL, initialize) ||
+      initialize(&api) != 0) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+
+  /* The provider shim records the bridge as its first DT_NEEDED dependency.
+   * Loading it into the initialized namespace reuses that image, so public
+   * pthread TSS calls and glibc <=2.33 libdl's weak __pthread_* aliases bind
+   * before any private dependency relocation or constructor can execute. */
+  handles.provider = dlmopen(namespace_id, provider_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handles.provider == nullptr) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+  Lmid_t provider_namespace_id = LM_ID_BASE;
+  handles.provider_ready = dlinfo(handles.provider, RTLD_DI_LMID, &provider_namespace_id) == 0 &&
+                           provider_namespace_id == namespace_id;
+  return handles;
+}
+#endif
 #endif
 
 #if defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(_WIN32)
@@ -1422,6 +1534,7 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
     CpuLinearAlgebraBackend backend;
     xtbloom_status_t status = XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
     std::string message;
+    std::array<void*, 3> retained_loader_handles{};
   };
   static const LinalgRuntimeState runtime = [] {
     LinalgRuntimeState state;
@@ -1591,15 +1704,23 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
 #else
 
 #ifdef XTBLOOM_CONFIGURED_CPU_LINALG_SHIM
-    /* Preferred isolated MKL provider: a private shim built at CMake time with
-     * fixed DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and
-     * libmkl_core. RTLD_LOCAL alone does not prevent a global host libmkl_rt
-     * from interposing on those dependencies, so load the adjacent shim in a
-     * new glibc link-map namespace. We never load libmkl_rt, call
+    /* Preferred isolated MKL provider: initialize the dependency-free pthread
+     * TSS bridge alone in a new namespace, then add the private shim with fixed
+     * DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and
+     * libmkl_core. This orders TSS bridging before private libc/libdl/MKL while
+     * preserving #30 namespace isolation. We never load libmkl_rt, call
      * MKL_Set_Interface_Layer, or read MKL interface-layer state. */
     {
       dlerror();
-      void* handle = open_host_isolated_sibling("libxtbloom_mkl_lp64_shim.so");
+      MklIsolatedProviderHandles handles = open_mkl_isolated_provider();
+      void* handle = handles.provider_ready ? handles.provider : nullptr;
+      if (handles.provider != nullptr) {
+        /* Provider relocation or constructors may already have registered a
+         * base pthread key whose destructor lives in the private namespace.
+         * Retain all three handles before any further verification, even if
+         * symbol resolution or the backend self-test subsequently fails. */
+        state.retained_loader_handles = {handles.provider, handles.bridge, handles.base_pthread};
+      }
       if (handle != nullptr) {
         LapackDpotrfWork dpotrf_work = nullptr;
         LapackDpoconWork dpocon_work = nullptr;
@@ -1616,18 +1737,18 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
               CpuLinearAlgebraBackend::Origin::kMklShimLp64, dpotrf_work, dpocon_work, dsyevd_work,
               dtrsm, dgemm, set_threads, thread_cleanup);
           if (backend_self_test(created)) {
-            /* Retain one process-lifetime loader reference so all dispatch
-             * pointers and the private namespace stay valid. */
+            /* Retain the provider, initialized bridge, and exact base pthread
+             * handle for process life so dispatch and TSS destructor pointers
+             * remain valid through worker/interpreter teardown. */
             state.backend = created;
             state.status = XTBLOOM_STATUS_SUCCESS;
             return state;
           }
         }
-        static_cast<void>(dlclose(handle));
       }
       state.message =
-          "host-isolated MKL provider shim is configured but did not verify "
-          "(libxtbloom_mkl_lp64_shim)";
+          "host-isolated MKL pthread bridge/provider shim is configured but did not verify "
+          "(libxtbloom_mkl_pthread_tss_bridge, libxtbloom_mkl_lp64_shim)";
       return state;
     }
 #endif

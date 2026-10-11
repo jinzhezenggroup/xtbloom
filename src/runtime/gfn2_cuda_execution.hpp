@@ -10,6 +10,7 @@
 
 #include "runtime/request.hpp"
 #include "xtbloom/xtbloom.h"
+#include "xtbloom/xtbloom_external_energy.h"
 
 namespace xtbloom::detail {
 
@@ -58,12 +59,16 @@ struct Gfn2CudaExecutionIdentity {
   std::uint8_t scc_conditional_graph_ready = 0u;
   /* Gfn2SccLoopGraphFallbackReason encoded without exposing CUDA headers. */
   std::uint32_t scc_loop_fallback_reason = 0u;
+  /* Native lattice identity is independent from caller-owned b + A*q
+   * embedding.  The element counts live in the opaque buffer identities. */
+  std::uint8_t native_lattice_enabled = 0u;
 
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
   std::int64_t total_shells = 0;
   std::int64_t total_orbitals = 0;
   std::int64_t total_point_charges = 0;
+  std::int64_t native_lattice_systems = 0;
 
   std::uintptr_t solver_handle = 0u;
   std::uintptr_t solver_parameters = 0u;
@@ -95,6 +100,7 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t eigensolver_setup_arena = 0u;
   std::uintptr_t provider_host_workspace = 0u;
   std::uintptr_t native_lattice_host_staging = 0u;
+  std::uintptr_t integral_task_arena = 0u;
   std::uintptr_t force_immutable_arena = 0u;
   std::uintptr_t force_execution_arena = 0u;
   std::uintptr_t numerical_refresh_arena = 0u;
@@ -138,6 +144,8 @@ struct Gfn2CudaExecutionIdentity {
   Gfn2CudaOpaqueBufferIdentity committed_point_charge_shell_potential{};
   Gfn2CudaOpaqueBufferIdentity committed_periodic_shifts{};
   Gfn2CudaOpaqueBufferIdentity committed_periodic_response{};
+  Gfn2CudaOpaqueBufferIdentity committed_native_cell_matrices{};
+  Gfn2CudaOpaqueBufferIdentity committed_native_periodic_axes{};
 
   std::int64_t committed_generation_elements = 0;
   std::int64_t numerical_eligible_elements = 0;
@@ -164,6 +172,7 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t iteration_arena_bytes = 0u;
   std::size_t eigensolver_setup_arena_bytes = 0u;
   std::size_t provider_host_workspace_bytes = 0u;
+  std::size_t integral_task_arena_bytes = 0u;
   std::size_t force_immutable_arena_bytes = 0u;
   std::size_t force_execution_arena_bytes = 0u;
   std::size_t numerical_refresh_arena_bytes = 0u;
@@ -181,6 +190,16 @@ struct Gfn2CudaExecutionIdentity {
   /* Heap bodies for the prepared cache and its retained topology candidate. */
   std::size_t runtime_owner_host_bytes = 0u;
   std::size_t host_plans_bytes = 0u;
+  /* Test-visible decomposition of host_plans_bytes. These fields are internal
+   * runtime diagnostics, not part of the stable public C ABI. */
+  std::size_t host_common_plan_vector_bytes = 0u;
+  std::size_t host_gfn1_plan_vector_bytes = 0u;
+  std::size_t host_common_model_plan_bytes = 0u;
+  std::size_t host_gfn1_model_plan_bytes = 0u;
+  std::size_t host_numerical_vector_bytes = 0u;
+  std::size_t host_gfn1_expanded_parameter_bytes = 0u;
+  std::size_t host_gfn2_wavefunction_arena_bytes = 0u;
+  std::size_t host_gfn1_wavefunction_arena_bytes = 0u;
   std::size_t topology_setup_host_bytes = 0u;
   std::size_t inputs_setup_host_bytes = 0u;
   std::size_t eigensolver_setup_host_bytes = 0u;
@@ -357,6 +376,12 @@ class Gfn2CudaExecutionCache : public RequestCompletion {
                                                          std::string& error);
 
   [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] bool external_energy_device_model_enabled() const noexcept;
+  [[nodiscard]] xtbloom_status_t set_external_energy_device_model(
+      const xtbloom_external_energy_device_model_t* model, std::string& error);
+  [[nodiscard]] xtbloom_status_t copy_external_energy_device_gradients(double* destination,
+                                                                       std::int64_t elements,
+                                                                       std::string& error);
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
   /* White-box staging entry points used to isolate allocation and teardown

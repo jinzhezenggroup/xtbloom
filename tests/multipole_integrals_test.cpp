@@ -121,11 +121,13 @@ bool weighted_multipoles(const xtbloom::detail::gfn2::BasisPlan& basis,
 bool add_multipole_gradient(Evaluation& evaluation, const std::vector<double>& positions,
                             const std::vector<double>& dipole_adjoint,
                             const std::vector<double>& quadrupole_adjoint,
-                            std::vector<double>& gradients, std::string& error) {
+                            std::vector<double>& gradients, std::string& error,
+                            xtbloom::detail::CpuIsa cpu_isa = xtbloom::detail::CpuIsa::kBaseline) {
   return xtbloom::detail::gfn2::add_multipole_gradient_cpu(
              evaluation.basis, evaluation.integrals, positions.data(), dipole_adjoint.data(),
              quadrupole_adjoint.data(), gradients.data(), evaluation.workspace.data(),
-             evaluation.workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS;
+             evaluation.workspace.size() * sizeof(double), error,
+             cpu_isa) == XTBLOOM_STATUS_SUCCESS;
 }
 
 struct ReferenceSample {
@@ -765,6 +767,44 @@ int test_no_steady_state_vjp_allocations() {
   return 0;
 }
 
+int test_baseline_and_avx2_gradient_kernel_parity() {
+  const auto features = xtbloom::detail::detect_cpu_features();
+  if (!xtbloom::detail::cpu_avx2_fma_kernels_built() || !features.supports_avx2_fma()) {
+    return 0;
+  }
+
+  /* Silicon and oxygen exercise the full s/p/d shell-class matrix while the
+   * asymmetric geometry and adjoints prevent translation or block symmetry
+   * from hiding a variant-specific arithmetic error. */
+  const std::vector<std::int64_t> atom_offsets{0, 2};
+  const std::vector<std::int32_t> atomic_numbers{14, 8};
+  const std::vector<double> positions{0.11, -0.24, 0.37, 1.42, 0.68, -1.03};
+  Evaluation evaluation;
+  std::string error;
+  CHECK(evaluate(1, atom_offsets, atomic_numbers, positions, evaluation, error));
+  const std::size_t matrix_elements = evaluation.overlap.size();
+  std::vector<double> dipole_adjoint(kDipoleComponents * matrix_elements);
+  std::vector<double> quadrupole_adjoint(kQuadrupoleComponents * matrix_elements);
+  for (std::size_t element = 0; element < dipole_adjoint.size(); ++element) {
+    dipole_adjoint[element] = static_cast<double>(static_cast<int>(element % 17u) - 8) * 0.03125;
+  }
+  for (std::size_t element = 0; element < quadrupole_adjoint.size(); ++element) {
+    quadrupole_adjoint[element] =
+        static_cast<double>(static_cast<int>(element % 23u) - 11) * 0.015625;
+  }
+
+  std::vector<double> baseline(positions.size(), 0.0);
+  std::vector<double> avx2(positions.size(), 0.0);
+  CHECK(add_multipole_gradient(evaluation, positions, dipole_adjoint, quadrupole_adjoint, baseline,
+                               error, xtbloom::detail::CpuIsa::kBaseline));
+  CHECK(add_multipole_gradient(evaluation, positions, dipole_adjoint, quadrupole_adjoint, avx2,
+                               error, xtbloom::detail::CpuIsa::kAvx2Fma));
+  for (std::size_t coordinate = 0; coordinate < baseline.size(); ++coordinate) {
+    CHECK(near(avx2[coordinate], baseline[coordinate], 2.0e-13));
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -790,5 +830,8 @@ int main() {
   if (const int status = test_validation_preserves_outputs(); status != 0) {
     return status;
   }
-  return test_no_steady_state_vjp_allocations();
+  if (const int status = test_no_steady_state_vjp_allocations(); status != 0) {
+    return status;
+  }
+  return test_baseline_and_avx2_gradient_kernel_parity();
 }

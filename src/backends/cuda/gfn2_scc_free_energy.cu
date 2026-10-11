@@ -193,7 +193,9 @@ __global__ void publish_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
   diagnostics.core[system] = workspace.diagnostic_scratch[system];
   diagnostics.es2[system] = workspace.diagnostic_scratch[batch.batch_size + system];
   diagnostics.es3[system] = workspace.diagnostic_scratch[2 * batch.batch_size + system];
-  diagnostics.aes2[system] = workspace.diagnostic_scratch[3 * batch.batch_size + system];
+  if (batch.model == XtbModelFlavor::kGfn2) {
+    diagnostics.aes2[system] = workspace.diagnostic_scratch[3 * batch.batch_size + system];
+  }
   diagnostics.spin[system] = workspace.diagnostic_scratch[4 * batch.batch_size + system];
   diagnostics.d4_two_body[system] = workspace.diagnostic_scratch[5 * batch.batch_size + system];
   diagnostics.explicit_point_charge[system] =
@@ -277,13 +279,18 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
                      const Gfn2SccFreeEnergyDeviceDiagnostics& diagnostics,
                      const Gfn2SccFreeEnergyDeviceWorkspace& workspace,
                      std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
-  if (batch.batch_size <= 0 ||
+  const bool gfn2 = batch.model == XtbModelFlavor::kGfn2;
+  const bool aes2_enabled =
+      component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kAES2);
+  const bool d4_enabled =
+      component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kD4TwoBody);
+  if (!valid_xtb_model_flavor(batch.model) || batch.batch_size <= 0 ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       (batch.enabled_components & ~kGfn2SccClassicalAllComponents) != 0u ||
-      !std::isfinite(batch.electronic_temperature) || batch.electronic_temperature < 0.0 ||
-      batch.plan_token == 0u || input.plan_token != batch.plan_token ||
-      activity.plan_token != batch.plan_token || diagnostics.plan_token != batch.plan_token ||
-      workspace.plan_token != batch.plan_token ||
+      (!gfn2 && (aes2_enabled || d4_enabled)) || !std::isfinite(batch.electronic_temperature) ||
+      batch.electronic_temperature < 0.0 || batch.plan_token == 0u ||
+      input.plan_token != batch.plan_token || activity.plan_token != batch.plan_token ||
+      diagnostics.plan_token != batch.plan_token || workspace.plan_token != batch.plan_token ||
       !valid_input(input.core, input.core_elements, batch.batch_size, true) ||
       !valid_input(input.entropy, input.entropy_elements, batch.batch_size, true) ||
       !valid_input(
@@ -314,7 +321,8 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       !valid_output(diagnostics.core, diagnostics.core_elements, batch.batch_size) ||
       !valid_output(diagnostics.es2, diagnostics.es2_elements, batch.batch_size) ||
       !valid_output(diagnostics.es3, diagnostics.es3_elements, batch.batch_size) ||
-      !valid_output(diagnostics.aes2, diagnostics.aes2_elements, batch.batch_size) ||
+      (gfn2 ? !valid_output(diagnostics.aes2, diagnostics.aes2_elements, batch.batch_size)
+            : diagnostics.aes2 != nullptr || diagnostics.aes2_elements != 0) ||
       !valid_output(diagnostics.spin, diagnostics.spin_elements, batch.batch_size) ||
       !valid_output(diagnostics.d4_two_body, diagnostics.d4_two_body_elements, batch.batch_size) ||
       !valid_output(diagnostics.explicit_point_charge, diagnostics.explicit_point_charge_elements,
@@ -330,9 +338,10 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       batch.batch_size >
           std::numeric_limits<std::int64_t>::max() / kGfn2SccFreeEnergyStorageComponents ||
       workspace.diagnostic_elements <
-          batch.batch_size * (input.electric_field != nullptr
-                                  ? kGfn2SccFreeEnergyStorageComponents
-                                  : kGfn2SccFreeEnergyDiagnosticComponents) ||
+          batch.batch_size *
+              ((input.electric_field != nullptr || diagnostics.electric_field != nullptr)
+                   ? kGfn2SccFreeEnergyStorageComponents
+                   : kGfn2SccFreeEnergyDiagnosticComponents) ||
       workspace.sequence_elements < 1 ||
       !is_aligned(workspace.diagnostic_scratch, alignof(double)) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||

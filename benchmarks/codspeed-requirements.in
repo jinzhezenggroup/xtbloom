@@ -1,0 +1,5 @@
+# CI-only CodSpeed simulation tooling. Keep this input outside project metadata so
+# benchmark dependencies cannot become xTBloom runtime or build requirements.
+pytest-codspeed==5.0.3
+# Match the canonical project environment instead of allowing Rich to downgrade it.
+pygments==2.21.0

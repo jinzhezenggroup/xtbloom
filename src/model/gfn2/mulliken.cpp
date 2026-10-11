@@ -38,6 +38,8 @@ struct MullikenPlanData final {
   std::vector<std::int64_t> matrix_offsets;
   std::vector<std::int64_t> shell_orbital_offsets;
   std::vector<std::int64_t> shell_to_atom;
+  std::vector<std::uint8_t> principal_quantum_numbers;
+  std::vector<std::uint8_t> angular_momenta;
   std::vector<std::int64_t> orbital_to_shell;
   std::vector<std::int64_t> orbital_to_atom;
   std::vector<std::int32_t> spin_channels;
@@ -271,6 +273,7 @@ namespace {
 
 const std::vector<std::int64_t> kEmptyInt64Vector;
 const std::vector<std::int32_t> kEmptyInt32Vector;
+const std::vector<std::uint8_t> kEmptyUint8Vector;
 const std::vector<double> kEmptyDoubleVector;
 
 const char* mulliken_population_failure_message(int code) noexcept {
@@ -385,6 +388,8 @@ std::size_t MullikenPlan::resident_bytes() const noexcept {
          data_->matrix_offsets.capacity() * sizeof(std::int64_t) +
          data_->shell_orbital_offsets.capacity() * sizeof(std::int64_t) +
          data_->shell_to_atom.capacity() * sizeof(std::int64_t) +
+         data_->principal_quantum_numbers.capacity() * sizeof(std::uint8_t) +
+         data_->angular_momenta.capacity() * sizeof(std::uint8_t) +
          data_->orbital_to_shell.capacity() * sizeof(std::int64_t) +
          data_->orbital_to_atom.capacity() * sizeof(std::int64_t) +
          data_->spin_channels.capacity() * sizeof(std::int32_t) +
@@ -422,6 +427,14 @@ const std::vector<std::int64_t>& MullikenPlan::shell_orbital_offsets() const noe
 
 const std::vector<std::int64_t>& MullikenPlan::shell_to_atom() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->shell_to_atom;
+}
+
+const std::vector<std::uint8_t>& MullikenPlan::principal_quantum_numbers() const noexcept {
+  return data_ == nullptr ? kEmptyUint8Vector : data_->principal_quantum_numbers;
+}
+
+const std::vector<std::uint8_t>& MullikenPlan::angular_momenta() const noexcept {
+  return data_ == nullptr ? kEmptyUint8Vector : data_->angular_momenta;
 }
 
 const std::vector<std::int64_t>& MullikenPlan::orbital_to_shell() const noexcept {
@@ -695,6 +708,8 @@ xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& 
     created.matrix_offsets = integrals.matrix_offsets;
     created.shell_orbital_offsets = basis.shell_orbital_offsets;
     created.shell_to_atom = basis.shell_to_atom;
+    created.principal_quantum_numbers = basis.principal_quantum_numbers;
+    created.angular_momenta = basis.angular_momenta;
     created.orbital_to_shell.resize(orbital_count);
     created.orbital_to_atom.resize(orbital_count);
     created.spin_channels = wavefunction.spin_channels;

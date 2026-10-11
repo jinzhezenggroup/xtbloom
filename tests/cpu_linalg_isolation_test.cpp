@@ -366,7 +366,7 @@ int run_expect_missing_shim() {
 #if defined(XTBLOOM_TEST_HAS_WHEEL_OPENBLAS)
   CHECK(error.find("private wheel OpenBLAS provider") != std::string::npos);
 #else
-  CHECK(error.find("host-isolated MKL provider shim") != std::string::npos);
+  CHECK(error.find("host-isolated MKL pthread bridge/provider shim") != std::string::npos);
 #endif
   return 0;
 }

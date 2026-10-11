@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <new>
 #include <string>
 #include <utility>
@@ -17,6 +18,115 @@
 #include "model/gfn2/lattice.hpp"
 
 namespace xtbloom::detail::gfn2 {
+
+inline constexpr double kPeriodicShortRangeCutoffBohr = 25.0;
+inline constexpr double kPeriodicD4CoordinationCutoffBohr = 30.0;
+inline constexpr double kPeriodicD4TwoBodyCutoffBohr = 50.0;
+inline constexpr std::size_t kPeriodicShortRangeWorkspaceAlignment = 64u;
+
+enum class PeriodicTranslationCutoff : std::int32_t {
+  kShortRange25 = 0,
+  kD4Coordination30 = 1,
+  kD4TwoBody50 = 2,
+};
+
+struct LatticeTranslationView {
+  const LatticeTranslation* data = nullptr;
+  std::int64_t size = 0;
+};
+
+struct PeriodicShortRangePlanData;
+
+/*
+ * Immutable batch topology for the complete real-space image sums used by
+ * periodic CN, repulsion, and D4. Unlike Wigner--Seitz topology, these lists
+ * retain every translation in the cutoff-complete rectangular repeat box;
+ * the term evaluators perform the final distance cutoff for each atom pair.
+ * Cell changes rebuild this plan, while geometry-only changes reuse it.
+ */
+class PeriodicShortRangePlan {
+ public:
+  PeriodicShortRangePlan() noexcept = default;
+  PeriodicShortRangePlan(const PeriodicShortRangePlan&) noexcept = default;
+  PeriodicShortRangePlan(PeriodicShortRangePlan&&) noexcept = default;
+  PeriodicShortRangePlan& operator=(const PeriodicShortRangePlan&) noexcept = default;
+  PeriodicShortRangePlan& operator=(PeriodicShortRangePlan&&) noexcept = default;
+  ~PeriodicShortRangePlan() = default;
+
+  [[nodiscard]] bool sealed() const noexcept;
+  [[nodiscard]] std::int64_t batch_size() const noexcept;
+  [[nodiscard]] std::int64_t total_atoms() const noexcept;
+  [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
+  [[nodiscard]] const Lattice3D& lattice(std::int64_t system) const noexcept;
+  [[nodiscard]] LatticeTranslationView translations(
+      std::int64_t system, PeriodicTranslationCutoff cutoff) const noexcept;
+  [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
+  /* Reject caller-owned numerical storage that overlaps immutable plan data. */
+  [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
+  [[nodiscard]] const PeriodicShortRangePlanData* identity() const noexcept;
+
+ private:
+  explicit PeriodicShortRangePlan(std::shared_ptr<const PeriodicShortRangePlanData> data) noexcept;
+  std::shared_ptr<const PeriodicShortRangePlanData> data_;
+
+  friend xtbloom_status_t make_periodic_short_range_plan(std::int64_t, std::int64_t,
+                                                         const std::int64_t*, const double*,
+                                                         PeriodicShortRangePlan&, std::string&);
+};
+
+/* Caller-owned scratch shared by the three short-range periodic term families. */
+struct PeriodicShortRangeWorkspace {
+  void* workspace_base = nullptr;
+  std::size_t workspace_size_bytes = 0u;
+  double* wrapped_positions = nullptr;
+  std::int64_t wrapped_position_elements = 0;
+  double* atom_scratch = nullptr;
+  double* secondary_atom_scratch = nullptr;
+  std::int64_t atom_elements = 0;
+  double* gradient_scratch = nullptr;
+  std::int64_t gradient_elements = 0;
+  double* strain_scratch = nullptr;
+  std::int64_t strain_elements = 0;
+  double* batch_scratch = nullptr;
+  std::int64_t batch_elements = 0;
+  const PeriodicShortRangePlanData* plan_identity = nullptr;
+};
+
+/*
+ * Prepared wrapped coordinates for one geometry generation. The cache points
+ * into the bound workspace and is published only after all coordinates have
+ * been validated and wrapped successfully.
+ */
+struct PeriodicShortRangeGeometry {
+  const double* wrapped_positions = nullptr;
+  std::int64_t wrapped_position_elements = 0;
+  std::uint64_t geometry_generation = 0u;
+  const PeriodicShortRangePlanData* plan_identity = nullptr;
+};
+
+xtbloom_status_t make_periodic_short_range_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                                const std::int64_t* atom_offsets,
+                                                const double* cell_matrices,
+                                                PeriodicShortRangePlan& plan, std::string& error);
+
+xtbloom_status_t bind_periodic_short_range_workspace(const PeriodicShortRangePlan& plan,
+                                                     void* workspace, std::size_t workspace_size,
+                                                     PeriodicShortRangeWorkspace& view,
+                                                     std::string& error);
+
+/*
+ * Verify that a retained workspace descriptor still has the canonical layout
+ * produced by bind_periodic_short_range_workspace and does not overlap the
+ * immutable topology plan. Term evaluators call this before touching scratch.
+ */
+xtbloom_status_t validate_periodic_short_range_workspace(
+    const PeriodicShortRangePlan& plan, const PeriodicShortRangeWorkspace& workspace,
+    std::string& error);
+
+xtbloom_status_t update_periodic_short_range_geometry_cpu(
+    const PeriodicShortRangePlan& plan, const double* positions, std::uint64_t geometry_generation,
+    const PeriodicShortRangeWorkspace& workspace, PeriodicShortRangeGeometry& geometry,
+    std::string& error);
 
 /*
  * Wigner--Seitz topology keeps only the closest periodic image or equally

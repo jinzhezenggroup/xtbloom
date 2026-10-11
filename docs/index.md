@@ -6,6 +6,7 @@ charges through one stable C ABI and Python interfaces built on that ABI.
 [Try the browser demo](https://xtbloom.jinzhezeng.group) ·
 [Install xTBloom](user-guide/index.md#installation) ·
 [Python API](user-guide/python.md) ·
+[Geometry optimization](user-guide/optimization.md) ·
 [C/C++ API](user-guide/c-api.md)
 
 ## See it run
@@ -14,9 +15,10 @@ charges through one stable C ABI and Python interfaces built on that ABI.
 
 The browser demo runs entirely on the client: enter SMILES or XYZ coordinates,
 inspect the 3D structure, and calculate GFN1-xTB or GFN2-xTB results without
-uploading the molecule. GFN2-xTB remains the default. Its SMILES-to-3D and
-geometry-optimization workflow belongs to the demo adapter, not the native
-single-point API.
+uploading the molecule. GFN2-xTB remains the default. Its SMILES-to-3D workflow
+belongs to the demo adapter. The Python package also provides a direct
+geometry optimizer; both are higher-level adapters over repeated native
+single-point calculations, not native C-ABI optimization drivers.
 
 [Open the demo](https://xtbloom.jinzhezeng.group) ·
 [Browser usage and limitations](user-guide/browser-demo.md)
@@ -26,7 +28,12 @@ single-point API.
 - **Using Python:** start with the
   [Python installation guide](user-guide/python.md#installation), then continue
   there for single systems, native ragged batches, spin, point charges, Array
-  API/DLPack, ASE, and dpdata.
+  API/DLPack, ASE, and dpdata. For molecular relaxation, see the
+  [direct geometry-optimization guide](user-guide/optimization.md), and for
+  trajectories see the [ASE molecular-dynamics guide](user-guide/ase-md.md).
+- **Analyzing vibrations:** use the Python
+  [vibrational analysis guide](user-guide/vibrations.md) for numerical
+  Hessians, rigid-mode projection, frequencies, and normal modes.
 - **Using C or C++:** [C ABI guide](user-guide/c-api.md) for installation, a
   complete example, descriptor ownership, CUDA memory, and error handling.
 - **Embedding QM/MM:** [QM/MM guide](user-guide/qmmm.md) for explicit point
@@ -62,21 +69,25 @@ Repository contributors and coding agents must also follow
 
 ## Capability boundary
 
-xTBloom implements restricted and unrestricted GFN2-xTB on CPU and CUDA and
-GFN1-xTB on CPU. Both models publish native ragged batches, analytic forces,
+xTBloom implements restricted and unrestricted GFN1-xTB and GFN2-xTB on CPU
+and CUDA. Both models publish native ragged batches, analytic forces,
 charges, explicit point charges, caller-supplied periodic charge response, the
-high-level Python calculators, ASE, and dpdata. Uniform electric fields and
-molecular dipoles, Array API/DLPack, and PyTorch autograd are GFN2-only. The
-single-threaded CPU/WebAssembly browser demo exposes both GFN1 and GFN2, with
-GFN2 selected by default. The low-level CUDA ABI accepts host, device, and
-mixed descriptors, including independently placed interaction descriptor and
-payload buffers.
+high-level Python calculators, Array API/DLPack, PyTorch positions-only
+autograd, ASE, and dpdata. Uniform electric fields and molecular dipoles are
+GFN2-only. The single-threaded CPU/WebAssembly browser demo exposes both GFN1
+and GFN2, with GFN2 selected by default. The low-level CUDA ABI accepts host,
+device, and mixed descriptors, including independently placed interaction
+descriptor and payload buffers.
 
 The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
-periodic `XYZ` inputs, but valid `XYZ` compute requests return
-`NOT_IMPLEMENTED` transactionally. GFN1 CUDA execution and field/dipole
-properties, ROCm, native geometry
-optimization, molecular dynamics, solvation, native/analytic Hessians,
-vibrational analysis, and periodic GFN2 execution are not implemented. The
-Python Hessian and the browser/dpdata optimizers are higher-level adapters
-built on repeated native calculations.
+periodic `XYZ` inputs. CPU GFN2 and CUDA GFN2 (through a validated CPU host
+bridge) execute the released periodic path; CUDA-native Ewald/multipole
+kernels remain outstanding, and GFN1 periodic requests still return
+`NOT_IMPLEMENTED` transactionally. GFN1 field/dipole properties, ROCm, native
+drivers for geometry optimization and molecular dynamics, solvation,
+native/analytic Hessians, and periodic GFN1 execution are not implemented.
+C-ABI geometry-optimization and molecular-dynamics drivers, solvation, and
+native/analytic Hessians are not implemented.
+The direct Python optimizer, ASE-driven molecular dynamics, Python numerical
+Hessian/vibrational analysis, and browser/dpdata optimizers are higher-level
+adapters built on repeated native calculations.

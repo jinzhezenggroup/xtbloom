@@ -6,12 +6,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "backends/cuda/gfn2_integral_tasks.hpp"
 #include "backends/cuda/gfn2_preprocessing.cuh"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
@@ -19,6 +21,8 @@
 #include "model/gfn2/es2.hpp"
 #include "model/gfn2/h0.hpp"
 #include "model/gfn2/integrals.hpp"
+#include "model/gfn2/periodic_integrals.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 
 namespace {
 
@@ -87,6 +91,28 @@ cudaError_t allocate_upload(DeviceBuffer<T>& target, const std::vector<T>& sourc
   return status == cudaSuccess ? target.upload(source.data(), source.size(), stream) : status;
 }
 
+/* CPU periodic references require the same 64-byte workspace alignment as
+ * production evaluation.  Keep this small owner local to the CUDA test so
+ * the native evaluator can be checked without routing through SCC setup. */
+class AlignedHostStorage {
+ public:
+  AlignedHostStorage() = default;
+  AlignedHostStorage(const AlignedHostStorage&) = delete;
+  AlignedHostStorage& operator=(const AlignedHostStorage&) = delete;
+  ~AlignedHostStorage() { std::free(pointer_); }
+
+  bool allocate(std::size_t bytes) {
+    const std::size_t rounded = (bytes + 63u) / 64u * 64u;
+    pointer_ = std::aligned_alloc(64u, rounded == 0u ? 64u : rounded);
+    return pointer_ != nullptr;
+  }
+
+  void* get() const noexcept { return pointer_; }
+
+ private:
+  void* pointer_ = nullptr;
+};
+
 bool near(double actual, double expected, double tolerance = 8.0e-11) {
   return std::abs(actual - expected) <=
          tolerance * std::max({1.0, std::abs(actual), std::abs(expected)});
@@ -137,6 +163,7 @@ struct HostCase {
   BasisPlan basis;
   IntegralPlan integrals;
   H0Plan h0_plan;
+  Gfn2IntegralHostTaskDomains integral_tasks;
   ES2Plan es2_plan;
   AES2Plan aes2_plan;
 
@@ -177,6 +204,10 @@ struct HostCase {
       maximum_system_shells = std::max(maximum_system_shells, shells);
       shell_pair_offsets[static_cast<std::size_t>(system + 1)] =
           shell_pair_offsets[static_cast<std::size_t>(system)] + shells * shells;
+    }
+    if (make_gfn2_integral_task_domains(basis, shell_pair_offsets, integral_tasks, error) !=
+        XTBLOOM_STATUS_SUCCESS) {
+      return false;
     }
     return shell_pair_offsets == h0_plan.shell_pair_offsets &&
            pair_offsets == aes2_plan.pair_offsets();
@@ -268,6 +299,8 @@ struct DeviceFixture {
       matrix_offsets, shell_pair_offsets, atom_shell_offsets, shell_orbital_offsets,
       shell_primitive_offsets, shell_to_atom, es2_matrix_offsets;
   DeviceBuffer<std::uint8_t> angular_momenta, requested, published;
+  DeviceBuffer<Gfn2IntegralShellPairTask> forward_generic_tasks, forward_ss_tasks, h0_generic_tasks,
+      h0_ss_tasks, force_generic_tasks, force_ss_tasks;
   DeviceBuffer<double> covalent_radii, primitive_exponents, primitive_coefficients, atomic_radii,
       shell_levels, shell_coordination_scale, shell_polynomial, shell_pair_scale, es2_hardness,
       aes2_dipole_kernel, aes2_quadrupole_kernel, aes2_radius, aes2_valence, positions;
@@ -323,6 +356,12 @@ struct DeviceFixture {
     UPLOAD(angular_momenta, host.basis.angular_momenta);
     UPLOAD(primitive_exponents, host.basis.primitive_exponents);
     UPLOAD(primitive_coefficients, host.basis.primitive_coefficients);
+    UPLOAD(forward_generic_tasks, host.integral_tasks.forward_generic);
+    UPLOAD(forward_ss_tasks, host.integral_tasks.forward_ss);
+    UPLOAD(h0_generic_tasks, host.integral_tasks.h0_generic);
+    UPLOAD(h0_ss_tasks, host.integral_tasks.h0_ss);
+    UPLOAD(force_generic_tasks, host.integral_tasks.force_generic);
+    UPLOAD(force_ss_tasks, host.integral_tasks.force_ss);
     UPLOAD(covalent_radii, host.coordination_plan.covalent_radius);
     UPLOAD(atomic_radii, host.h0_plan.atomic_radii);
     UPLOAD(shell_levels, host.h0_plan.shell_levels);
@@ -432,6 +471,7 @@ struct DeviceFixture {
                               matrices,
                               host.shell_pair_offsets.back(),
                               host.maximum_system_shells,
+                              1,
                               host.integrals.integral_cutoff,
                               kPlanToken,
                               batch + 1,
@@ -458,6 +498,25 @@ struct DeviceFixture {
                               angular_momenta.get(),
                               primitive_exponents.get(),
                               primitive_coefficients.get()};
+    Gfn2IntegralDeviceBatch& integral_batch = binding.plan.integrals;
+    integral_batch.use_compact_tasks = 1u;
+    integral_batch.forward_generic_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.forward_generic.size());
+    integral_batch.forward_ss_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.forward_ss.size());
+    integral_batch.h0_generic_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.h0_generic.size());
+    integral_batch.h0_ss_task_count = static_cast<std::int64_t>(host.integral_tasks.h0_ss.size());
+    integral_batch.force_generic_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.force_generic.size());
+    integral_batch.force_ss_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.force_ss.size());
+    integral_batch.forward_generic_tasks = forward_generic_tasks.get();
+    integral_batch.forward_ss_tasks = forward_ss_tasks.get();
+    integral_batch.h0_generic_tasks = h0_generic_tasks.get();
+    integral_batch.h0_ss_tasks = h0_ss_tasks.get();
+    integral_batch.force_generic_tasks = force_generic_tasks.get();
+    integral_batch.force_ss_tasks = force_ss_tasks.get();
     binding.plan.h0 = {atoms,
                        host.basis.total_shells,
                        host.basis.total_shells,
@@ -1108,6 +1167,25 @@ int test_plan_failure_and_seal_fail_closed() {
   shell_overflow.plan.integrals.total_shells = std::numeric_limits<std::int64_t>::max();
   CHECK(seal_gfn2_preprocessing_binding_cuda(shell_overflow).error ==
         Gfn2PreprocessingBindingError::kInvalidExtent);
+  Gfn2PreprocessingDeviceBinding compact_large_legacy_grid = device.binding;
+  compact_large_legacy_grid.binding_seal = 0u;
+  compact_large_legacy_grid.plan.integrals.maximum_system_shells =
+      std::numeric_limits<std::int64_t>::max();
+  CHECK(seal_gfn2_preprocessing_binding_cuda(compact_large_legacy_grid).success());
+  Gfn2PreprocessingDeviceBinding legacy_large_grid = compact_large_legacy_grid;
+  legacy_large_grid.plan.integrals.use_compact_tasks = 0u;
+  CHECK(seal_gfn2_preprocessing_binding_cuda(legacy_large_grid).error ==
+        Gfn2PreprocessingBindingError::kInvalidExtent);
+  for (const std::int64_t invalid_tiles :
+       std::array<std::int64_t, 2>{0, kGfn2IntegralLinearBlockBudget + 1}) {
+    Gfn2PreprocessingDeviceBinding invalid_linear_grid = device.binding;
+    invalid_linear_grid.binding_seal = 0u;
+    invalid_linear_grid.plan.integrals.linear_tiles_per_system = invalid_tiles;
+    const Gfn2PreprocessingBindingDiagnostic diagnostic =
+        seal_gfn2_preprocessing_binding_cuda(invalid_linear_grid);
+    CHECK(diagnostic.error == Gfn2PreprocessingBindingError::kInvalidExtent);
+    CHECK(diagnostic.field == Gfn2PreprocessingBindingField::kPlan);
+  }
 
   CHECK(compose_gfn2_preprocessing_cuda(device.binding, 31u, stream).success());
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -1543,6 +1621,276 @@ int test_sparse_pairlist_gate() {
   return 0;
 }
 
+int test_native_periodic_integrals_cpu_parity_and_peer_isolation() {
+  /* Four heterogeneous peers deliberately include a smaller H/H basis than
+   * the C/H, O/H, and Li/H peers.  The evaluator launches a rectangular
+   * shell-pair queue, so this case also proves that padding slots are no-ops
+   * rather than invalid metadata. */
+  HostCase host;
+  std::string error;
+  CHECK(host.create(4, error));
+
+  const std::int64_t atoms = host.basis.total_atoms;
+  const std::int64_t batch = host.batch;
+  const std::vector<double> cells{18.0, 0.0, 0.0, 0.0, 18.0, 0.0, 0.0, 0.0, 18.0,
+                                  18.0, 0.0, 0.0, 0.0, 18.0, 0.0, 0.0, 0.0, 18.0,
+                                  18.0, 0.0, 0.0, 0.0, 18.0, 0.0, 0.0, 0.0, 18.0,
+                                  18.0, 0.0, 0.0, 0.0, 18.0, 0.0, 0.0, 0.0, 18.0};
+
+  PeriodicShortRangePlan topology;
+  CHECK(make_periodic_short_range_plan(batch, atoms, host.atom_offsets.data(), cells.data(),
+                                       topology, error) == XTBLOOM_STATUS_SUCCESS);
+  AlignedHostStorage topology_storage;
+  CHECK(topology_storage.allocate(topology.workspace_size_bytes()));
+  PeriodicShortRangeWorkspace topology_workspace;
+  CHECK(bind_periodic_short_range_workspace(topology, topology_storage.get(),
+                                            topology.workspace_size_bytes(), topology_workspace,
+                                            error) == XTBLOOM_STATUS_SUCCESS);
+  PeriodicShortRangeGeometry geometry;
+  CHECK(update_periodic_short_range_geometry_cpu(topology, host.positions.data(), 1u,
+                                                 topology_workspace, geometry,
+                                                 error) == XTBLOOM_STATUS_SUCCESS);
+  std::vector<double> coordination(static_cast<std::size_t>(atoms));
+  CHECK(evaluate_periodic_coordination_cpu(host.coordination_plan, topology, geometry,
+                                           coordination.data(), topology_workspace,
+                                           error) == XTBLOOM_STATUS_SUCCESS);
+
+  PeriodicIntegralPlan periodic;
+  CHECK(make_periodic_integral_plan(host.basis, host.integrals, topology, periodic, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  std::vector<double> expected_overlap(
+      static_cast<std::size_t>(host.integrals.total_matrix_elements));
+  std::vector<double> expected_dipole(expected_overlap.size() * 3u);
+  std::vector<double> expected_quadrupole(expected_overlap.size() * 6u);
+  std::vector<double> expected_h0(expected_overlap.size());
+  AlignedHostStorage periodic_storage;
+  CHECK(periodic_storage.allocate(periodic.workspace_size_bytes()));
+  CHECK(evaluate_periodic_integrals_h0_cpu(
+            host.basis, host.integrals, host.h0_plan, periodic, topology, geometry,
+            topology_workspace, coordination.data(), expected_overlap.data(),
+            expected_dipole.data(), expected_quadrupole.data(), expected_h0.data(),
+            periodic_storage.get(), periodic.workspace_size_bytes(),
+            error) == XTBLOOM_STATUS_SUCCESS);
+
+  DeviceBuffer<std::int64_t> atom_offsets, batch_shell_offsets, batch_orbital_offsets,
+      matrix_offsets, shell_pair_offsets, atom_shell_offsets, shell_orbital_offsets,
+      shell_primitive_offsets, shell_to_atom, translation_offsets;
+  DeviceBuffer<std::uint8_t> angular_momenta;
+  DeviceBuffer<double> primitive_exponents, primitive_coefficients, atomic_radii, shell_levels,
+      shell_coordination_scale, shell_polynomial, shell_pair_scale, wrapped_positions,
+      coordination_device, overlap, dipole, quadrupole, h0, overlap_scratch, dipole_scratch,
+      quadrupole_scratch, h0_scratch;
+  DeviceBuffer<Gfn2CudaPeriodicTranslation> translations;
+  DeviceBuffer<std::uint32_t> sequence_active, system_errors, device_error;
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+
+  cudaError_t status = allocate_upload(atom_offsets, host.basis.atom_offsets, stream);
+#define PERIODIC_UPLOAD(field, source) \
+  if (status == cudaSuccess) status = allocate_upload(field, source, stream)
+  PERIODIC_UPLOAD(batch_shell_offsets, host.basis.batch_shell_offsets);
+  PERIODIC_UPLOAD(batch_orbital_offsets, host.basis.batch_orbital_offsets);
+  PERIODIC_UPLOAD(matrix_offsets, host.integrals.matrix_offsets);
+  PERIODIC_UPLOAD(shell_pair_offsets, host.shell_pair_offsets);
+  PERIODIC_UPLOAD(atom_shell_offsets, host.basis.atom_shell_offsets);
+  PERIODIC_UPLOAD(shell_orbital_offsets, host.basis.shell_orbital_offsets);
+  PERIODIC_UPLOAD(shell_primitive_offsets, host.basis.shell_primitive_offsets);
+  PERIODIC_UPLOAD(shell_to_atom, host.basis.shell_to_atom);
+  PERIODIC_UPLOAD(angular_momenta, host.basis.angular_momenta);
+  PERIODIC_UPLOAD(primitive_exponents, host.basis.primitive_exponents);
+  PERIODIC_UPLOAD(primitive_coefficients, host.basis.primitive_coefficients);
+  PERIODIC_UPLOAD(atomic_radii, host.h0_plan.atomic_radii);
+  PERIODIC_UPLOAD(shell_levels, host.h0_plan.shell_levels);
+  PERIODIC_UPLOAD(shell_coordination_scale, host.h0_plan.shell_coordination_scale);
+  PERIODIC_UPLOAD(shell_polynomial, host.h0_plan.shell_polynomial);
+  PERIODIC_UPLOAD(shell_pair_scale, host.h0_plan.shell_pair_scale);
+  PERIODIC_UPLOAD(translation_offsets, periodic.data()->translation_offsets);
+  {
+    std::vector<Gfn2CudaPeriodicTranslation> converted(periodic.data()->translations.size());
+    for (std::size_t index = 0; index < converted.size(); ++index) {
+      for (int component = 0; component < 3; ++component) {
+        converted[index].index[component] = periodic.data()->translations[index].index[component];
+        converted[index].cartesian[component] =
+            periodic.data()->translations[index].cartesian[component];
+      }
+    }
+    PERIODIC_UPLOAD(translations, converted);
+  }
+  std::vector<double> wrapped(geometry.wrapped_positions,
+                              geometry.wrapped_positions + static_cast<std::size_t>(atoms) * 3u);
+  PERIODIC_UPLOAD(wrapped_positions, wrapped);
+  PERIODIC_UPLOAD(coordination_device, coordination);
+#undef PERIODIC_UPLOAD
+
+  const std::size_t matrices = static_cast<std::size_t>(host.integrals.total_matrix_elements);
+  const std::size_t matrix_elements = matrices;
+  const std::size_t dipole_elements = 3u * matrix_elements;
+  const std::size_t quadrupole_elements = 6u * matrix_elements;
+#define PERIODIC_ALLOC(field, count) \
+  if (status == cudaSuccess) status = field.allocate(count)
+  PERIODIC_ALLOC(overlap, matrix_elements);
+  PERIODIC_ALLOC(dipole, dipole_elements);
+  PERIODIC_ALLOC(quadrupole, quadrupole_elements);
+  PERIODIC_ALLOC(h0, matrix_elements);
+  PERIODIC_ALLOC(overlap_scratch, matrix_elements);
+  PERIODIC_ALLOC(dipole_scratch, dipole_elements);
+  PERIODIC_ALLOC(quadrupole_scratch, quadrupole_elements);
+  PERIODIC_ALLOC(h0_scratch, matrix_elements);
+  PERIODIC_ALLOC(sequence_active, 1u);
+  PERIODIC_ALLOC(system_errors, static_cast<std::size_t>(batch));
+  PERIODIC_ALLOC(device_error, 1u);
+#undef PERIODIC_ALLOC
+  CHECK(status == cudaSuccess);
+  const std::vector<double> seeded_overlap(matrix_elements, kSentinel);
+  const std::vector<double> seeded_dipole(dipole_elements, kSentinel);
+  const std::vector<double> seeded_quadrupole(quadrupole_elements, kSentinel);
+  const std::vector<double> seeded_h0(matrix_elements, kSentinel);
+  CUDA_CHECK(overlap.upload(seeded_overlap.data(), seeded_overlap.size(), stream));
+  CUDA_CHECK(dipole.upload(seeded_dipole.data(), seeded_dipole.size(), stream));
+  CUDA_CHECK(quadrupole.upload(seeded_quadrupole.data(), seeded_quadrupole.size(), stream));
+  CUDA_CHECK(h0.upload(seeded_h0.data(), seeded_h0.size(), stream));
+
+  Gfn2IntegralDeviceBatch integral_batch{};
+  integral_batch.batch_size = batch;
+  integral_batch.total_atoms = atoms;
+  integral_batch.total_shells = host.basis.total_shells;
+  integral_batch.total_orbitals = host.basis.total_orbitals;
+  integral_batch.total_primitives = host.basis.total_primitives;
+  integral_batch.total_matrix_elements = host.integrals.total_matrix_elements;
+  integral_batch.total_shell_pair_elements = host.shell_pair_offsets.back();
+  integral_batch.maximum_system_shells = host.maximum_system_shells;
+  integral_batch.linear_tiles_per_system = 1;
+  integral_batch.integral_cutoff = host.integrals.integral_cutoff;
+  integral_batch.plan_token = kPlanToken;
+  integral_batch.atom_offset_count = batch + 1;
+  integral_batch.batch_shell_offset_count = batch + 1;
+  integral_batch.batch_orbital_offset_count = batch + 1;
+  integral_batch.matrix_offset_count = batch + 1;
+  integral_batch.shell_pair_offset_count = batch + 1;
+  integral_batch.atom_shell_offset_count = atoms + 1;
+  integral_batch.shell_orbital_offset_count = host.basis.total_shells + 1;
+  integral_batch.shell_primitive_offset_count = host.basis.total_shells + 1;
+  integral_batch.shell_to_atom_count = host.basis.total_shells;
+  integral_batch.angular_momentum_count = host.basis.total_shells;
+  integral_batch.primitive_exponent_count = host.basis.total_primitives;
+  integral_batch.primitive_coefficient_count = host.basis.total_primitives;
+  integral_batch.atom_offsets = atom_offsets.get();
+  integral_batch.batch_shell_offsets = batch_shell_offsets.get();
+  integral_batch.batch_orbital_offsets = batch_orbital_offsets.get();
+  integral_batch.matrix_offsets = matrix_offsets.get();
+  integral_batch.shell_pair_offsets = shell_pair_offsets.get();
+  integral_batch.atom_shell_offsets = atom_shell_offsets.get();
+  integral_batch.shell_orbital_offsets = shell_orbital_offsets.get();
+  integral_batch.shell_primitive_offsets = shell_primitive_offsets.get();
+  integral_batch.shell_to_atom = shell_to_atom.get();
+  integral_batch.angular_momenta = angular_momenta.get();
+  integral_batch.primitive_exponents = primitive_exponents.get();
+  integral_batch.primitive_coefficients = primitive_coefficients.get();
+  integral_batch.model = XtbModelFlavor::kGfn2;
+
+  Gfn2H0DevicePlan h0_plan{host.basis.total_atoms,
+                           host.basis.total_shells,
+                           host.basis.total_shells,
+                           host.basis.total_shells,
+                           host.shell_pair_offsets.back(),
+                           kPlanToken,
+                           atomic_radii.get(),
+                           shell_levels.get(),
+                           shell_coordination_scale.get(),
+                           shell_polynomial.get(),
+                           shell_pair_scale.get()};
+  std::int64_t max_translations = 0;
+  for (std::int64_t system = 0; system < batch; ++system) {
+    const auto begin = periodic.data()->translation_offsets[static_cast<std::size_t>(system)];
+    const auto end = periodic.data()->translation_offsets[static_cast<std::size_t>(system + 1)];
+    max_translations = std::max(max_translations, end - begin);
+  }
+  Gfn2NativePeriodicIntegralDeviceBatch periodic_batch{
+      batch + 1,
+      static_cast<std::int64_t>(periodic.data()->translations.size()),
+      max_translations,
+      periodic.realspace_cutoff(0),
+      translation_offsets.get(),
+      translations.get(),
+      kPlanToken};
+  Gfn2IntegralDeviceWorkspace integral_workspace{overlap_scratch.get(),
+                                                 static_cast<std::int64_t>(matrix_elements),
+                                                 dipole_scratch.get(),
+                                                 static_cast<std::int64_t>(dipole_elements),
+                                                 quadrupole_scratch.get(),
+                                                 static_cast<std::int64_t>(quadrupole_elements),
+                                                 h0_scratch.get(),
+                                                 static_cast<std::int64_t>(matrix_elements),
+                                                 sequence_active.get(),
+                                                 1,
+                                                 kPlanToken};
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CUDA_CHECK(reset_gfn2_integral_device_errors_cuda(batch, system_errors.get(), device_error.get(),
+                                                    stream));
+  CUDA_CHECK(evaluate_gfn2_native_periodic_integrals_h0_cuda(
+      integral_batch, h0_plan, periodic_batch, wrapped_positions.get(), coordination_device.get(),
+      overlap.get(), dipole.get(), quadrupole.get(), h0.get(), integral_workspace,
+      system_errors.get(), device_error.get(), stream));
+  std::vector<double> actual_overlap(matrix_elements), actual_dipole(dipole_elements),
+      actual_quadrupole(quadrupole_elements), actual_h0(matrix_elements);
+  std::vector<std::uint32_t> actual_errors(static_cast<std::size_t>(batch)),
+      actual_device_error(1u);
+  CUDA_CHECK(overlap.download(actual_overlap.data(), actual_overlap.size(), stream));
+  CUDA_CHECK(dipole.download(actual_dipole.data(), actual_dipole.size(), stream));
+  CUDA_CHECK(quadrupole.download(actual_quadrupole.data(), actual_quadrupole.size(), stream));
+  CUDA_CHECK(h0.download(actual_h0.data(), actual_h0.size(), stream));
+  CUDA_CHECK(system_errors.download(actual_errors.data(), actual_errors.size(), stream));
+  CUDA_CHECK(device_error.download(actual_device_error.data(), actual_device_error.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(vectors_near(actual_overlap, expected_overlap, 2.0e-9));
+  CHECK(vectors_near(actual_dipole, expected_dipole, 2.0e-9));
+  CHECK(vectors_near(actual_quadrupole, expected_quadrupole, 2.0e-9));
+  CHECK(vectors_near(actual_h0, expected_h0, 2.0e-9));
+  CHECK(std::all_of(actual_errors.begin(), actual_errors.end(), [](std::uint32_t value) {
+    return value == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess);
+  }));
+  CHECK(actual_device_error[0] == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess));
+  const std::vector<double> published_overlap = actual_overlap;
+
+  /* Poison one system's image metadata after a successful publication.  The
+   * evaluator must preserve its previous output slice while healthy peers
+   * continue to publish; this exercises both the per-system error gate and
+   * the rectangular task padding path in one run. */
+  const std::int64_t failed_system = 1;
+  const auto failed_translation_begin =
+      periodic.data()->translation_offsets[static_cast<std::size_t>(failed_system)];
+  std::vector<Gfn2CudaPeriodicTranslation> poisoned(periodic.data()->translations.size());
+  CUDA_CHECK(translations.download(poisoned.data(), poisoned.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  poisoned[static_cast<std::size_t>(failed_translation_begin)].cartesian[0] =
+      std::numeric_limits<double>::quiet_NaN();
+  CUDA_CHECK(translations.upload(poisoned.data(), poisoned.size(), stream));
+  CUDA_CHECK(reset_gfn2_integral_device_errors_cuda(batch, system_errors.get(), device_error.get(),
+                                                    stream));
+  CUDA_CHECK(evaluate_gfn2_native_periodic_integrals_h0_cuda(
+      integral_batch, h0_plan, periodic_batch, wrapped_positions.get(), coordination_device.get(),
+      overlap.get(), dipole.get(), quadrupole.get(), h0.get(), integral_workspace,
+      system_errors.get(), device_error.get(), stream));
+  CUDA_CHECK(overlap.download(actual_overlap.data(), actual_overlap.size(), stream));
+  CUDA_CHECK(system_errors.download(actual_errors.data(), actual_errors.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(actual_errors[static_cast<std::size_t>(failed_system)] != 0u);
+  const std::int64_t failed_matrix_begin =
+      host.integrals.matrix_offsets[static_cast<std::size_t>(failed_system)];
+  const std::int64_t failed_matrix_end =
+      host.integrals.matrix_offsets[static_cast<std::size_t>(failed_system + 1)];
+  for (std::int64_t element = failed_matrix_begin; element < failed_matrix_end; ++element) {
+    CHECK(actual_overlap[static_cast<std::size_t>(element)] ==
+          published_overlap[static_cast<std::size_t>(element)]);
+  }
+  for (std::int64_t system = 0; system < batch; ++system) {
+    if (system == failed_system) continue;
+    CHECK(actual_errors[static_cast<std::size_t>(system)] == 0u);
+  }
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1562,5 +1910,5 @@ int main() {
     const int status = test();
     if (status != 0) return status;
   }
-  return 0;
+  return test_native_periodic_integrals_cpu_parity_and_peer_isolation();
 }

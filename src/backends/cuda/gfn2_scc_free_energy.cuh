@@ -45,6 +45,7 @@ struct Gfn2SccFreeEnergyDeviceBatch {
   std::uint32_t enabled_components = 0u;
   double electronic_temperature = 0.0;
   std::uint64_t plan_token = 0u;
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /*

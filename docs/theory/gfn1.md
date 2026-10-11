@@ -171,11 +171,11 @@ requires a separate implementation and finite-difference gate.
 
 ## Publication boundary
 
-The stable C ABI model tag `XTBLOOM_MODEL_GFN1_XTB` is published on CPU for
+The stable C ABI model tag `XTBLOOM_MODEL_GFN1_XTB` is published on CPU and CUDA for
 energy, analytic forces, atomic charges, explicit point charges and their
 forces, caller-supplied `b + A*q` response, ragged failure isolation, plans,
-and strict FRESH/WARM execution. CUDA requests remain transactionally
-`XTBLOOM_STATUS_NOT_SUPPORTED` and never substitute GFN2. Uniform electric
-field attachments and molecular dipole publication are not part of the GFN1
-surface. Future CUDA publication still requires real-GPU host/device/mixed
-parity and the repository sanitizer matrix.
+and strict FRESH/WARM execution. CUDA uses the same equations and parameter
+values without substituting GFN2, accepts host/device/mixed descriptors, and
+preserves the public stream, failure-isolation, and publication contracts.
+Uniform electric-field attachments and molecular dipole publication are not
+part of the GFN1 surface.

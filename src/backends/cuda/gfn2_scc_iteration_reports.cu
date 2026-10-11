@@ -18,9 +18,9 @@ constexpr std::uint32_t component_bit(Gfn2SccPotentialComponent component) noexc
   return static_cast<std::uint32_t>(component);
 }
 
-constexpr std::uint32_t kMandatoryComponents = component_bit(Gfn2SccPotentialComponent::kES2) |
-                                               component_bit(Gfn2SccPotentialComponent::kES3) |
-                                               component_bit(Gfn2SccPotentialComponent::kAES2);
+constexpr std::uint32_t kMandatoryComponents =
+    component_bit(Gfn2SccPotentialComponent::kES2) | component_bit(Gfn2SccPotentialComponent::kES3);
+constexpr std::int64_t kMinimumStageReportCount = kGfn2SccIterationBaseStageReportCount - 2;
 
 BindingDiagnostic fail(BindingError error, BindingField field, std::int64_t index = -1) noexcept {
   return {error, field, index};
@@ -43,7 +43,9 @@ CanonicalStages canonical_stages(std::uint32_t components) noexcept {
   stages.append(Gfn2SccStageId::kSpinPotential);
   stages.append(Gfn2SccStageId::kES2Potential);
   stages.append(Gfn2SccStageId::kES3Potential);
-  stages.append(Gfn2SccStageId::kAES2Potential);
+  if (enabled(components, Gfn2SccPotentialComponent::kAES2)) {
+    stages.append(Gfn2SccStageId::kAES2Potential);
+  }
   if (enabled(components, Gfn2SccPotentialComponent::kD4TwoBody)) {
     stages.append(Gfn2SccStageId::kD4Potential);
   }
@@ -60,7 +62,9 @@ CanonicalStages canonical_stages(std::uint32_t components) noexcept {
   stages.append(Gfn2SccStageId::kSpinRawEnergy);
   stages.append(Gfn2SccStageId::kES2RawEnergy);
   stages.append(Gfn2SccStageId::kES3RawEnergy);
-  stages.append(Gfn2SccStageId::kAES2RawEnergy);
+  if (enabled(components, Gfn2SccPotentialComponent::kAES2)) {
+    stages.append(Gfn2SccStageId::kAES2RawEnergy);
+  }
   if (enabled(components, Gfn2SccPotentialComponent::kD4TwoBody)) {
     stages.append(Gfn2SccStageId::kD4RawEnergy);
   }
@@ -602,7 +606,7 @@ Gfn2SccIterationBindingDiagnostic query_gfn2_scc_iteration_report_storage_cuda(
   }
 
   const CanonicalStages stages = canonical_stages(enabled_components);
-  if (stages.count < kGfn2SccIterationBaseStageReportCount ||
+  if (stages.count < kMinimumStageReportCount ||
       stages.count > kGfn2SccIterationMaximumStageReportCount ||
       batch_size > std::numeric_limits<std::int64_t>::max() / stages.count) {
     return fail(BindingError::kAddressOverflow, BindingField::kStageReports);

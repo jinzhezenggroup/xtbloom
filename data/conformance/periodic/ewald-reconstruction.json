@@ -1,0 +1,126 @@
+{
+  "alphas": [
+    {
+      "base": {
+        "alpha_bohr_inverse": 0.18,
+        "background_energy_hartree": -0.029643510229995843,
+        "direct_cutoff_bohr": 30.5,
+        "direct_energy_hartree": 0.0008014254372314609,
+        "direct_repeats": [
+          3,
+          3,
+          3
+        ],
+        "potential_hartree_per_e": -0.2397407371570592,
+        "reciprocal_cutoff_bohr_inverse": 1.953125,
+        "reciprocal_energy_hartree": 0.010525841252830914,
+        "reciprocal_repeats": [
+          4,
+          4,
+          4
+        ],
+        "self_energy_hartree": -0.10155412503859614,
+        "total_energy_hartree": -0.1198703685785296,
+        "unbackgrounded_energy_hartree": -0.09022685834853376
+      },
+      "expanded_box_total_energy_hartree": -0.1198703685785296,
+      "unimodular_basis_total_energy_hartree": -0.11987036857852959
+    },
+    {
+      "base": {
+        "alpha_bohr_inverse": 0.25,
+        "background_energy_hartree": -0.015367195703229844,
+        "direct_cutoff_bohr": 22.25,
+        "direct_energy_hartree": 1.2306023669986134e-05,
+        "direct_repeats": [
+          3,
+          2,
+          2
+        ],
+        "potential_hartree_per_e": -0.2397407371570592,
+        "reciprocal_cutoff_bohr_inverse": 2.71875,
+        "reciprocal_energy_hartree": 0.03653191698796933,
+        "reciprocal_repeats": [
+          5,
+          6,
+          6
+        ],
+        "self_energy_hartree": -0.14104739588693907,
+        "total_energy_hartree": -0.1198703685785296,
+        "unbackgrounded_energy_hartree": -0.10450317287529975
+      },
+      "expanded_box_total_energy_hartree": -0.1198703685785296,
+      "unimodular_basis_total_energy_hartree": -0.11987036857852958
+    },
+    {
+      "base": {
+        "alpha_bohr_inverse": 0.34,
+        "background_energy_hartree": -0.008308388680379456,
+        "direct_cutoff_bohr": 16.25,
+        "direct_energy_hartree": 1.2420255811338957e-08,
+        "direct_repeats": [
+          2,
+          2,
+          2
+        ],
+        "potential_hartree_per_e": -0.23974073715705924,
+        "reciprocal_cutoff_bohr_inverse": 3.6875,
+        "reciprocal_energy_hartree": 0.08026246608783119,
+        "reciprocal_repeats": [
+          7,
+          7,
+          8
+        ],
+        "self_energy_hartree": -0.19182445840623716,
+        "total_energy_hartree": -0.11987036857852962,
+        "unbackgrounded_energy_hartree": -0.11156197989815016
+      },
+      "expanded_box_total_energy_hartree": -0.11987036857852962,
+      "unimodular_basis_total_energy_hartree": -0.11987036857852956
+    },
+    {
+      "base": {
+        "alpha_bohr_inverse": 0.42,
+        "background_energy_hartree": -0.005444726368774747,
+        "direct_cutoff_bohr": 13.25,
+        "direct_energy_hartree": 6.034087722648857e-12,
+        "direct_repeats": [
+          2,
+          2,
+          2
+        ],
+        "potential_hartree_per_e": -0.23974073715705932,
+        "reciprocal_cutoff_bohr_inverse": 4.4375,
+        "reciprocal_energy_hartree": 0.12253398287426866,
+        "reciprocal_repeats": [
+          8,
+          9,
+          9
+        ],
+        "self_energy_hartree": -0.23695962509005766,
+        "total_energy_hartree": -0.11987036857852966,
+        "unbackgrounded_energy_hartree": -0.11442564220975492
+      },
+      "expanded_box_total_energy_hartree": -0.11987036857852966,
+      "unimodular_basis_total_energy_hartree": -0.11987036857852959
+    }
+  ],
+  "cell_matrix_row_major_bohr": [
+    11.0,
+    0.0,
+    0.0,
+    0.5,
+    11.8,
+    0.0,
+    -0.3,
+    0.7,
+    12.6
+  ],
+  "charge_e": 1.0,
+  "force_hartree_per_bohr": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "schema": "xtbloom-periodic-ewald-reconstruction-v1"
+}

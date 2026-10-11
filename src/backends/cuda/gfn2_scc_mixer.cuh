@@ -42,14 +42,18 @@ struct Gfn2SccMixerDevicePolicy {
   double rms_tolerance = 0.0;
   double maximum_tolerance = 0.0;
   std::uint64_t plan_token = 0u;
+  /* GFN2 mixes qsh plus three dipole and six quadrupole components per
+   * spin-resolved atom. GFN1 is scalar and mixes qsh only. */
+  std::int32_t atomic_multipole_components = 9;
 };
 
 /*
  * Persistent device-resident mixer history.
  *
  * current_inputs, previous_inputs, and previous_residuals use a packed
- * system-major vector: qsh, then dipole, then quadrupole. System starts are
- * shell_offsets[system] + 9 * atom_offsets[system]. History is system-major,
+ * system-major vector. GFN2 stores qsh, then dipole, then quadrupole, while
+ * scalar GFN1 stores qsh only. System starts are shell_offsets[system] plus
+ * policy.atomic_multipole_components * atom_offsets[system]. History is system-major,
  * then circular-slot-major, and therefore contains total_vector_elements *
  * history_size doubles in each of df_history and u_history.
  *

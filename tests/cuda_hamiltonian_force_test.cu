@@ -377,7 +377,9 @@ struct DeviceFixture {
             shell_orbital_offsets.get(),
             shell_to_atom.get(),
             orbital_to_shell.get(),
-            orbital_to_atom.get()};
+            orbital_to_atom.get(),
+            xtbloom::detail::XtbModelFlavor::kGfn2,
+            1};
   }
   Gfn2ForceDeviceActivity activity(const HostCase& h) const {
     return {requested.get(), statuses.get(), h.batch_size, kPlanToken};

@@ -1,10 +1,10 @@
 # Architecture
 
 xTBloom is organized around one stable C ABI and replaceable compute backends.
-The implemented physics includes restricted and unrestricted GFN2-xTB on CPU
-and CUDA and GFN1-xTB on CPU, with analytic energy/forces/charges, external
-point charges, and caller-supplied periodic response inside SCC. GFN1 CUDA and
-ROCm remain unavailable. The internal model registry records model identity
+The implemented physics includes restricted and unrestricted GFN1-xTB and
+GFN2-xTB on CPU and CUDA, with analytic energy/forces/charges, external point
+charges, and caller-supplied periodic response inside SCC. ROCm remains
+unavailable. The internal model registry records model identity
 together with concrete per-backend executor routes; public compute and plan
 boundaries switch on the route before touching a model cache, so an unavailable
 backend can never substitute GFN2 or publish partial output. The
@@ -20,10 +20,14 @@ the CUDA backend can consume device pointers directly and stage host pointers wh
 The ABI-v4 batch suffix reserves native 3D cell input as row-major direct
 lattice vectors in bohr plus a fixed-width periodic-axis mask. V1/V2/V3 callers
 remain molecular, and a V4 image whose masks are all `NONE` is also molecular.
-`XYZ` cells are validated for finite, right-handed, nonsingular geometry, but
-then refused with `NOT_IMPLEMENTED` before execution because complete periodic
-GFN2 topology, electrostatics, multipoles, forces, and cell derivatives are not
-yet connected. This native-cell suffix is separate from the caller-owned
+`XYZ` cells are validated for finite, right-handed, nonsingular geometry. CPU
+GFN2 executes the complete released periodic path, including Cartesian forces;
+when the ABI-v3 result suffix requests it, it also publishes nine row-major
+`dE/d(strain)` values per system in Hartree. CUDA GFN2 native-cell requests use
+the validated CPU periodic evaluator through a worker bridge for both
+synchronous and asynchronous public calls; CUDA-native Ewald/multipole kernels
+and device parity evidence remain outstanding. GFN1 native-cell execution is
+still refused. This native-cell suffix is separate from the caller-owned
 `b + A*q` response operator described below.
 
 Point-charge embedding uses a caller-provided per-site screening gamma so the softened short-range
@@ -321,20 +325,27 @@ OpenBLAS/GCC dependency closure. The factory loads the adjacent shim by absolute
 `RTLD_LOCAL` in a new glibc link-map namespace. A missing or corrupt wheel provider fails without
 falling back to host OpenBLAS, and `libxtbloom` never acquires an OpenBLAS `DT_NEEDED` edge.
 
-The native MKL path is also host-isolated: CMake builds a private
-`libxtbloom_mkl_lp64_shim` with fixed `DT_NEEDED` dependencies on `libmkl_intel_lp64`,
-`libmkl_sequential`, and `libmkl_core`. The factory loads the adjacent shim with `RTLD_LOCAL`
-in a new glibc link-map namespace; `RTLD_LOCAL` in the base namespace would still allow a
-globally loaded host runtime to interpose on the component dependencies. The shim deliberately
-uses `DT_RPATH` rather than `DT_RUNPATH`, so `LD_LIBRARY_PATH` cannot substitute same-SONAME
-components from a different MKL installation for the configure-time cohort.
+The native MKL path is also host-isolated. CMake builds a dependency-free
+`libxtbloom_mkl_pthread_tss_bridge` plus a private `libxtbloom_mkl_lp64_shim` whose first
+`DT_NEEDED` entry is that bridge, followed by fixed dependencies on `libmkl_intel_lp64`,
+`libmkl_sequential`, and `libmkl_core`. Before creating the provider cohort, the factory resolves
+the base-namespace pthread TSS entry points, loads only the zero-dependency bridge into a new glibc
+link-map namespace, and initializes its forwarding table. It then loads the adjacent provider shim
+into that same namespace with `RTLD_LOCAL`. This ordering bridges both public pthread TSS symbols
+and the internal aliases used by glibc 2.33 and older before private libc/libdl relocations or
+constructors can allocate a colliding key. `RTLD_LOCAL` in the base namespace would still allow a
+globally loaded host runtime to interpose on the component dependencies. The provider shim
+deliberately uses `DT_RPATH` rather than `DT_RUNPATH`, so `LD_LIBRARY_PATH` cannot substitute
+same-SONAME components from a different MKL installation for the configure-time cohort.
 xTBloom never loads `libmkl_rt`, never calls `MKL_Set_Interface_Layer`, and never reads
 `MKL_INTERFACE_LAYER`, so an embedding process's MKL interface/threading state is untouched and
-LP64 xTBloom calls stay correct even when the host uses ILP64. A shared `libxtbloom` locates the shim
-in its own directory. Because a static archive has no runtime module directory, a static MKL
-consumer must stage the installed shim beside its final executable; a missing sibling produces a
-deterministic backend-unavailable error rather than a base-namespace or `libmkl_rt` fallback. On
-Linux the CUDA build generates
+LP64 xTBloom calls stay correct even when the host uses ILP64. Once provider constructors can create
+base-registry TSS keys, the bridge, provider, and base pthread handles remain loaded for process
+life so their registered destructors stay callable through worker and interpreter teardown. A
+shared `libxtbloom` locates both private DSOs in its own directory. Because a static archive has no
+runtime module directory, a static MKL consumer must stage the installed bridge and provider shim
+beside its final executable; a missing sibling produces a deterministic backend-unavailable error
+rather than a base-namespace or `libmkl_rt` fallback. On Linux the CUDA build generates
 one ELF trampoline shim per wrapped host library
 (cudart, cuBLAS, cuSOLVER, and libcuda) and compiles those shims into libxtbloom itself
 (`src/runtime/cuda_dlopen.c`). When the build environment ships the provider

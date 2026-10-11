@@ -195,28 +195,34 @@ exception-oriented control flow.
 - [Browser demo](browser-demo.md)
 - [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
+- [Array API and DLPack](array-api.md)
+- [Direct Python geometry optimization](optimization.md)
+- [Vibrational analysis](vibrations.md)
+- [ASE molecular dynamics](ase-md.md)
 - [C and C++ API](c-api.md)
 - [QM/MM usage](qmmm.md)
 - [Performance evidence](performance.md)
 
 ## Scope and limitations
 
-GFN2-xTB is implemented on CPU and CUDA. GFN1-xTB is implemented on CPU only;
-CUDA requests return `NOT_SUPPORTED` without output publication. The high-level
-Python calculators, ASE, and dpdata expose GFN1 CPU, while Array API/DLPack,
-and PyTorch autograd remain GFN2-only. The single-threaded CPU/WebAssembly
-browser demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains
-reserved.
+GFN1-xTB and GFN2-xTB are implemented on CPU and CUDA. The high-level Python
+calculators, Array API/DLPack, PyTorch positions-only autograd, ASE, and dpdata
+expose both models. The single-threaded CPU/WebAssembly browser demo exposes
+both GFN1 and GFN2 and defaults to GFN2. ROCm remains reserved.
 
-xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
-periodic-axis input, but native periodic GFN2 execution and the Python
-periodic adapters are not implemented yet. Valid `XYZ` requests therefore
-return `NOT_IMPLEMENTED` before output publication. The separate periodic
+xTBloom's ABI-v4 batch descriptor accepts validated native 3D cell and
+periodic-axis input. CPU GFN2 and CUDA GFN2 (through a validated CPU host
+bridge) execute the released periodic path; CUDA-native Ewald/multipole
+kernels remain outstanding, and GFN1 periodic requests return
+`NOT_IMPLEMENTED` before output publication. The separate periodic
 charge-response API consumes fields computed by another electrostatics
 program; it does not make the QM calculation periodic by itself. Native
-geometry optimization, molecular dynamics, solvation, vibrational analysis,
-and native/analytic Hessians are not implemented. Python `Calculator.hessian()` and `BatchCalculator.hessian()`
-provide dense numerical QM-coordinate Hessians from batched analytic-force
-differences. The Hessian and
-the browser/dpdata optimizers are higher-level adapters built on repeated
-xTBloom calculations.
+drivers for geometry optimization and molecular dynamics, solvation,
+and native/analytic Hessians are not implemented. Python
+`Calculator.hessian()` and `BatchCalculator.hessian()` provide dense numerical
+QM-coordinate Hessians from batched analytic-force differences. ASE-driven
+molecular dynamics, the Hessian and Python [vibrational
+analysis](vibrations.md), and the browser/dpdata optimizers are higher-level
+adapters built on repeated xTBloom calculations.
+The direct Python `optimize()`/`optimize_batch()` helpers are also higher-level
+adapters built on repeated xTBloom calculations.

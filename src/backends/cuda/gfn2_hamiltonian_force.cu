@@ -155,7 +155,9 @@ __global__ void preflight_and_seed_kernel(Gfn2HamiltonianDeviceBatch batch,
                           Gfn2HamiltonianForceDeviceError::kInvalidOffsets);
       atomicExch(&valid, 0);
     }
-    for (int component = 0; component < kGfn2HamiltonianDipoleComponents; ++component) {
+    for (int component = 0;
+         batch.model == XtbModelFlavor::kGfn2 && component < kGfn2HamiltonianDipoleComponents;
+         ++component) {
       if (!isfinite(input.atomic_dipole_potentials[atom * kGfn2HamiltonianDipoleComponents +
                                                    component])) {
         record_system_error(system_errors, system, device_error,
@@ -163,7 +165,9 @@ __global__ void preflight_and_seed_kernel(Gfn2HamiltonianDeviceBatch batch,
         atomicExch(&valid, 0);
       }
     }
-    for (int component = 0; component < kGfn2HamiltonianQuadrupoleComponents; ++component) {
+    for (int component = 0;
+         batch.model == XtbModelFlavor::kGfn2 && component < kGfn2HamiltonianQuadrupoleComponents;
+         ++component) {
       if (!isfinite(input.atomic_quadrupole_potentials[atom * kGfn2HamiltonianQuadrupoleComponents +
                                                        component])) {
         record_system_error(system_errors, system, device_error,
@@ -230,7 +234,9 @@ __global__ void preflight_and_seed_kernel(Gfn2HamiltonianDeviceBatch batch,
     } else {
       workspace.overlap_adjoint_scratch[matrix] = overlap_seed;
     }
-    for (int component = 0; component < kGfn2HamiltonianDipoleComponents; ++component) {
+    for (int component = 0;
+         batch.model == XtbModelFlavor::kGfn2 && component < kGfn2HamiltonianDipoleComponents;
+         ++component) {
       const std::int64_t index = component * total_matrix + matrix;
       const double seed = output.dipole_adjoint[index];
       if (!isfinite(seed)) {
@@ -241,7 +247,9 @@ __global__ void preflight_and_seed_kernel(Gfn2HamiltonianDeviceBatch batch,
         workspace.dipole_adjoint_scratch[index] = seed;
       }
     }
-    for (int component = 0; component < kGfn2HamiltonianQuadrupoleComponents; ++component) {
+    for (int component = 0;
+         batch.model == XtbModelFlavor::kGfn2 && component < kGfn2HamiltonianQuadrupoleComponents;
+         ++component) {
       const std::int64_t index = component * total_matrix + matrix;
       const double seed = output.quadrupole_adjoint[index];
       if (!isfinite(seed)) {
@@ -311,7 +319,9 @@ __global__ void contract_kernel(Gfn2HamiltonianDeviceBatch batch, Gfn2ForceDevic
       }
     }
 
-    for (int component = 0; component < kGfn2HamiltonianDipoleComponents && finite; ++component) {
+    for (int component = 0; batch.model == XtbModelFlavor::kGfn2 &&
+                            component < kGfn2HamiltonianDipoleComponents && finite;
+         ++component) {
       const std::int64_t forward_index = component * total_matrix + forward;
       const std::int64_t reverse_index = component * total_matrix + reverse;
       const double forward_contribution =
@@ -341,7 +351,8 @@ __global__ void contract_kernel(Gfn2HamiltonianDeviceBatch batch, Gfn2ForceDevic
         }
       }
     }
-    for (int component = 0; component < kGfn2HamiltonianQuadrupoleComponents && finite;
+    for (int component = 0; batch.model == XtbModelFlavor::kGfn2 &&
+                            component < kGfn2HamiltonianQuadrupoleComponents && finite;
          ++component) {
       const std::int64_t forward_index = component * total_matrix + forward;
       const std::int64_t reverse_index = component * total_matrix + reverse;
@@ -395,11 +406,15 @@ __global__ void publish_kernel(Gfn2HamiltonianDeviceBatch batch, Gfn2ForceDevice
   const std::int64_t total_matrix = batch.total_matrix_elements;
   for (std::int64_t matrix = begin + threadIdx.x; matrix < end; matrix += blockDim.x) {
     output.overlap_adjoint[matrix] = workspace.overlap_adjoint_scratch[matrix];
-    for (int component = 0; component < kGfn2HamiltonianDipoleComponents; ++component) {
+    for (int component = 0;
+         batch.model == XtbModelFlavor::kGfn2 && component < kGfn2HamiltonianDipoleComponents;
+         ++component) {
       const std::int64_t index = component * total_matrix + matrix;
       output.dipole_adjoint[index] = workspace.dipole_adjoint_scratch[index];
     }
-    for (int component = 0; component < kGfn2HamiltonianQuadrupoleComponents; ++component) {
+    for (int component = 0;
+         batch.model == XtbModelFlavor::kGfn2 && component < kGfn2HamiltonianQuadrupoleComponents;
+         ++component) {
       const std::int64_t index = component * total_matrix + matrix;
       output.quadrupole_adjoint[index] = workspace.quadrupole_adjoint_scratch[index];
     }
@@ -473,6 +488,24 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
                                  std::uint32_t* system_errors,
                                  std::uint32_t* device_error) noexcept {
   const bool has_spin = input.spin_density != nullptr;
+  if (batch.batch_size > std::numeric_limits<int>::max()) {
+    return cudaErrorInvalidConfiguration;
+  }
+  if (!valid_xtb_model_flavor(batch.model) || batch.total_atoms < 0 ||
+      batch.total_matrix_elements < 0 ||
+      batch.total_atoms > kMaximumInt64 / kGfn2HamiltonianQuadrupoleComponents ||
+      batch.total_matrix_elements > kMaximumInt64 / kGfn2HamiltonianQuadrupoleComponents) {
+    return cudaErrorInvalidValue;
+  }
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  const std::int64_t atomic_dipole_elements =
+      multipoles_enabled ? batch.total_atoms * kGfn2HamiltonianDipoleComponents : 0;
+  const std::int64_t atomic_quadrupole_elements =
+      multipoles_enabled ? batch.total_atoms * kGfn2HamiltonianQuadrupoleComponents : 0;
+  const std::int64_t dipole_adjoint_elements =
+      multipoles_enabled ? batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents : 0;
+  const std::int64_t quadrupole_adjoint_elements =
+      multipoles_enabled ? batch.total_matrix_elements * kGfn2HamiltonianQuadrupoleComponents : 0;
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_atoms <= 0 || batch.total_shells <= 0 || batch.total_orbitals <= 0 ||
       batch.total_matrix_elements <= 0 ||
@@ -492,22 +525,26 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
       batch.orbital_to_atom_count < batch.total_orbitals ||
       input.density_elements < batch.total_matrix_elements ||
       input.shell_scalar_elements < batch.total_shells ||
-      input.atomic_dipole_elements < batch.total_atoms * kGfn2HamiltonianDipoleComponents ||
-      input.atomic_quadrupole_elements < batch.total_atoms * kGfn2HamiltonianQuadrupoleComponents ||
+      input.atomic_dipole_elements < atomic_dipole_elements ||
+      input.atomic_quadrupole_elements < atomic_quadrupole_elements ||
       has_spin != (input.spin_shell_scalar_potentials != nullptr) ||
       (!has_spin && (input.spin_density_elements != 0 || input.spin_shell_scalar_elements != 0)) ||
       (has_spin && (input.spin_density_elements < batch.total_matrix_elements ||
                     input.spin_shell_scalar_elements < batch.total_shells)) ||
       output.overlap_adjoint_elements < batch.total_matrix_elements ||
-      output.dipole_adjoint_elements <
-          batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents ||
-      output.quadrupole_adjoint_elements <
-          batch.total_matrix_elements * kGfn2HamiltonianQuadrupoleComponents ||
+      output.dipole_adjoint_elements < dipole_adjoint_elements ||
+      output.quadrupole_adjoint_elements < quadrupole_adjoint_elements ||
       workspace.overlap_adjoint_elements < batch.total_matrix_elements ||
-      workspace.dipole_adjoint_elements <
-          batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents ||
-      workspace.quadrupole_adjoint_elements <
-          batch.total_matrix_elements * kGfn2HamiltonianQuadrupoleComponents ||
+      workspace.dipole_adjoint_elements < dipole_adjoint_elements ||
+      workspace.quadrupole_adjoint_elements < quadrupole_adjoint_elements ||
+      (!multipoles_enabled &&
+       (input.atomic_dipole_potentials != nullptr || input.atomic_dipole_elements != 0 ||
+        input.atomic_quadrupole_potentials != nullptr || input.atomic_quadrupole_elements != 0 ||
+        output.dipole_adjoint != nullptr || output.dipole_adjoint_elements != 0 ||
+        output.quadrupole_adjoint != nullptr || output.quadrupole_adjoint_elements != 0 ||
+        workspace.dipole_adjoint_scratch != nullptr || workspace.dipole_adjoint_elements != 0 ||
+        workspace.quadrupole_adjoint_scratch != nullptr ||
+        workspace.quadrupole_adjoint_elements != 0)) ||
       workspace.sequence_elements < 1 || !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.batch_shell_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.batch_orbital_offsets, alignof(std::int64_t)) ||
@@ -521,27 +558,20 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
       !is_aligned(activity.system_statuses, alignof(xtbloom_status_t)) ||
       !required_pointer(input.density, batch.total_matrix_elements) ||
       !required_pointer(input.shell_scalar_potentials, batch.total_shells) ||
-      !required_pointer(input.atomic_dipole_potentials,
-                        batch.total_atoms * kGfn2HamiltonianDipoleComponents) ||
-      !required_pointer(input.atomic_quadrupole_potentials,
-                        batch.total_atoms * kGfn2HamiltonianQuadrupoleComponents) ||
+      !required_pointer(input.atomic_dipole_potentials, atomic_dipole_elements) ||
+      !required_pointer(input.atomic_quadrupole_potentials, atomic_quadrupole_elements) ||
       (has_spin && (!is_aligned(input.spin_density, alignof(double)) ||
                     !is_aligned(input.spin_shell_scalar_potentials, alignof(double)))) ||
       !required_pointer(output.overlap_adjoint, batch.total_matrix_elements) ||
-      !required_pointer(output.dipole_adjoint,
-                        batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents) ||
-      !required_pointer(output.quadrupole_adjoint,
-                        batch.total_matrix_elements * kGfn2HamiltonianQuadrupoleComponents) ||
+      !required_pointer(output.dipole_adjoint, dipole_adjoint_elements) ||
+      !required_pointer(output.quadrupole_adjoint, quadrupole_adjoint_elements) ||
       !required_pointer(workspace.overlap_adjoint_scratch, batch.total_matrix_elements) ||
-      !required_pointer(workspace.dipole_adjoint_scratch,
-                        batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents) ||
-      !required_pointer(workspace.quadrupole_adjoint_scratch,
-                        batch.total_matrix_elements * kGfn2HamiltonianQuadrupoleComponents) ||
+      !required_pointer(workspace.dipole_adjoint_scratch, dipole_adjoint_elements) ||
+      !required_pointer(workspace.quadrupole_adjoint_scratch, quadrupole_adjoint_elements) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
-    return batch.batch_size > std::numeric_limits<int>::max() ? cudaErrorInvalidConfiguration
-                                                              : cudaErrorInvalidValue;
+    return cudaErrorInvalidValue;
   }
 
   std::array<MemoryRange, 17> reads;
@@ -571,11 +601,9 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
       !make_range(input.density, batch.total_matrix_elements, sizeof(*input.density), &reads[11]) ||
       !make_range(input.shell_scalar_potentials, batch.total_shells,
                   sizeof(*input.shell_scalar_potentials), &reads[12]) ||
-      !make_range(input.atomic_dipole_potentials,
-                  batch.total_atoms * kGfn2HamiltonianDipoleComponents,
+      !make_range(input.atomic_dipole_potentials, atomic_dipole_elements,
                   sizeof(*input.atomic_dipole_potentials), &reads[13]) ||
-      !make_range(input.atomic_quadrupole_potentials,
-                  batch.total_atoms * kGfn2HamiltonianQuadrupoleComponents,
+      !make_range(input.atomic_quadrupole_potentials, atomic_quadrupole_elements,
                   sizeof(*input.atomic_quadrupole_potentials), &reads[14]) ||
       !make_range(input.spin_density, has_spin ? batch.total_matrix_elements : 0,
                   sizeof(*input.spin_density), &reads[15]) ||
@@ -583,19 +611,15 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
                   sizeof(*input.spin_shell_scalar_potentials), &reads[16]) ||
       !make_range(output.overlap_adjoint, batch.total_matrix_elements,
                   sizeof(*output.overlap_adjoint), &writes[0]) ||
-      !make_range(output.dipole_adjoint,
-                  batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents,
-                  sizeof(*output.dipole_adjoint), &writes[1]) ||
-      !make_range(output.quadrupole_adjoint,
-                  batch.total_matrix_elements * kGfn2HamiltonianQuadrupoleComponents,
+      !make_range(output.dipole_adjoint, dipole_adjoint_elements, sizeof(*output.dipole_adjoint),
+                  &writes[1]) ||
+      !make_range(output.quadrupole_adjoint, quadrupole_adjoint_elements,
                   sizeof(*output.quadrupole_adjoint), &writes[2]) ||
       !make_range(workspace.overlap_adjoint_scratch, batch.total_matrix_elements,
                   sizeof(*workspace.overlap_adjoint_scratch), &writes[3]) ||
-      !make_range(workspace.dipole_adjoint_scratch,
-                  batch.total_matrix_elements * kGfn2HamiltonianDipoleComponents,
+      !make_range(workspace.dipole_adjoint_scratch, dipole_adjoint_elements,
                   sizeof(*workspace.dipole_adjoint_scratch), &writes[4]) ||
-      !make_range(workspace.quadrupole_adjoint_scratch,
-                  batch.total_matrix_elements * kGfn2HamiltonianQuadrupoleComponents,
+      !make_range(workspace.quadrupole_adjoint_scratch, quadrupole_adjoint_elements,
                   sizeof(*workspace.quadrupole_adjoint_scratch), &writes[5]) ||
       !make_range(workspace.sequence_active, 1, sizeof(*workspace.sequence_active), &writes[6]) ||
       !make_range(system_errors, batch.batch_size, sizeof(*system_errors), &writes[7]) ||

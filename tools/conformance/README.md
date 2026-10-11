@@ -3,9 +3,8 @@
 ## Independent GFN1 foundation corpus
 
 The separate corpus under `data/conformance/gfn1/` records independent
-reference-engine results for the public CPU GFN1 implementation. The shared
-public C API and invariant runners accept this manifest explicitly; GFN1 CUDA
-remains unpublished and is never selected by default.
+reference-engine results for the public GFN1 implementation. The shared public
+C API and invariant runners accept this manifest explicitly on CPU and CUDA.
 
 Four closed-shell cases use the pinned tblite 0.7.0 GFN1 implementation.
 The canonical GFN1 parameter export is independently pinned to the tblite
@@ -62,8 +61,99 @@ python3 tools/conformance/gfn1_conformance.py finalize-manifest \
 ```
 
 The primary thresholds remain property-specific absolute tolerances. They are
-public CPU GFN1 acceptance gates; the committed goldens remain independent of
-xTBloom and are never regenerated from the implementation under test.
+public CPU/CUDA GFN1 acceptance gates; the committed goldens remain independent
+of xTBloom and are never regenerated from the implementation under test.
+
+## Native three-dimensional periodic GFN2 corpus
+
+The separate corpus under `data/conformance/periodic/` freezes the native-PBC
+contract before execution is released. Four xTBloom-authored neutral cells
+cover orthogonal, skew, one-atom, and unrestricted full-model calculations.
+Their energy, Cartesian gradient, and strain derivative come from tblite 0.7.0
+at revision `133f91efb94b47f05848e1f86832f40a1accc385`. Water and ammonia
+additionally retain three-step central differences for every Cartesian
+atom/axis and all six upper-triangular affine strain modes. Every retained
+displacement includes its energy plus materialized-input, raw-output, and
+normalized-output hashes. The runner converts tblite's Fortran-column-major
+virial output to the public row-major order explicitly.
+
+Each full-model result also retains live translation and determinant-`+1`
+unimodular cell-basis variants, while the offline checker recomputes reciprocal
+identity, zero net force, strain symmetry, and the half-open wrapping contract.
+Wrapping is deliberately a mathematical contract rather than a claimed live
+tblite invariant: the reviewed CLI did not preserve the full-model energy for
+every individually lattice-shifted atom in the skew-cell probe.
+
+The charged Li+ tblite result is retained only as a diagnostic boundary. The
+reviewed tblite monopole matrix omits the uniform-background constant, so it is
+not a charged-cell acceptance oracle. Two independent analytic cases instead
+reconstruct the required background energy, potential, and isotropic strain.
+A separate skew-cell document reconstructs the complete real, reciprocal,
+self, and background sum for one charge at four fixed splitting parameters.
+It gates alpha invariance, enlarged-box convergence, omitted-background drift,
+cell-basis invariance, potential, and zero force. This distinction is enforced
+by the offline checker.
+
+The v2 manifest also freezes tblite's exact monopole/multipole alpha and cutoff
+algorithm for orthogonal and skew cells. The exact-source build attestation at
+`data/conformance/periodic/tblite-build.json` records source tree, GNU Fortran
+14.3.0, Meson options, 52 exact conda packages, executable/library identities,
+and the complete non-system `ldd` closure. Its captured upstream test run was
+incomplete: 51 passed, 7 expected failures, 2 failures, 23 timeouts, and 9
+interruptions. The attestation therefore proves the reviewed build inputs and
+runtime identity; it does not claim that the upstream suite passed.
+
+Verify committed inputs, goldens, source/runtime hashes, finite differences,
+invariants, alpha/cutoff decisions, build attestation, and charged Ewald
+reconstruction without an oracle installation:
+
+```sh
+python3 tools/conformance/periodic_gfn2.py check
+```
+
+Regenerate only into a separate build directory with the exact pinned tblite
+executable and a loader path that resolves its reviewed runtime:
+
+```sh
+LD_LIBRARY_PATH=/path/to/oracle/lib \
+python3 tools/conformance/periodic_gfn2.py generate \
+  --executable /path/to/tblite \
+  --output-dir build/conformance/periodic-tblite
+
+python3 tools/conformance/periodic_gfn2.py compare \
+  --actual-dir build/conformance/periodic-tblite
+```
+
+The repository-only term corpus under
+`data/conformance/periodic/terms/` independently freezes the six pre-SCC
+families consumed by the implementation issues: GFN2 and D4 coordination,
+repulsion, fixed-charge D4 pair/ATM dispersion, periodic integrals and H0,
+shell-resolved charge Ewald, and separated q/d/Q multipole electrostatics.
+It retains raw probe output, logical array shapes, canonical JSON, Cartesian
+and affine-strain finite differences, q/d/Q potential derivatives, matrix
+recompositions, and the same exact tblite build identity as the full-model
+corpus. Verify it offline with:
+
+```sh
+python3 tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py check
+python3 -m unittest discover -s tests/oracle \
+  -p test_periodic_gfn2_terms.py -v
+```
+
+An installed exact oracle can rebuild the standalone GPL probe and regenerate
+the corpus into a temporary directory for a byte-for-byte comparison. The
+locally built probe executable is never distributed or hash-pinned because the
+Fortran driver embeds machine paths:
+
+```sh
+bash tools/oracle/periodic_gfn2_terms/build_probe.sh
+python3 tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py compare \
+  --probe build/periodic-gfn2-terms/probe
+```
+
+The affine convention, Ewald/background equations, cutoffs, signs, and
+unsupported combinations are defined in
+[`docs/theory/periodic-gfn2.md`](../../docs/theory/periodic-gfn2.md).
 
 ## GFN2 production conformance corpus
 
@@ -81,6 +171,73 @@ Verify that the committed files still match the manifest:
 python3 tools/conformance/xtbloom_conformance.py check
 ```
 
+### Offline split-source tblite references
+
+The default checker continues to require `live-cli` provenance. A separately
+reviewed, external-only prospective bundle may record energy and forces from
+the pinned tblite CLI and charges from a separate live C API calculation.
+Check that explicitly declared source consistency with:
+
+```sh
+python3 tools/conformance/xtbloom_conformance.py \
+  --manifest /path/to/frozen-bundle/validation-manifest.json \
+  check --allow-derived-tblite
+```
+
+This opt-in supports only `derived-live-cli-and-live-c-api` provenance for
+the reviewed tblite 0.7.0 restricted-neutral, single-spin gas-phase recipe
+without point charges or electric-field attachments. All three E/F/q
+properties must remain oracle-gated. It is not
+a generator or permission to substitute a new oracle, settings, or reference
+for a failed historical gate. The manifest, case scientific/performance
+qualification (including native-validation status), composite provenance,
+and API record must retain false claim
+eligibility. No model, native library, or source script is executed.
+
+The composite contains exactly `energy_hartree`, `forces_hartree_per_bohr`,
+and `partial_charges_e`. Its `property_sources` assigns energy and force to
+one identical byte-count/SHA-256 descriptor and charges to a separately
+retained API JSON descriptor. Descriptor paths are bundle-relative; absolute
+paths, parent traversal, and symlink escapes are rejected. Historical
+`source_path` strings are informational and are never opened. Producer and
+prospective IDs are linked by the explicit `label_mapping`.
+
+Historical CLI records lack an input-byte digest. Their declared input
+basename must match the producer ID, but this is not a byte-level binding
+to the case; those links remain explicitly `UNVERIFIED`. Do not backfill
+old records with a digest inferred from matching output or filenames.
+New CLI provenance may record `input_sha256` and `input_byte_count` together.
+The checker validates their exact types, SHA-256 and size against the retained
+case input; partial or mismatching records fail rather than reverting to the
+legacy path. When recorded links exist, it separately counts those artifact
+links and missing-digest links; legacy-only reports retain their historical
+`UNVERIFIED` wording. Even a matching recorded descriptor does not witness actual CLI
+execution, source origin, loaded dependencies or scientific admission; the
+same no-claim boundary and separate reviewed capture chain remain required.
+
+The CLI source retains the canonical method/units, command, version,
+revision, accuracy, runtime-library and thread-environment pins. Its exact
+`force=-gradient` identity is checked using that source's gradient without
+adding a gradient field to or rewriting the composite. API energy/force must
+exactly match the CLI, and the composite charges must match finite,
+correctly sized API output. The API source must retain the fixed numerical
+recipe, ordered eight-stage zero-status lifecycle, one singlepoint, deleted
+handles, input and binary64 coordinate hashes, version, library pins, and
+thread/loader environment. The bundle also retains the hash-pinned
+`frozen-sources/api-producer.py` and
+`frozen-sources/<producer_case_id>-api-captured-input.coord` sidecars.
+
+A successful opt-in check proves only consistency of the declared, pinned
+offline artifacts. It does not attest source origin, actual live execution,
+complete runtime dependency closure, oracle correctness, or science and
+performance admission. Historical aggregate failures and missing execution
+ledgers remain failures/missing evidence; they are not reconstructed. The
+declared CLI aggregate exit must be an integer shell exit code, with a
+nonempty failure description exactly when nonzero; retained declared codes
+are printed without interpreting them as witnessed execution. Keep
+tracked goldens and primary limits unchanged, and obtain independent
+scientific/provenance decisions before any prospective result is adopted.
+
 The snapshot importer remains available to audit the historical validation
 inputs at the pinned tblite source revision. Snapshot outputs are not the
 primary goldens because their original convergence setting was not recorded:
@@ -89,6 +246,14 @@ primary goldens because their original convergence setting was not recorded:
 python3 tools/conformance/xtbloom_conformance.py import-tblite-snapshot \
   --source-root /path/to/tblite
 ```
+
+New tblite captures validate the hashes of every selected manifest input before
+any subprocess, then pass private byte-identical copies to the CLI. Both the
+original and materialized input hashes are checked after each successful call
+before its golden is published. Newly generated provenance records the input
+SHA-256 and byte count without changing numerical settings or reference values.
+This does not add those missing fields to old captures or prove a historical
+producer's input identity; legacy goldens remain unchanged.
 
 Regenerate the tblite-primary cases with a built executable from the
 pinned revision. The generator verifies tblite 0.7.0, records the resolved
@@ -243,9 +408,10 @@ point-charge forces. The GFN2 `oh_radical` case uses standard shared-orbital
 charges on CPU and CUDA. GFN2 spin-polarized (`spin_channels=2`) inference and
 analytic forces are exercised on CPU and CUDA separately until an independent
 spin-polarized golden is committed. The GFN1 corpus also retains shared-orbital
-OH; `xtbloom.conformance.gfn1_spin2_public_cpu` reuses the independent,
-hash-bound P10 fixture from `tests/gfn1_cpu_conformance.py` to gate singleton
-and heterogeneous-ragged public CPU two-channel energy and forces. Molecular dipoles are
+OH. The `xtbloom.conformance.gfn1_spin2_public_{cpu,cuda*}` tests reuse the
+independent, hash-bound P10 fixture from `tests/gfn1_cpu_conformance.py` to gate
+singleton and heterogeneous-ragged public two-channel energy and forces on CPU
+and all three CUDA memory modes. Molecular dipoles are
 requested and recorded as `molecular_dipole_e_bohr` on both GFN2 backends, but
 are not yet part of the golden comparison because the committed corpus has no
 independent molecular-dipole oracle. Atomic dipoles and quadrupoles likewise

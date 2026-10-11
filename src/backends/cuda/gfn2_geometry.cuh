@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/xtb_model.hpp"
+
 namespace xtbloom::detail::cuda {
 
 /*
@@ -98,6 +100,7 @@ struct Gfn2GeometryDeviceBatch {
   const std::int64_t* atom_offsets = nullptr;
   const std::int64_t* pair_offsets = nullptr;
   const double* covalent_radii = nullptr;
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /*

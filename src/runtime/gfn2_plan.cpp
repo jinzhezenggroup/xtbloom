@@ -85,6 +85,11 @@ struct FixedTopology {
     if (spin_present) {
       copy_host_elements(batch.spin_channels.data, static_cast<std::size_t>(batch_size),
                          spin_channels);
+      for (std::size_t system = 0; system < spin_channels.size(); ++system) {
+        if (spin_channels[system] == 0) {
+          spin_channels[system] = unpaired_electrons[system] == 0 ? 1 : 2;
+        }
+      }
     } else {
       spin_channels.assign(static_cast<std::size_t>(batch_size), 1);
     }
@@ -134,7 +139,17 @@ struct FixedTopology {
       return false;
     }
     if (spin_present) {
-      return bytes_equal(batch.spin_channels.data, spin_channels);
+      const auto* current = static_cast<const std::byte*>(batch.spin_channels.data);
+      for (std::size_t system = 0; system < spin_channels.size(); ++system) {
+        /* Host descriptors are byte views and need not be int32_t-aligned. */
+        std::int32_t channels = 0;
+        std::memcpy(&channels, current + system * sizeof(channels), sizeof(channels));
+        if (channels == 0) {
+          channels = unpaired_electrons[system] == 0 ? 1 : 2;
+        }
+        if (channels != spin_channels[system]) return false;
+      }
+      return true;
     }
     return std::all_of(spin_channels.begin(), spin_channels.end(),
                        [](std::int32_t channels) { return channels == 1; });
@@ -294,11 +309,6 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
     error = "a fixed-topology plan requires a registered model executor route";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
-  if (model_route == ModelBackendRoute::kGfn1 && context.backend != XTBLOOM_BACKEND_CPU) {
-    error = "GFN1-xTB fixed-topology plans are currently supported only on CPU";
-    return XTBLOOM_STATUS_NOT_SUPPORTED;
-  }
-
   impl_->backend = context.backend;
   impl_->route = model_route;
   impl_->context = &context;
@@ -376,7 +386,8 @@ xtbloom_status_t Gfn2Plan::query_workspace(std::uint32_t compute_flags,
   }
   constexpr std::uint32_t kKnownComputeFlags =
       XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-      XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+      XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS |
+      XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
   if (query.reserved != 0u || query.reserved_v2 != 0u || compute_flags == 0u ||
       (compute_flags & ~kKnownComputeFlags) != 0u) {
     error = "workspace query contains unknown flags or nonzero reserved fields";

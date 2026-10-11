@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/common/xtb_model.hpp"
 
 namespace xtbloom::detail::cuda {
 
@@ -63,6 +64,10 @@ struct Gfn2MullikenDeviceBatch {
   const std::int64_t* shell_orbital_offsets = nullptr;
   const std::int64_t* shell_to_atom = nullptr;
   const double* reference_shell_occupations = nullptr;
+
+  /* GFN1 publishes scalar shell/atom populations only; GFN2 additionally
+   * binds and publishes the 3/6-component atomic multipole channels. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /* All pointers are device/UVA addresses bound to the same immutable plan. */

@@ -9,8 +9,21 @@
 #include <cstdint>
 #include <memory>
 
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_plan_schema.cuh"
 #include "backends/cuda/gfn2_scc_iteration.cuh"
+#include "backends/cuda/periodic_topology.cuh"
+#include "model/gfn1/basis.hpp"
+#include "model/gfn1/es2.hpp"
+#include "model/gfn1/es3.hpp"
+#include "model/gfn1/external_point_charges.hpp"
+#include "model/gfn1/h0.hpp"
+#include "model/gfn1/integrals.hpp"
+#include "model/gfn1/mulliken.hpp"
+#include "model/gfn1/scc_driver.hpp"
+#include "model/gfn1/scc_mixer.hpp"
+#include "model/gfn1/spin.hpp"
+#include "model/gfn1/wavefunction.hpp"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/d4.hpp"
@@ -21,6 +34,10 @@
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
+#include "model/gfn2/periodic_ewald.hpp"
+#include "model/gfn2/periodic_integrals.hpp"
+#include "model/gfn2/periodic_multipole.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 #include "model/gfn2/scc_driver.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
@@ -76,6 +93,63 @@ struct Gfn2SccSetupPeriodicSource {
 };
 
 /*
+ * Immutable native XYZ periodic plans projected into the CUDA setup image.
+ * The model plans remain the scientific owners of all cutoffs and image
+ * ordering; setup only copies their sealed metadata into device-readable POD
+ * arrays.  Numerical charges, multipoles, and coordination outlets are
+ * intentionally not part of this source because they are refreshed by the
+ * SCC transaction after setup.
+ */
+struct Gfn2SccSetupNativePeriodicSource {
+  const gfn2::PeriodicShortRangePlan* topology = nullptr;
+  const gfn2::PeriodicIntegralPlan* integrals = nullptr;
+  const gfn2::PeriodicEwaldPlan* ewald = nullptr;
+  const gfn2::PeriodicMultipolePlan* multipole = nullptr;
+};
+
+struct Gfn1SccSetupPointChargeSource {
+  const gfn1::ExternalPointChargePlan* plan = nullptr;
+  Gfn2SccSetupHostArray<double> positions{};
+  Gfn2SccSetupHostArray<double> charges{};
+  Gfn2SccSetupHostArray<double> hardnesses{};
+  Gfn2SccSetupHostArray<double> shell_potential_cache{};
+};
+
+/* Scalar GFN1 setup source. The CUDA SCC engine shares the GFN2 topology,
+ * eigensolver, publication, and request machinery, while these plans remain
+ * the sole authority for GFN1 numerical parameters and scalar SCC policy. */
+struct Gfn1SccSetupInputSources {
+  const gfn1::BasisPlan* basis = nullptr;
+  const gfn1::IntegralPlan* integrals = nullptr;
+  const gfn1::H0Plan* h0_plan = nullptr;
+  const gfn1::WavefunctionLayout* wavefunction = nullptr;
+  const gfn1::ES2Plan* es2 = nullptr;
+  const gfn1::ES3Plan* es3 = nullptr;
+  const gfn1::SpinPolarizationPlan* spin = nullptr;
+  const gfn1::MullikenPlan* mulliken = nullptr;
+  const gfn1::SccMixerPlan* mixer = nullptr;
+  const gfn1::SccDriverPlan* driver = nullptr;
+
+  std::uint64_t geometry_generation = 0u;
+  std::uint64_t warm_start_generation = 0u;
+  Gfn2SccSetupHostArray<std::uint64_t> warm_start_generations{};
+  Gfn2SccSetupHostArray<std::int32_t> atomic_numbers{};
+  Gfn2SccSetupHostArray<double> positions{};
+  Gfn2SccSetupHostArray<double> covalent_radii{};
+  Gfn2SccSetupHostArray<double> h0{};
+  Gfn2SccSetupHostArray<double> overlap{};
+  /* GFN1 has no multipole Hamiltonian operators. These views must be empty;
+   * setup reserves zero-filled compatibility storage for the shared assembler. */
+  Gfn2SccSetupHostArray<double> dipole_integrals{};
+  Gfn2SccSetupHostArray<double> quadrupole_integrals{};
+  Gfn2SccSetupGeometryCacheSource geometry_cache{};
+  Gfn2SccSetupES2CacheSource es2_cache{};
+  Gfn1SccSetupPointChargeSource point_charges{};
+  Gfn2SccSetupPeriodicSource periodic{};
+  Gfn2EigensolverOptions eigensolver_options{};
+};
+
+/*
  * Production host sources for the immutable restricted GFN2 SCC plan. Required
  * component plans are accepted by identity and cross-validated against the
  * already-bound common topology. Numerical views contain evaluated H0,
@@ -115,6 +189,7 @@ struct Gfn2SccSetupInputSources {
   Gfn2SccSetupD4Source d4{};
   Gfn2SccSetupPointChargeSource point_charges{};
   Gfn2SccSetupPeriodicSource periodic{};
+  Gfn2SccSetupNativePeriodicSource native_periodic{};
 
   Gfn2EigensolverOptions eigensolver_options{};
 };
@@ -191,6 +266,10 @@ class Gfn2SccSetupInputs {
 
   [[nodiscard]] static Gfn2SccSetupInputsDiagnostic create(
       const Gfn2SccSetupInputSources& sources, const Gfn2RaggedTopologyView& host_topology,
+      std::uint64_t plan_token, Gfn2SccSetupInputs& output) noexcept;
+
+  [[nodiscard]] static Gfn2SccSetupInputsDiagnostic create(
+      const Gfn1SccSetupInputSources& sources, const Gfn2RaggedTopologyView& host_topology,
       std::uint64_t plan_token, Gfn2SccSetupInputs& output) noexcept;
 
   [[nodiscard]] bool valid() const noexcept;

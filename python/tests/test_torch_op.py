@@ -49,6 +49,7 @@ def test_torch_public_signature_hides_execution_details() -> None:
         "molecular_charges",
         "unpaired_electrons",
         "spin_channels",
+        "method",
         "backend",
         "device_id",
         "cpu_threads",
@@ -158,7 +159,7 @@ args = (
     0, 0, 0, 0, 0,
     torch.empty(1, dtype=torch.float64),
     torch.empty((1, 3), dtype=torch.float64),
-    1, -1, 1, 0, 50, 1.0e-6, 1.0e-8, 300.0,
+    2, 1, -1, 1, 0, 50, 1.0e-6, 1.0e-8, 300.0,
 )
 torch.ops.xtbloom._xtbloom_torch_forward(*args, 1, 8, 0.4, 0)
 try:
@@ -269,6 +270,7 @@ def test_compiled_schema_marks_outputs_mutable() -> None:
     assert "Tensor atomic_numbers_owner" in schema
     assert "Tensor(a!) out_energies" in schema
     assert "Tensor(b!) out_forces" in schema
+    assert "int model" in schema
     assert "int scc_mixer" in schema
     assert "int scc_mixer_history" in schema
     assert "float scc_mixer_damping" in schema
@@ -325,6 +327,7 @@ def test_private_torch_op_validates_policy_before_narrowing(
             0,
             torch.empty(1, dtype=torch.float64),
             torch.empty((3, 3), dtype=torch.float64),
+            2,
             1,
             -1,
             1,
@@ -480,6 +483,40 @@ def test_forward_matches_calculator_host() -> None:
     )
 
 
+def test_default_spin_channels_follow_open_shell() -> None:
+    """Omitted Torch spin channels resolve open shells to two channels."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    positions = torch.zeros((1, 3), dtype=torch.float64)
+    atomic_numbers = torch.tensor([1], dtype=torch.int32)
+    atom_offsets = torch.tensor([0, 1], dtype=torch.int64)
+    molecular_charges = torch.zeros(1, dtype=torch.float64)
+    unpaired_electrons = torch.ones(1, dtype=torch.int32)
+    explicit_spin = torch.tensor([2], dtype=torch.int32)
+
+    automatic, _ = xtbloom_torch(
+        positions,
+        atomic_numbers,
+        atom_offsets,
+        molecular_charges,
+        unpaired_electrons,
+        backend="cpu",
+    )
+    explicit, _ = xtbloom_torch(
+        positions,
+        atomic_numbers,
+        atom_offsets,
+        molecular_charges,
+        unpaired_electrons,
+        explicit_spin,
+        backend="cpu",
+    )
+    assert torch.allclose(automatic, explicit, atol=0.0, rtol=0.0)
+
+
 def test_backward_grad_equals_neg_forces() -> None:
     """The analytic gradient of the summed energy must be exactly ``-F``."""
     reason = _skip_reason()
@@ -628,7 +665,7 @@ def test_backward_without_an_energy_gradient_is_a_noop() -> None:
     import xtbloom.torch as torch_module
 
     with torch.no_grad():
-        assert torch_module._function().backward(object(), None, None) == (None,) * 17
+        assert torch_module._function().backward(object(), None, None) == (None,) * 18
 
 
 def test_numpy_auxiliary_arrays_dispatch_as_tensors() -> None:
@@ -743,7 +780,7 @@ try:
         0, 0, 0, 0, 0,
         torch.empty(1, dtype=torch.float64),
         torch.empty((1, 3), dtype=torch.float64),
-        1, -1, 0, 0, 50, 1.0e-6, 1.0e-8, 300.0, 1, 8, 0.4, 0,
+        2, 1, -1, 0, 0, 50, 1.0e-6, 1.0e-8, 300.0, 1, 8, 0.4, 0,
     )
 except RuntimeError as exc:
     if "cannot load libxtbloom" not in str(exc):

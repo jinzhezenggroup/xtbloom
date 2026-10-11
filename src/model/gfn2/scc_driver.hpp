@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "model/common/basis.hpp"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/d4.hpp"
 #include "model/gfn2/eigensolver.hpp"
@@ -16,6 +17,9 @@
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/parallel_executor.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
+#include "model/gfn2/periodic_ewald.hpp"
+#include "model/gfn2/periodic_multipole.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
@@ -25,6 +29,80 @@ namespace xtbloom::detail::gfn2 {
 
 inline constexpr std::size_t kSccDriverWorkspaceAlignment = 64u;
 inline constexpr double kDefaultSccEnergyTolerance = 1.0e-8;
+
+/*
+ * Private external energy hook.  This is deliberately a C++ detail API in the
+ * isolated research tree, not an addition to the released xTBloom C ABI.
+ * The callback is entered once before each eigensolve to add external AO
+ * potentials to the current alpha/beta Hamiltonians, and once after the
+ * eigensolve to evaluate the variational external energy at the new density.
+ */
+enum class ExternalEnergyPhase : std::uint8_t {
+  kPotential = 0,
+  kEnergy = 1,
+  /* Optional post-composition force contribution. */
+  kForce = 2,
+};
+
+struct ExternalEnergyInput {
+  std::int64_t system = -1;
+  ExternalEnergyPhase phase = ExternalEnergyPhase::kPotential;
+  /* Per-system immutable topology/geometry metadata. The atom numbers and
+   * positions are local slices; orbital_to_atom retains the global atom index
+   * convention and atom_index_begin identifies that slice's global origin. */
+  const std::int32_t* atomic_numbers = nullptr;
+  std::int64_t atomic_number_elements = 0;
+  const double* positions = nullptr;
+  std::int64_t position_elements = 0;
+  const std::int64_t* orbital_to_atom = nullptr;
+  std::int64_t orbital_to_atom_elements = 0;
+  std::int64_t atom_index_begin = 0;
+  const double* overlap_gradient = nullptr;
+  std::int64_t overlap_gradient_elements = 0;
+  /* Shell metadata is global-plan indexed, just like orbital_to_atom. The
+   * callback receives the selected system slice and shell_orbital_index_begin
+   * so a binding can convert offsets to local AO coordinates without copying
+   * the immutable plan. */
+  const std::int64_t* shell_orbital_offsets = nullptr;
+  std::int64_t shell_orbital_offset_elements = 0;
+  const std::int64_t* shell_to_atom = nullptr;
+  std::int64_t shell_to_atom_elements = 0;
+  const std::uint8_t* principal_quantum_numbers = nullptr;
+  std::int64_t principal_quantum_number_elements = 0;
+  const std::uint8_t* angular_momenta = nullptr;
+  std::int64_t angular_momentum_elements = 0;
+  std::int64_t shell_index_begin = 0;
+  std::int64_t shell_orbital_index_begin = 0;
+  double molecular_charge = 0.0;
+  std::int32_t unpaired_electrons = 0;
+  const WavefunctionLayout* wavefunction_layout = nullptr;
+  const WavefunctionView* wavefunction = nullptr;
+  const MullikenIntegralView* integrals = nullptr;
+  const MullikenPlan* mulliken = nullptr;
+  /* Auxiliary projection basis and its native cross overlap.
+   * These fields are null/zero when the local projection cache is disabled. */
+  const common::BasisPlan* projection_basis = nullptr;
+  const double* projection_overlap = nullptr;
+  std::int64_t projection_overlap_elements = 0;
+  const double* projection_overlap_gradient = nullptr;
+  std::int64_t projection_overlap_gradient_elements = 0;
+};
+
+struct ExternalEnergyOutput {
+  /* Channel-major AO Hamiltonian slice for one system.  The callback adds
+   * V_alpha/V_beta in place; it is null during the energy-only phase. */
+  double* hamiltonian = nullptr;
+  std::int64_t hamiltonian_elements = 0;
+  /* Additive Cartesian force, flattened [atom, xyz]. This is populated only
+   * during kForce after xTBloom has assembled its baseline stationary force. */
+  double* force = nullptr;
+  std::int64_t force_elements = 0;
+  double energy = 0.0;
+};
+
+using ExternalEnergyCallback = xtbloom_status_t (*)(void* opaque, const ExternalEnergyInput& input,
+                                                    ExternalEnergyOutput& output,
+                                                    std::string& error);
 
 struct SccDriverPlanData;
 
@@ -59,6 +137,10 @@ class SccDriverPlan {
   [[nodiscard]] double energy_tolerance() const noexcept;
   [[nodiscard]] bool d4_enabled() const noexcept;
   [[nodiscard]] bool periodic_embedding_enabled() const noexcept;
+  [[nodiscard]] bool native_periodic_enabled() const noexcept;
+  [[nodiscard]] const PeriodicShortRangePlan* native_periodic_plan() const noexcept;
+  [[nodiscard]] const PeriodicEwaldPlan* native_ewald_plan() const noexcept;
+  [[nodiscard]] const PeriodicMultipolePlan* native_multipole_plan() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
   [[nodiscard]] std::size_t resident_bytes() const noexcept;
@@ -85,6 +167,13 @@ class SccDriverPlan {
       const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
       std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
       SccDriverPlan& plan, std::string& error);
+  friend xtbloom_status_t make_scc_driver_plan(
+      const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+      const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+      const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+      const PeriodicShortRangePlan* native_periodic, std::uint64_t maximum_iterations,
+      double electronic_temperature, double energy_tolerance, SccDriverPlan& plan,
+      std::string& error);
 };
 
 /*
@@ -110,6 +199,25 @@ struct SccDriverGeometryView {
   const double* h0 = nullptr;
   std::int64_t h0_elements = 0;
   MullikenIntegralView integrals;
+  /* Current atom coordinates, retained for local external energy evaluators. This
+   * field is optional for stock SCC and required only when the private
+   * callback is installed. */
+  const double* positions = nullptr;
+  std::int64_t positions_elements = 0;
+  /* Optional [atom, xyz, nao, nao] overlap derivative export for the local
+   * external energy projection/force callback. Stock SCC and callback-enabled
+   * energy-only requests leave it null. */
+  const double* overlap_gradient = nullptr;
+  std::int64_t overlap_gradient_elements = 0;
+  /* Geometry refreshes may omit the expensive Jacobians for energy-only
+   * requests. This flag is set by the execution layer when a force callback
+   * will be consumed and makes the derivative-buffer requirement explicit. */
+  bool external_energy_force_derivatives = false;
+  const common::BasisPlan* projection_basis = nullptr;
+  const double* projection_overlap = nullptr;
+  std::int64_t projection_overlap_elements = 0;
+  const double* projection_overlap_gradient = nullptr;
+  std::int64_t projection_overlap_gradient_elements = 0;
   ES2GeometryCache es2_cache;
   AES2GeometryCache aes2_cache;
   D4GeometryCache d4_cache;
@@ -124,6 +232,56 @@ struct SccDriverGeometryView {
   std::int64_t periodic_response_elements = 0;
   std::uint64_t periodic_embedding_generation = 0u;
   const PeriodicEmbeddingPlanData* periodic_plan_identity = nullptr;
+
+  /* Native XYZ periodic geometry and evaluator-owned output buffers. The
+   * positions/coordination inputs are read from the current geometry; the
+   * output arrays are reusable caller-owned scratch and are overwritten by the
+   * native Ewald/q-d/Q evaluators before the Hamiltonian or energy contraction.
+   * Keeping this state outside the public ABI preserves the existing driver
+   * workspace layout while making the native operators independently testable. */
+  const double* native_positions = nullptr;
+  std::int64_t native_position_elements = 0;
+  const double* native_coordination_numbers = nullptr;
+  std::int64_t native_coordination_elements = 0;
+  const PeriodicShortRangePlanData* native_topology_identity = nullptr;
+  const PeriodicShortRangeGeometry* native_topology_geometry = nullptr;
+  const PeriodicShortRangeWorkspace* native_topology_workspace = nullptr;
+  /* Native periodic D4 coordination is separate from D4GeometryCache: the
+   * molecular cache stores one finite-system pair table, whereas periodic D4
+   * enumerates the shared real-space image topology. */
+  const double* native_d4_coordination_numbers = nullptr;
+  std::int64_t native_d4_coordination_elements = 0;
+  std::uint64_t native_d4_geometry_generation = 0u;
+  double* native_ewald_matrix = nullptr;
+  std::int64_t native_ewald_matrix_elements = 0;
+  double* native_ewald_shell_potentials = nullptr;
+  std::int64_t native_ewald_shell_elements = 0;
+  double* native_ewald_energies = nullptr;
+  std::int64_t native_ewald_energy_elements = 0;
+  double* native_ewald_gradients = nullptr;
+  std::int64_t native_ewald_gradient_elements = 0;
+  double* native_ewald_strain_derivatives = nullptr;
+  std::int64_t native_ewald_strain_elements = 0;
+  double* native_multipole_charge_dipole = nullptr;
+  std::int64_t native_multipole_charge_dipole_elements = 0;
+  double* native_multipole_dipole_dipole = nullptr;
+  std::int64_t native_multipole_dipole_dipole_elements = 0;
+  double* native_multipole_charge_quadrupole = nullptr;
+  std::int64_t native_multipole_charge_quadrupole_elements = 0;
+  double* native_multipole_charge_potentials = nullptr;
+  std::int64_t native_multipole_charge_potential_elements = 0;
+  double* native_multipole_dipole_potentials = nullptr;
+  std::int64_t native_multipole_dipole_potential_elements = 0;
+  double* native_multipole_quadrupole_potentials = nullptr;
+  std::int64_t native_multipole_quadrupole_potential_elements = 0;
+  double* native_multipole_energies = nullptr;
+  std::int64_t native_multipole_energy_elements = 0;
+  double* native_multipole_gradients = nullptr;
+  std::int64_t native_multipole_gradient_elements = 0;
+  double* native_multipole_strain_derivatives = nullptr;
+  std::int64_t native_multipole_strain_elements = 0;
+  double* native_multipole_coordination_adjoint = nullptr;
+  std::int64_t native_multipole_coordination_elements = 0;
 
   /* Uniform external electric field (pilot interaction, tag 0x0101).
    *
@@ -142,7 +300,19 @@ struct SccDriverGeometryView {
   std::int64_t field_atomic_potential_elements = 0;
   const double* field_dipole_potential = nullptr;
   std::int64_t field_dipole_potential_elements = 0;
+
+  /* Optional private external energy callback; both fields are null for stock SCC. */
+  ExternalEnergyCallback external_energy_callback = nullptr;
+  void* external_energy_opaque = nullptr;
 };
+
+/* Invoke the optional post-SCC force callback for one system. The callback is
+ * deliberately separate from the released force API so local evaluators can
+ * add external-energy terms without changing stock xTBloom behavior. */
+xtbloom_status_t invoke_external_energy_force_callback(
+    const WavefunctionLayout& layout, const MullikenPlan& mulliken,
+    const SccDriverGeometryView& geometry, const WavefunctionView& wavefunction, std::size_t system,
+    double* force, std::int64_t force_elements, std::string& error);
 
 /*
  * Persistent, caller-owned driver status and scalar trace.
@@ -224,6 +394,9 @@ struct SccDriverWorkspace {
   xtbloom_status_t* periodic_system_statuses = nullptr;
   double* d4_atomic_potentials = nullptr;
   double* d4_two_body_energies = nullptr;
+  /* Periodic D4 returns atom-partitioned energies; this dedicated scratch is
+   * present only when both native periodic topology and D4 are enabled. */
+  double* native_d4_atom_energies = nullptr;
   std::uint8_t* active_systems = nullptr;
 
   ES2Workspace es2_workspace;
@@ -279,6 +452,18 @@ xtbloom_status_t make_scc_driver_plan(
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
     std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
     SccDriverPlan& plan, std::string& error);
+
+/* Enable native three-dimensional periodic GFN2 electrostatics. The topology
+ * must be sealed and describe exactly the wavefunction atom partition. Native
+ * Ewald/q-d/Q operators are then built from the same ES2/AES2 parameter plans;
+ * the older PeriodicEmbeddingPlan remains a separate optional b + A*q term. */
+xtbloom_status_t make_scc_driver_plan(
+    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+    const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+    const PeriodicShortRangePlan* native_periodic, std::uint64_t maximum_iterations,
+    double electronic_temperature, double energy_tolerance, SccDriverPlan& plan,
+    std::string& error);
 
 /*
  * Enable the validated CPU periodic charge response. A non-null pointer must
