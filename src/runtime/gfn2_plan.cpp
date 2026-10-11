@@ -139,9 +139,11 @@ struct FixedTopology {
       return false;
     }
     if (spin_present) {
-      const auto* current = static_cast<const std::int32_t*>(batch.spin_channels.data);
+      const auto* current = static_cast<const std::byte*>(batch.spin_channels.data);
       for (std::size_t system = 0; system < spin_channels.size(); ++system) {
-        std::int32_t channels = current[system];
+        /* Host descriptors are byte views and need not be int32_t-aligned. */
+        std::int32_t channels = 0;
+        std::memcpy(&channels, current + system * sizeof(channels), sizeof(channels));
         if (channels == 0) {
           channels = unpaired_electrons[system] == 0 ? 1 : 2;
         }
@@ -544,3 +546,4 @@ xtbloom_status_t Gfn2Plan::enqueue(const xtbloom_batch_t& batch,
 }
 
 }  // namespace xtbloom::detail
+
