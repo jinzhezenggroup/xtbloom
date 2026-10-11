@@ -170,7 +170,7 @@ jobs:
             benchmarks.test_run benchmarks.test_dataset_runner \
             benchmarks.test_paper_suite benchmarks.test_natoms_scaling \
             benchmarks.test_natoms_cross_engine benchmarks.test_dxtb_adapter \
-            benchmarks.test_evidence_size
+            benchmarks.test_evidence_size benchmarks.test_cuda_distribution_evidence
       - name: Validate repository-relative Python coverage paths
         run: |
           uv run --no-sync python - <<'PY'
