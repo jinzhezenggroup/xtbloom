@@ -52,6 +52,7 @@ TOPOLOGIES = ("alkane", "compact-carbon", "open-carbon")
 REPEATED_CALL_SEMANTICS = "same_geometry_repeated_compute"
 CONFORMANCE_MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
 THREAD_ENVIRONMENT_NAMES = (
+    "XTBLOOM_CPU_PRECISION",
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
     "MKL_NUM_THREADS",

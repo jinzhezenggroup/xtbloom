@@ -336,8 +336,8 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
       impl_->gfn1_cpu_cache = std::make_shared<Gfn1CpuExecutionCache>(context.cpu_threads);
       status = prepare_gfn1_cpu(*impl_->gfn1_cpu_cache, batch, impl_->policy, reused, error);
     } else {
-      impl_->cpu_cache =
-          std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads, context.cpu_isa);
+      impl_->cpu_cache = std::make_shared<Gfn2CpuExecutionCache>(
+          context.cpu_threads, context.cpu_isa, context.cpu_precision);
       status = prepare_restricted_gfn2_cpu(*impl_->cpu_cache, batch, impl_->policy, reused, error);
     }
     if (status != XTBLOOM_STATUS_SUCCESS) {

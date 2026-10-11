@@ -55,6 +55,7 @@ struct EigensolverPlanData final {
   std::int64_t total_matrix_elements = 0;
   std::int64_t maximum_orbitals = 0;
   double minimum_overlap_rcond = 1.0e-12;
+  bool single_precision_enabled = false;
   std::vector<std::int64_t> matrix_offsets;
   std::vector<std::int64_t> orbital_offsets;
   std::vector<std::int32_t> spin_channels;
@@ -78,6 +79,12 @@ struct EigensolverPlanData final {
   std::size_t occupation_scratch_offset_bytes = 0u;
   std::size_t lapack_work_offset_bytes = 0u;
   std::size_t lapack_integer_work_offset_bytes = 0u;
+  std::size_t single_coefficient_scratch_offset_bytes = 0u;
+  std::size_t single_density_scratch_offset_bytes = 0u;
+  std::size_t single_energy_weighted_density_scratch_offset_bytes = 0u;
+  std::size_t single_eigenvalue_scratch_offset_bytes = 0u;
+  std::size_t single_factor_scratch_offset_bytes = 0u;
+  std::size_t single_lapack_work_offset_bytes = 0u;
   std::size_t factor_staging_offset_bytes = 0u;
   std::size_t factor_generation_staging_offset_bytes = 0u;
   std::size_t factor_status_staging_offset_bytes = 0u;
@@ -101,6 +108,8 @@ struct CpuLinearAlgebraAccess {
                                       LapackDsyevdWork dsyevd_work, CblasDtrsm dtrsm,
                                       CblasDgemm dgemm,
                                       BlasSetNumThreadsLocal set_num_threads_local,
+                                      LapackSsyevdWork ssyevd_work = nullptr,
+                                      CblasStrsm strsm = nullptr, CblasSgemm sgemm = nullptr,
                                       BlasThreadCleanup thread_cleanup = nullptr) noexcept {
     CpuLinearAlgebraBackend backend;
     backend.origin_ = origin;
@@ -109,6 +118,9 @@ struct CpuLinearAlgebraAccess {
     backend.dsyevd_work_ = dsyevd_work;
     backend.dtrsm_ = dtrsm;
     backend.dgemm_ = dgemm;
+    backend.ssyevd_work_ = ssyevd_work;
+    backend.strsm_ = strsm;
+    backend.sgemm_ = sgemm;
     backend.set_num_threads_local_ = set_num_threads_local;
     backend.thread_cleanup_ = thread_cleanup;
     return backend;
@@ -128,6 +140,20 @@ struct CpuLinearAlgebraAccess {
   }
   static CblasDgemm dgemm(const CpuLinearAlgebraBackend& backend) noexcept {
     return backend.dgemm_;
+  }
+  static LapackSsyevdWork ssyevd(const CpuLinearAlgebraBackend& backend) noexcept {
+    return backend.ssyevd_work_;
+  }
+  static CblasStrsm strsm(const CpuLinearAlgebraBackend& backend) noexcept {
+    return backend.strsm_;
+  }
+  static CblasSgemm sgemm(const CpuLinearAlgebraBackend& backend) noexcept {
+    return backend.sgemm_;
+  }
+  static void clear_single_precision(CpuLinearAlgebraBackend& backend) noexcept {
+    backend.ssyevd_work_ = nullptr;
+    backend.strsm_ = nullptr;
+    backend.sgemm_ = nullptr;
   }
   static BlasSetNumThreadsLocal set_threads(const CpuLinearAlgebraBackend& backend) noexcept {
     return backend.set_num_threads_local_;
@@ -329,6 +355,26 @@ bool load_lapacke_cblas_symbols(void* handle, bool scipy_prefix, LapackDpotrfWor
          load_symbol(handle, "cblas_dtrsm", dtrsm) && load_symbol(handle, "cblas_dgemm", dgemm);
 }
 
+bool load_single_precision_symbols(void* handle, bool scipy_prefix, LapackSsyevdWork& ssyevd_work,
+                                   CblasStrsm& strsm, CblasSgemm& sgemm) {
+  ssyevd_work = nullptr;
+  strsm = nullptr;
+  sgemm = nullptr;
+  const bool loaded = scipy_prefix
+                          ? load_symbol(handle, "scipy_LAPACKE_ssyevd_work", ssyevd_work) &&
+                                load_symbol(handle, "scipy_cblas_strsm", strsm) &&
+                                load_symbol(handle, "scipy_cblas_sgemm", sgemm)
+                          : load_symbol(handle, "LAPACKE_ssyevd_work", ssyevd_work) &&
+                                load_symbol(handle, "cblas_strsm", strsm) &&
+                                load_symbol(handle, "cblas_sgemm", sgemm);
+  if (!loaded) {
+    ssyevd_work = nullptr;
+    strsm = nullptr;
+    sgemm = nullptr;
+  }
+  return loaded;
+}
+
 #ifdef XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS
 bool load_pyodide_lapacke_cblas_symbols(void* handle, LapackDpotrfWork& dpotrf_work,
                                         LapackDpoconWork& dpocon_work,
@@ -377,6 +423,44 @@ bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   CpuLinearAlgebraAccess::dgemm(backend)(kCblasColMajor, kCblasNoTrans, kCblasTrans, 1, 1, 1, 1.0,
                                          rhs, 1, rhs, 1, 0.0, product, 1);
   return rhs[0] == 2.0 && product[0] == 4.0;
+}
+
+bool single_precision_backend_self_test(const CpuLinearAlgebraBackend& backend) {
+  if (!backend.single_precision_ready()) {
+    return false;
+  }
+  float eigenvectors[1]{2.0F};
+  float eigenvalues[1]{};
+  float work[9]{};
+  LapackInt integer_work[8]{};
+  if (CpuLinearAlgebraAccess::ssyevd(backend)(kCblasColMajor, kEigenvectors, kLower, 1,
+                                              eigenvectors, 1, eigenvalues, work, 9, integer_work,
+                                              8) != 0 ||
+      eigenvalues[0] != 2.0F || eigenvectors[0] != 1.0F) {
+    return false;
+  }
+  float rhs[1]{4.0F};
+  const float triangular[1]{2.0F};
+  CpuLinearAlgebraAccess::strsm(backend)(kCblasColMajor, kCblasLeft, kCblasLower, kCblasNoTrans,
+                                         kCblasNonUnit, 1, 1, 1.0F, triangular, 1, rhs, 1);
+  float product[1]{};
+  CpuLinearAlgebraAccess::sgemm(backend)(kCblasColMajor, kCblasNoTrans, kCblasTrans, 1, 1, 1, 1.0F,
+                                         rhs, 1, rhs, 1, 0.0F, product, 1);
+  return rhs[0] == 2.0F && product[0] == 4.0F;
+}
+
+bool complete_backend_self_test(CpuLinearAlgebraBackend& backend) {
+  if (!backend_self_test(backend)) {
+    return false;
+  }
+  if (backend.single_precision_ready() && !single_precision_backend_self_test(backend)) {
+    /* FP32 is an optional capability. A provider with a sound FP64 cohort but
+     * broken optional single-precision entry points must remain usable by the
+     * default policy; adaptive context initialization will reject the cleared
+     * capability explicitly. */
+    CpuLinearAlgebraAccess::clear_single_precision(backend);
+  }
+  return true;
 }
 
 #if defined(XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS)
@@ -775,6 +859,10 @@ xtbloom_status_t validate_worker_workspace(const EigensolverPlan& plan,
                                            const EigensolverWorkspace& workspace,
                                            std::string& error) {
   const EigensolverPlanData& data = *plan.identity();
+  const auto single_pointer = [&](std::size_t offset) {
+    return data.single_precision_enabled ? offset_pointer<float>(workspace.workspace_base, offset)
+                                         : nullptr;
+  };
   if (workspace.workspace_base == nullptr ||
       workspace.workspace_size_bytes < data.worker_workspace_size_bytes ||
       !is_aligned(workspace.workspace_base, kEigensolverWorkspaceAlignment) ||
@@ -794,7 +882,15 @@ xtbloom_status_t validate_worker_workspace(const EigensolverPlan& plan,
           offset_pointer<double>(workspace.workspace_base, data.lapack_work_offset_bytes) ||
       workspace.lapack_integer_work !=
           offset_pointer<LapackInt>(workspace.workspace_base,
-                                    data.lapack_integer_work_offset_bytes)) {
+                                    data.lapack_integer_work_offset_bytes) ||
+      workspace.single_coefficients !=
+          single_pointer(data.single_coefficient_scratch_offset_bytes) ||
+      workspace.single_densities != single_pointer(data.single_density_scratch_offset_bytes) ||
+      workspace.single_energy_weighted_densities !=
+          single_pointer(data.single_energy_weighted_density_scratch_offset_bytes) ||
+      workspace.single_eigenvalues != single_pointer(data.single_eigenvalue_scratch_offset_bytes) ||
+      workspace.single_factor != single_pointer(data.single_factor_scratch_offset_bytes) ||
+      workspace.single_lapack_work != single_pointer(data.single_lapack_work_offset_bytes)) {
     error = "eigensolver worker scratch is not a canonical binding for this plan";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -948,6 +1044,21 @@ bool symmetric_finite_column_major(const double* matrix, std::size_t n) {
   return true;
 }
 
+bool symmetric_finite_column_major(const float* matrix, std::size_t n) {
+  constexpr float multiplier = 256.0F * std::numeric_limits<float>::epsilon();
+  for (std::size_t column = 0u; column < n; ++column) {
+    for (std::size_t row = 0u; row < n; ++row) {
+      const float value = matrix[row + column * n];
+      const float transpose = matrix[column + row * n];
+      const float scale = std::max({1.0F, std::abs(value), std::abs(transpose)});
+      if (!std::isfinite(value) || std::abs(value - transpose) > multiplier * scale) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 void copy_symmetric_row_to_column(const double* input, std::size_t n, double* output) {
   for (std::size_t row = 0u; row < n; ++row) {
     output[row + row * n] = input[row * n + row];
@@ -968,6 +1079,14 @@ void copy_column_to_row(const double* input, std::size_t rows, std::size_t colum
   }
 }
 
+void copy_column_to_row(const float* input, std::size_t rows, std::size_t columns, double* output) {
+  for (std::size_t row = 0u; row < rows; ++row) {
+    for (std::size_t column = 0u; column < columns; ++column) {
+      output[row * columns + column] = static_cast<double>(input[row + column * rows]);
+    }
+  }
+}
+
 double matrix_one_norm_column_major(const double* matrix, std::size_t n) {
   double maximum = 0.0;
   for (std::size_t column = 0u; column < n; ++column) {
@@ -981,6 +1100,15 @@ double matrix_one_norm_column_major(const double* matrix, std::size_t n) {
 }
 
 bool finite_array(const double* values, std::size_t count) {
+  for (std::size_t index = 0u; index < count; ++index) {
+    if (!std::isfinite(values[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool finite_array(const float* values, std::size_t count) {
   for (std::size_t index = 0u; index < count; ++index) {
     if (!std::isfinite(values[index])) {
       return false;
@@ -1253,6 +1381,54 @@ NumericalResult solve_one_spin(const CpuLinearAlgebraBackend& backend,
              : NumericalResult::kDataFailure;
 }
 
+NumericalResult solve_one_spin_single_precision(const CpuLinearAlgebraBackend& backend,
+                                                const EigensolverPlanData& data, LapackInt n,
+                                                const float* factor, const double* hamiltonian,
+                                                float* coefficients, float* eigenvalues,
+                                                const EigensolverWorkspace& workspace) {
+  const std::size_t dimension = static_cast<std::size_t>(n);
+  const std::size_t matrix_count = dimension * dimension;
+  for (std::size_t row = 0u; row < dimension; ++row) {
+    coefficients[row + row * dimension] = static_cast<float>(hamiltonian[row * dimension + row]);
+    for (std::size_t column = 0u; column < row; ++column) {
+      const float value = static_cast<float>(
+          0.5 * (hamiltonian[row * dimension + column] + hamiltonian[column * dimension + row]));
+      coefficients[row + column * dimension] = value;
+      coefficients[column + row * dimension] = value;
+    }
+  }
+  if (!finite_array(coefficients, matrix_count)) {
+    return NumericalResult::kDataFailure;
+  }
+  CpuLinearAlgebraAccess::strsm(backend)(kCblasColMajor, kCblasLeft, kCblasLower, kCblasNoTrans,
+                                         kCblasNonUnit, n, n, 1.0F, factor, n, coefficients, n);
+  CpuLinearAlgebraAccess::strsm(backend)(kCblasColMajor, kCblasRight, kCblasLower, kCblasTrans,
+                                         kCblasNonUnit, n, n, 1.0F, factor, n, coefficients, n);
+  for (std::size_t column = 0u; column < dimension; ++column) {
+    for (std::size_t row = column + 1u; row < dimension; ++row) {
+      const float average =
+          0.5F * (coefficients[row + column * dimension] + coefficients[column + row * dimension]);
+      coefficients[row + column * dimension] = average;
+      coefficients[column + row * dimension] = average;
+    }
+  }
+  const LapackInt info = CpuLinearAlgebraAccess::ssyevd(backend)(
+      kCblasColMajor, kEigenvectors, kLower, n, coefficients, n, eigenvalues,
+      workspace.single_lapack_work, data.lapack_work_count, workspace.lapack_integer_work,
+      data.lapack_integer_work_count);
+  if (info < 0) {
+    return NumericalResult::kBackendFailure;
+  }
+  if (info > 0) {
+    return NumericalResult::kDataFailure;
+  }
+  CpuLinearAlgebraAccess::strsm(backend)(kCblasColMajor, kCblasLeft, kCblasLower, kCblasTrans,
+                                         kCblasNonUnit, n, n, 1.0F, factor, n, coefficients, n);
+  return finite_array(coefficients, matrix_count) && finite_array(eigenvalues, dimension)
+             ? NumericalResult::kSuccess
+             : NumericalResult::kDataFailure;
+}
+
 void form_density_column_major(const CpuLinearAlgebraBackend& backend, LapackInt n,
                                const double* coefficients, const double* weights,
                                double* weighted_coefficients, double* density) {
@@ -1265,6 +1441,21 @@ void form_density_column_major(const CpuLinearAlgebraBackend& backend, LapackInt
   }
   CpuLinearAlgebraAccess::dgemm(backend)(kCblasColMajor, kCblasNoTrans, kCblasTrans, n, n, n, 1.0,
                                          weighted_coefficients, n, coefficients, n, 0.0, density,
+                                         n);
+}
+
+void form_density_column_major_single_precision(const CpuLinearAlgebraBackend& backend, LapackInt n,
+                                                const float* coefficients, const float* weights,
+                                                float* weighted_coefficients, float* density) {
+  const std::size_t dimension = static_cast<std::size_t>(n);
+  for (std::size_t orbital = 0u; orbital < dimension; ++orbital) {
+    for (std::size_t row = 0u; row < dimension; ++row) {
+      const std::size_t index = row + orbital * dimension;
+      weighted_coefficients[index] = coefficients[index] * weights[orbital];
+    }
+  }
+  CpuLinearAlgebraAccess::sgemm(backend)(kCblasColMajor, kCblasNoTrans, kCblasTrans, n, n, n, 1.0F,
+                                         weighted_coefficients, n, coefficients, n, 0.0F, density,
                                          n);
 }
 
@@ -1409,6 +1600,166 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
   return NumericalResult::kSuccess;
 }
 
+NumericalResult solve_system_single_precision_unchecked(
+    const EigensolverPlanData& data, std::size_t system,
+    const EigensolverOverlapCache& overlap_cache, std::uint64_t geometry_generation,
+    const double* system_hamiltonians, double temperature, const CpuLinearAlgebraBackend& backend,
+    const EigensolverWorkspace& workspace, const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics) {
+  if (overlap_cache.geometry_generations[system] != geometry_generation ||
+      overlap_cache.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
+    thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
+    return NumericalResult::kDataFailure;
+  }
+
+  const LapackInt n =
+      static_cast<LapackInt>(data.orbital_offsets[system + 1u] - data.orbital_offsets[system]);
+  const std::size_t orbital_count = static_cast<std::size_t>(n);
+  const std::size_t matrix_count = orbital_count * orbital_count;
+  const std::size_t matrix_offset = static_cast<std::size_t>(data.matrix_offsets[system]);
+  const std::int32_t nspin = data.spin_channels[system];
+  for (std::size_t index = 0u; index < matrix_count; ++index) {
+    workspace.single_factor[index] =
+        static_cast<float>(overlap_cache.cholesky_factors[matrix_offset + index]);
+  }
+  if (!finite_array(workspace.single_factor, matrix_count)) {
+    thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
+    return NumericalResult::kDataFailure;
+  }
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::size_t spin_index = static_cast<std::size_t>(spin);
+    const NumericalResult result = solve_one_spin_single_precision(
+        backend, data, n, workspace.single_factor, system_hamiltonians + spin_index * matrix_count,
+        workspace.single_coefficients + spin_index * matrix_count,
+        workspace.single_eigenvalues + spin_index * orbital_count, workspace);
+    if (result != NumericalResult::kSuccess) {
+      if (result == NumericalResult::kDataFailure) {
+        thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
+      }
+      return result;
+    }
+  }
+
+  std::fill_n(workspace.occupations, 2u * orbital_count, 0.0);
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::size_t spin_index = static_cast<std::size_t>(spin);
+    for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+      workspace.eigenvalues[spin_index * orbital_count + orbital] =
+          static_cast<double>(workspace.single_eigenvalues[spin_index * orbital_count + orbital]);
+    }
+  }
+  double chemical_potentials[2]{0.0, 0.0};
+  double spin_entropies[2]{0.0, 0.0};
+  for (std::int32_t spin = 0; spin < 2; ++spin) {
+    const std::size_t spin_index = static_cast<std::size_t>(spin);
+    const std::size_t eigenvalue_spin = nspin == 1 ? 0u : spin_index;
+    const double electron_count =
+        spin == 0 ? data.alpha_electron_counts[system] : data.beta_electron_counts[system];
+    if (!compute_occupations(workspace.eigenvalues + eigenvalue_spin * orbital_count, orbital_count,
+                             electron_count, temperature,
+                             workspace.occupations + spin_index * orbital_count,
+                             chemical_potentials[spin_index], spin_entropies[spin_index])) {
+      thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
+      return NumericalResult::kDataFailure;
+    }
+  }
+
+  double band_energy = 0.0;
+  float* weighted_coefficients = workspace.single_lapack_work;
+  float* weights = workspace.single_lapack_work + matrix_count;
+  if (nspin == 1) {
+    for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+      const double occupation =
+          workspace.occupations[orbital] + workspace.occupations[orbital_count + orbital];
+      band_energy += occupation * workspace.eigenvalues[orbital];
+      weights[orbital] = static_cast<float>(occupation);
+    }
+    form_density_column_major_single_precision(backend, n, workspace.single_coefficients, weights,
+                                               weighted_coefficients, workspace.single_densities);
+    for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+      weights[orbital] = static_cast<float>(static_cast<double>(weights[orbital]) *
+                                            workspace.eigenvalues[orbital]);
+    }
+    form_density_column_major_single_precision(backend, n, workspace.single_coefficients, weights,
+                                               weighted_coefficients,
+                                               workspace.single_energy_weighted_densities);
+  } else {
+    for (std::int32_t spin = 0; spin < 2; ++spin) {
+      const std::size_t spin_index = static_cast<std::size_t>(spin);
+      const std::size_t orbital_offset = spin_index * orbital_count;
+      const std::size_t spin_matrix_offset = spin_index * matrix_count;
+      const double* spin_occupations = workspace.occupations + orbital_offset;
+      const double* spin_eigenvalues = workspace.eigenvalues + orbital_offset;
+      for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+        band_energy += spin_occupations[orbital] * spin_eigenvalues[orbital];
+        weights[orbital] = static_cast<float>(spin_occupations[orbital]);
+      }
+      form_density_column_major_single_precision(
+          backend, n, workspace.single_coefficients + spin_matrix_offset, weights,
+          weighted_coefficients, workspace.single_densities + spin_matrix_offset);
+      for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+        weights[orbital] =
+            static_cast<float>(spin_occupations[orbital] * spin_eigenvalues[orbital]);
+      }
+      form_density_column_major_single_precision(
+          backend, n, workspace.single_coefficients + spin_matrix_offset, weights,
+          weighted_coefficients, workspace.single_energy_weighted_densities + spin_matrix_offset);
+    }
+  }
+
+  const std::size_t spin_matrix_count = static_cast<std::size_t>(nspin) * matrix_count;
+  const double entropy = spin_entropies[0] + spin_entropies[1];
+  const double free_energy = band_energy - temperature * entropy;
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::size_t spin_matrix_offset = static_cast<std::size_t>(spin) * matrix_count;
+    if (!symmetric_finite_column_major(workspace.single_densities + spin_matrix_offset,
+                                       orbital_count) ||
+        !symmetric_finite_column_major(
+            workspace.single_energy_weighted_densities + spin_matrix_offset, orbital_count)) {
+      thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
+      return NumericalResult::kDataFailure;
+    }
+  }
+  if (!finite_array(workspace.single_coefficients, spin_matrix_count) ||
+      !finite_array(workspace.single_densities, spin_matrix_count) ||
+      !finite_array(workspace.single_energy_weighted_densities, spin_matrix_count) ||
+      !std::isfinite(chemical_potentials[0]) || !std::isfinite(chemical_potentials[1]) ||
+      !std::isfinite(entropy) || !std::isfinite(band_energy) || !std::isfinite(free_energy)) {
+    thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
+    return NumericalResult::kDataFailure;
+  }
+
+  const auto& coefficient_field = data.wavefunction_fields[0];
+  const auto& eigenvalue_field = data.wavefunction_fields[1];
+  const auto& occupation_field = data.wavefunction_fields[2];
+  const auto& density_field = data.wavefunction_fields[3];
+  const auto& weighted_density_field = data.wavefunction_fields[4];
+  double* coefficient_output = wavefunction.coefficients + coefficient_field.system_offsets[system];
+  double* density_output = wavefunction.density + density_field.system_offsets[system];
+  double* weighted_density_output =
+      wavefunction.energy_weighted_density + weighted_density_field.system_offsets[system];
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::size_t spin_matrix_offset = static_cast<std::size_t>(spin) * matrix_count;
+    copy_column_to_row(workspace.single_coefficients + spin_matrix_offset, orbital_count,
+                       orbital_count, coefficient_output + spin_matrix_offset);
+    copy_column_to_row(workspace.single_densities + spin_matrix_offset, orbital_count,
+                       orbital_count, density_output + spin_matrix_offset);
+    copy_column_to_row(workspace.single_energy_weighted_densities + spin_matrix_offset,
+                       orbital_count, orbital_count, weighted_density_output + spin_matrix_offset);
+  }
+  std::copy_n(workspace.eigenvalues, static_cast<std::size_t>(nspin) * orbital_count,
+              wavefunction.eigenvalues + eigenvalue_field.system_offsets[system]);
+  std::copy_n(workspace.occupations, 2u * orbital_count,
+              wavefunction.occupations + occupation_field.system_offsets[system]);
+  thermodynamics.chemical_potentials[2u * system] = chemical_potentials[0];
+  thermodynamics.chemical_potentials[2u * system + 1u] = chemical_potentials[1];
+  thermodynamics.entropies[system] = entropy;
+  thermodynamics.band_energies[system] = band_energy;
+  thermodynamics.free_energies[system] = free_energy;
+  thermodynamics.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
+  return NumericalResult::kSuccess;
+}
+
 EigensolverWavefunctionView make_batch_staging_wavefunction(const EigensolverWorkspace& workspace) {
   EigensolverWavefunctionView staging;
   staging.coefficients = workspace.batch_coefficients;
@@ -1490,6 +1841,10 @@ bool CpuLinearAlgebraBackend::ready() const noexcept {
          dsyevd_work_ != nullptr && dtrsm_ != nullptr && dgemm_ != nullptr;
 }
 
+bool CpuLinearAlgebraBackend::single_precision_ready() const noexcept {
+  return ready() && ssyevd_work_ != nullptr && strsm_ != nullptr && sgemm_ != nullptr;
+}
+
 bool CpuLinearAlgebraBackend::production() const noexcept {
   return origin_ == Origin::kMklShimLp64 || origin_ == Origin::kOpenBlasIsolatedLp64 ||
          origin_ == Origin::kBundledOpenBlasLp64 || origin_ == Origin::kOpenBlasLp64;
@@ -1519,9 +1874,44 @@ xtbloom_status_t make_internal_test_lp64_backend(
     CpuLinearAlgebraBackend& backend, std::string& error, BlasThreadCleanup thread_cleanup) {
   CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
       CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work, dpocon_work, dsyevd_work,
-      dtrsm, dgemm, set_num_threads_local, thread_cleanup);
+      dtrsm, dgemm, set_num_threads_local, nullptr, nullptr, nullptr, thread_cleanup);
   if (!created.ready() || !backend_self_test(created)) {
     error = "internal LP64 test backend failed its column-major preflight";
+    return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+  }
+  backend = created;
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t make_internal_test_mixed_precision_backend(
+    LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
+    CblasDtrsm dtrsm, CblasDgemm dgemm, LapackSsyevdWork ssyevd_work, CblasStrsm strsm,
+    CblasSgemm sgemm, BlasSetNumThreadsLocal set_num_threads_local,
+    CpuLinearAlgebraBackend& backend, std::string& error) {
+  CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+      CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work, dpocon_work, dsyevd_work,
+      dtrsm, dgemm, set_num_threads_local, ssyevd_work, strsm, sgemm);
+  if (!created.ready() || !backend_self_test(created) ||
+      !single_precision_backend_self_test(created)) {
+    error = "internal mixed-precision test backend failed its FP64/FP32 column-major preflight";
+    return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+  }
+  backend = created;
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t make_internal_test_optional_mixed_precision_backend(
+    LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
+    CblasDtrsm dtrsm, CblasDgemm dgemm, LapackSsyevdWork ssyevd_work, CblasStrsm strsm,
+    CblasSgemm sgemm, BlasSetNumThreadsLocal set_num_threads_local,
+    CpuLinearAlgebraBackend& backend, std::string& error) {
+  CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+      CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work, dpocon_work, dsyevd_work,
+      dtrsm, dgemm, set_num_threads_local, ssyevd_work, strsm, sgemm);
+  if (!complete_backend_self_test(created)) {
+    error = "internal optional mixed-precision backend failed its FP64 column-major preflight";
     return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
   }
   backend = created;
@@ -1569,7 +1959,7 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
             CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
                 CpuLinearAlgebraBackend::Origin::kBundledOpenBlasLp64, dpotrf_work, dpocon_work,
                 dsyevd_work, dtrsm, dgemm, set_threads);
-            if (backend_self_test(created)) {
+            if (complete_backend_self_test(created)) {
               /* Retain the adapter and exact provider handles for process life. */
               state.backend = created;
               state.status = XTBLOOM_STATUS_SUCCESS;
@@ -1616,12 +2006,34 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
         LapackDsyevdWork dsyevd_work = nullptr;
         CblasDtrsm dtrsm = nullptr;
         CblasDgemm dgemm = nullptr;
+        LapackSsyevdWork ssyevd_work = nullptr;
+        CblasStrsm strsm = nullptr;
+        CblasSgemm sgemm = nullptr;
         BlasSetNumThreadsLocal set_threads = nullptr;
         using OpenBlasGetConfig = const char* (*)();
         OpenBlasGetConfig get_config = nullptr;
         if (load_lapacke_cblas_symbols(handle, true, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
                                        dgemm) &&
             load_symbol(handle, "scipy_openblas_get_config", get_config)) {
+          bool has_single_precision =
+              load_single_precision_symbols(handle, true, ssyevd_work, strsm, sgemm);
+#if defined(_WIN32)
+          if (has_single_precision &&
+              !symbols_belong_to_private_provider(handle, ssyevd_work, strsm, sgemm)) {
+            has_single_precision = false;
+            ssyevd_work = nullptr;
+            strsm = nullptr;
+            sgemm = nullptr;
+          }
+#elif defined(__APPLE__)
+          if (has_single_precision &&
+              !symbols_belong_to_private_provider(provider_path, ssyevd_work, strsm, sgemm)) {
+            has_single_precision = false;
+            ssyevd_work = nullptr;
+            strsm = nullptr;
+            sgemm = nullptr;
+          }
+#endif
           const char* config = get_config();
           constexpr const char* kExpectedConfigPrefix =
               XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX;
@@ -1653,8 +2065,10 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
               set_threads_global(1);
               if (get_threads() == 1) {
                 CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
-                    kOrigin, dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, nullptr);
-                if (backend_self_test(created)) {
+                    kOrigin, dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, nullptr,
+                    has_single_precision ? ssyevd_work : nullptr,
+                    has_single_precision ? strsm : nullptr, has_single_precision ? sgemm : nullptr);
+                if (complete_backend_self_test(created)) {
                   state.backend = created;
                   state.status = XTBLOOM_STATUS_SUCCESS;
                   return state;
@@ -1668,8 +2082,10 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
             }
             if (set_threads != nullptr) {
               CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
-                  kOrigin, dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads);
-              if (backend_self_test(created)) {
+                  kOrigin, dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads,
+                  has_single_precision ? ssyevd_work : nullptr,
+                  has_single_precision ? strsm : nullptr, has_single_precision ? sgemm : nullptr);
+              if (complete_backend_self_test(created)) {
                 state.backend = created;
                 state.status = XTBLOOM_STATUS_SUCCESS;
                 return state;
@@ -1727,19 +2143,25 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
         LapackDsyevdWork dsyevd_work = nullptr;
         CblasDtrsm dtrsm = nullptr;
         CblasDgemm dgemm = nullptr;
+        LapackSsyevdWork ssyevd_work = nullptr;
+        CblasStrsm strsm = nullptr;
+        CblasSgemm sgemm = nullptr;
         BlasSetNumThreadsLocal set_threads = nullptr;
         BlasThreadCleanup thread_cleanup = nullptr;
         if (load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
                                        dgemm) &&
             load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads) &&
             load_symbol(handle, "MKL_Thread_Free_Buffers", thread_cleanup)) {
+          const bool has_single_precision =
+              load_single_precision_symbols(handle, false, ssyevd_work, strsm, sgemm);
           CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
               CpuLinearAlgebraBackend::Origin::kMklShimLp64, dpotrf_work, dpocon_work, dsyevd_work,
-              dtrsm, dgemm, set_threads, thread_cleanup);
-          if (backend_self_test(created)) {
-            /* Retain the provider, initialized bridge, and exact base pthread
-             * handle for process life so dispatch and TSS destructor pointers
-             * remain valid through worker/interpreter teardown. */
+              dtrsm, dgemm, set_threads, has_single_precision ? ssyevd_work : nullptr,
+              has_single_precision ? strsm : nullptr, has_single_precision ? sgemm : nullptr,
+              thread_cleanup);
+          if (complete_backend_self_test(created)) {
+            /* Retain the provider, bridge, and base pthread handle for process
+             * life so dispatch and TSS destructor pointers stay valid. */
             state.backend = created;
             state.status = XTBLOOM_STATUS_SUCCESS;
             return state;
@@ -1784,6 +2206,9 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
       LapackDsyevdWork dsyevd_work = nullptr;
       CblasDtrsm dtrsm = nullptr;
       CblasDgemm dgemm = nullptr;
+      LapackSsyevdWork ssyevd_work = nullptr;
+      CblasStrsm strsm = nullptr;
+      CblasSgemm sgemm = nullptr;
       BlasSetNumThreadsLocal set_threads = nullptr;
       bool scipy_prefix = false;
       if (!load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
@@ -1795,6 +2220,8 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
           continue;
         }
       }
+      const bool has_single_precision =
+          load_single_precision_symbols(handle, scipy_prefix, ssyevd_work, strsm, sgemm);
       /* INTERFACE64 OpenBLAS builds may retain unsuffixed function names, so
        * symbol spelling alone cannot prove the 32-bit LapackInt ABI. Reject
        * providers that cannot identify themselves or report USE64BITINT. */
@@ -1818,10 +2245,11 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
         static_cast<void>(dlclose(handle));
         continue;
       }
-      CpuLinearAlgebraBackend created =
-          CpuLinearAlgebraAccess::make(CpuLinearAlgebraBackend::Origin::kOpenBlasLp64, dpotrf_work,
-                                       dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads);
-      if (!backend_self_test(created)) {
+      CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+          CpuLinearAlgebraBackend::Origin::kOpenBlasLp64, dpotrf_work, dpocon_work, dsyevd_work,
+          dtrsm, dgemm, set_threads, has_single_precision ? ssyevd_work : nullptr,
+          has_single_precision ? strsm : nullptr, has_single_precision ? sgemm : nullptr);
+      if (!complete_backend_self_test(created)) {
         static_cast<void>(dlclose(handle));
         continue;
       }
@@ -1877,6 +2305,9 @@ std::int64_t EigensolverPlan::maximum_orbitals() const noexcept {
 double EigensolverPlan::minimum_overlap_rcond() const noexcept {
   return data_ == nullptr ? 0.0 : data_->minimum_overlap_rcond;
 }
+bool EigensolverPlan::single_precision_enabled() const noexcept {
+  return data_ != nullptr && data_->single_precision_enabled;
+}
 std::size_t EigensolverPlan::overlap_cache_size_bytes() const noexcept {
   return data_ == nullptr ? 0u : data_->overlap_cache_size_bytes;
 }
@@ -1923,17 +2354,18 @@ bool EigensolverPlan::overlaps_storage(const void* data, std::size_t size_bytes)
 const EigensolverPlanData* EigensolverPlan::identity() const noexcept { return data_.get(); }
 
 xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
-                                       std::string& error, double minimum_overlap_rcond) {
+                                       std::string& error, double minimum_overlap_rcond,
+                                       bool enable_single_precision) {
   /* The projection overload below performs the complete layout validation
    * needed by eigensolution. Keeping this wrapper free of a GFN2 wavefunction
    * symbol lets the shared eigensolver link into a GFN1-only internal target. */
   return make_eigensolver_plan(make_eigensolver_wavefunction_layout(layout), plan, error,
-                               minimum_overlap_rcond);
+                               minimum_overlap_rcond, enable_single_precision);
 }
 
 xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layout,
                                        EigensolverPlan& plan, std::string& error,
-                                       double minimum_overlap_rcond) {
+                                       double minimum_overlap_rcond, bool enable_single_precision) {
   if (!std::isfinite(minimum_overlap_rcond) || minimum_overlap_rcond <= 0.0 ||
       minimum_overlap_rcond >= 1.0) {
     error = "minimum overlap reciprocal condition must be finite and in (0, 1)";
@@ -1989,6 +2421,7 @@ xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layo
     EigensolverPlanData created;
     created.batch_size = layout.batch_size;
     created.minimum_overlap_rcond = minimum_overlap_rcond;
+    created.single_precision_enabled = enable_single_precision;
     created.orbital_offsets.assign(layout.orbital_offsets,
                                    layout.orbital_offsets + layout.orbital_offset_count);
     created.spin_channels.assign(layout.spin_channels,
@@ -2105,6 +2538,25 @@ xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layo
           !append_segment(bytes, cursor, *worker_double_offsets[field])) {
         error = "eigensolver worker floating-point scratch packing overflows size_t";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+    if (enable_single_precision) {
+      const std::array<std::size_t, 6> worker_single_counts{
+          {two_matrices, two_matrices, two_matrices, two_orbitals, maximum_matrix,
+           static_cast<std::size_t>(created.lapack_work_count)}};
+      std::array<std::size_t*, 6> worker_single_offsets{
+          {&created.single_coefficient_scratch_offset_bytes,
+           &created.single_density_scratch_offset_bytes,
+           &created.single_energy_weighted_density_scratch_offset_bytes,
+           &created.single_eigenvalue_scratch_offset_bytes,
+           &created.single_factor_scratch_offset_bytes, &created.single_lapack_work_offset_bytes}};
+      for (std::size_t field = 0u; field < worker_single_counts.size(); ++field) {
+        std::size_t bytes = 0u;
+        if (!checked_multiply(worker_single_counts[field], sizeof(float), bytes) ||
+            !append_segment(bytes, cursor, *worker_single_offsets[field])) {
+          error = "eigensolver worker FP32 scratch packing overflows size_t";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
       }
     }
     std::size_t integer_bytes = 0u;
@@ -2245,6 +2697,20 @@ xtbloom_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* w
   created.lapack_work = offset_pointer<double>(workspace, data.lapack_work_offset_bytes);
   created.lapack_integer_work =
       offset_pointer<LapackInt>(workspace, data.lapack_integer_work_offset_bytes);
+  if (data.single_precision_enabled) {
+    created.single_coefficients =
+        offset_pointer<float>(workspace, data.single_coefficient_scratch_offset_bytes);
+    created.single_densities =
+        offset_pointer<float>(workspace, data.single_density_scratch_offset_bytes);
+    created.single_energy_weighted_densities =
+        offset_pointer<float>(workspace, data.single_energy_weighted_density_scratch_offset_bytes);
+    created.single_eigenvalues =
+        offset_pointer<float>(workspace, data.single_eigenvalue_scratch_offset_bytes);
+    created.single_factor =
+        offset_pointer<float>(workspace, data.single_factor_scratch_offset_bytes);
+    created.single_lapack_work =
+        offset_pointer<float>(workspace, data.single_lapack_work_offset_bytes);
+  }
   created.factor_staging = offset_pointer<double>(workspace, data.factor_staging_offset_bytes);
   created.factor_generation_staging =
       offset_pointer<std::uint64_t>(workspace, data.factor_generation_staging_offset_bytes);
@@ -2312,6 +2778,20 @@ xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, 
   created.lapack_work = offset_pointer<double>(workspace, data.lapack_work_offset_bytes);
   created.lapack_integer_work =
       offset_pointer<LapackInt>(workspace, data.lapack_integer_work_offset_bytes);
+  if (data.single_precision_enabled) {
+    created.single_coefficients =
+        offset_pointer<float>(workspace, data.single_coefficient_scratch_offset_bytes);
+    created.single_densities =
+        offset_pointer<float>(workspace, data.single_density_scratch_offset_bytes);
+    created.single_energy_weighted_densities =
+        offset_pointer<float>(workspace, data.single_energy_weighted_density_scratch_offset_bytes);
+    created.single_eigenvalues =
+        offset_pointer<float>(workspace, data.single_eigenvalue_scratch_offset_bytes);
+    created.single_factor =
+        offset_pointer<float>(workspace, data.single_factor_scratch_offset_bytes);
+    created.single_lapack_work =
+        offset_pointer<float>(workspace, data.single_lapack_work_offset_bytes);
+  }
   created.plan_identity = &data;
   view = created;
   error.clear();
@@ -2666,6 +3146,107 @@ xtbloom_status_t solve_eigensystem_cpu(
       backend, workspace, wavefunction, thermodynamics);
   if (result == NumericalResult::kBackendFailure) {
     error = "LP64 LAPACK rejected an internal one-system eigensolver argument";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t solve_eigensystem_cpu_single_precision(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
+    std::string& error) {
+  const EigensolverWavefunctionView view = make_eigensolver_wavefunction_view(wavefunction);
+  return solve_eigensystem_cpu_single_precision(plan, system, overlap_cache, geometry_generation,
+                                                system_hamiltonians, temperature, backend,
+                                                workspace, view, thermodynamics, error);
+}
+
+xtbloom_status_t solve_eigensystem_cpu_single_precision(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error) {
+  std::array<AddressRange, 5> result_ranges{};
+  xtbloom_status_t status =
+      validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,
+                              false, result_ranges, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  if (!backend.single_precision_ready()) {
+    error = "adaptive CPU eigensolve requires verified LP64-provider FP32 LAPACKE/CBLAS symbols";
+    return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+  }
+  if (!plan.identity()->single_precision_enabled) {
+    error = "FP32 eigensolve requires a plan with explicitly enabled single-precision workspace";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const EigensolverPlanData& data = *plan.identity();
+  if (system < 0 || system >= data.batch_size || geometry_generation == 0u ||
+      !is_aligned(system_hamiltonians, alignof(double)) || !std::isfinite(temperature) ||
+      temperature < 0.0) {
+    error = "one-system FP32 eigensolver inputs are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t system_index = static_cast<std::size_t>(system);
+  const std::size_t n = static_cast<std::size_t>(data.orbital_offsets[system_index + 1u] -
+                                                 data.orbital_offsets[system_index]);
+  const std::size_t matrix_count = n * n;
+  const std::size_t hamiltonian_count =
+      static_cast<std::size_t>(data.spin_channels[system_index]) * matrix_count;
+  std::array<AddressRange, 4> principal{};
+  std::array<AddressRange, 7> controls{};
+  if (!make_range(system_hamiltonians, hamiltonian_count * sizeof(double), principal[0]) ||
+      !make_range(overlap_cache.workspace_base, data.overlap_cache_size_bytes, principal[1]) ||
+      !make_range(workspace.workspace_base, data.worker_workspace_size_bytes, principal[2]) ||
+      !make_range(wavefunction.workspace_base, data.wavefunction_workspace_size_bytes,
+                  principal[3]) ||
+      !make_range(&plan, sizeof(plan), controls[0]) ||
+      !make_range(&overlap_cache, sizeof(overlap_cache), controls[1]) ||
+      !make_range(&backend, sizeof(backend), controls[2]) ||
+      !make_range(&workspace, sizeof(workspace), controls[3]) ||
+      !make_range(&wavefunction, sizeof(wavefunction), controls[4]) ||
+      !make_range(&thermodynamics, sizeof(thermodynamics), controls[5]) ||
+      !make_range(&error, sizeof(error), controls[6]) || !pairwise_disjoint(principal) ||
+      !disjoint_from_control(plan, principal, controls)) {
+    error = "one-system FP32 eigensolver arrays and control storage must not overlap";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  for (const AddressRange& result : result_ranges) {
+    if (overlaps_plan_storage(plan, result)) {
+      error = "one-system FP32 scalar outputs must not overlap immutable plan storage";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (const AddressRange& range : principal) {
+      if (ranges_overlap(result, range)) {
+        error = "one-system FP32 scalar outputs must not overlap numerical arrays";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+    for (const AddressRange& control : controls) {
+      if (ranges_overlap(result, control)) {
+        error = "one-system FP32 scalar outputs must not overlap descriptors";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+  }
+  for (std::int32_t spin = 0; spin < data.spin_channels[system_index]; ++spin) {
+    if (!symmetric_finite_row_major(
+            system_hamiltonians + static_cast<std::size_t>(spin) * matrix_count, n)) {
+      error = "one-system FP32 Hamiltonians must be finite and symmetric";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  ScopedSequentialBlas sequential_blas(backend);
+  const NumericalResult result = solve_system_single_precision_unchecked(
+      data, system_index, overlap_cache, geometry_generation, system_hamiltonians, temperature,
+      backend, workspace, wavefunction, thermodynamics);
+  if (result == NumericalResult::kBackendFailure) {
+    error = "LP64-provider FP32 LAPACK rejected an internal one-system eigensolver argument";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   error.clear();

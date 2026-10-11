@@ -28,6 +28,10 @@ using LapackDsyevdWork = LapackInt (*)(LapackInt matrix_layout, char job_vectors
                                        LapackInt n, double* matrix, LapackInt leading_dimension,
                                        double* eigenvalues, double* work, LapackInt work_count,
                                        LapackInt* integer_work, LapackInt integer_work_count);
+using LapackSsyevdWork = LapackInt (*)(LapackInt matrix_layout, char job_vectors, char uplo,
+                                       LapackInt n, float* matrix, LapackInt leading_dimension,
+                                       float* eigenvalues, float* work, LapackInt work_count,
+                                       LapackInt* integer_work, LapackInt integer_work_count);
 using CblasDtrsm = void (*)(int layout, int side, int triangle, int transpose, int diagonal,
                             LapackInt rows, LapackInt columns, double alpha,
                             const double* triangular_matrix, LapackInt leading_triangular,
@@ -36,6 +40,14 @@ using CblasDgemm = void (*)(int layout, int transpose_left, int transpose_right,
                             LapackInt columns, LapackInt inner, double alpha, const double* left,
                             LapackInt leading_left, const double* right, LapackInt leading_right,
                             double beta, double* result, LapackInt leading_result);
+using CblasStrsm = void (*)(int layout, int side, int triangle, int transpose, int diagonal,
+                            LapackInt rows, LapackInt columns, float alpha,
+                            const float* triangular_matrix, LapackInt leading_triangular,
+                            float* right_hand_side, LapackInt leading_rhs);
+using CblasSgemm = void (*)(int layout, int transpose_left, int transpose_right, LapackInt rows,
+                            LapackInt columns, LapackInt inner, float alpha, const float* left,
+                            LapackInt leading_left, const float* right, LapackInt leading_right,
+                            float beta, float* result, LapackInt leading_result);
 using BlasSetNumThreadsLocal = int (*)(int threads);
 using BlasThreadCleanup = void (*)();
 
@@ -81,6 +93,8 @@ class CpuLinearAlgebraBackend {
   CpuLinearAlgebraBackend() noexcept = default;
 
   [[nodiscard]] bool ready() const noexcept;
+  /* True when the same verified provider also exposes the FP32 SCC cohort. */
+  [[nodiscard]] bool single_precision_ready() const noexcept;
   /* True for any verified lazily-loaded production backend (MKL or OpenBLAS). */
   [[nodiscard]] bool production() const noexcept;
   /* True only when the loaded production backend is the isolated MKL shim. */
@@ -114,6 +128,9 @@ class CpuLinearAlgebraBackend {
   LapackDsyevdWork dsyevd_work_ = nullptr;
   CblasDtrsm dtrsm_ = nullptr;
   CblasDgemm dgemm_ = nullptr;
+  LapackSsyevdWork ssyevd_work_ = nullptr;
+  CblasStrsm strsm_ = nullptr;
+  CblasSgemm sgemm_ = nullptr;
   BlasSetNumThreadsLocal set_num_threads_local_ = nullptr;
   BlasThreadCleanup thread_cleanup_ = nullptr;
 
@@ -123,6 +140,16 @@ class CpuLinearAlgebraBackend {
       LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
       CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
       CpuLinearAlgebraBackend& backend, std::string& error, BlasThreadCleanup thread_cleanup);
+  friend xtbloom_status_t make_internal_test_mixed_precision_backend(
+      LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
+      CblasDtrsm dtrsm, CblasDgemm dgemm, LapackSsyevdWork ssyevd_work, CblasStrsm strsm,
+      CblasSgemm sgemm, BlasSetNumThreadsLocal set_num_threads_local,
+      CpuLinearAlgebraBackend& backend, std::string& error);
+  friend xtbloom_status_t make_internal_test_optional_mixed_precision_backend(
+      LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
+      CblasDtrsm dtrsm, CblasDgemm dgemm, LapackSsyevdWork ssyevd_work, CblasStrsm strsm,
+      CblasSgemm sgemm, BlasSetNumThreadsLocal set_num_threads_local,
+      CpuLinearAlgebraBackend& backend, std::string& error);
   friend struct CpuLinearAlgebraAccess;
 };
 
@@ -134,6 +161,21 @@ xtbloom_status_t make_internal_test_lp64_backend(
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
     CpuLinearAlgebraBackend& backend, std::string& error,
     BlasThreadCleanup thread_cleanup = nullptr);
+
+/* Test-only injection for the complete FP64+FP32 provider cohort. */
+xtbloom_status_t make_internal_test_mixed_precision_backend(
+    LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
+    CblasDtrsm dtrsm, CblasDgemm dgemm, LapackSsyevdWork ssyevd_work, CblasStrsm strsm,
+    CblasSgemm sgemm, BlasSetNumThreadsLocal set_num_threads_local,
+    CpuLinearAlgebraBackend& backend, std::string& error);
+
+/* Test-only factory for the production rule that optional broken FP32 symbols
+ * are disabled without making the verified FP64 cohort unavailable. */
+xtbloom_status_t make_internal_test_optional_mixed_precision_backend(
+    LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
+    CblasDtrsm dtrsm, CblasDgemm dgemm, LapackSsyevdWork ssyevd_work, CblasStrsm strsm,
+    CblasSgemm sgemm, BlasSetNumThreadsLocal set_num_threads_local,
+    CpuLinearAlgebraBackend& backend, std::string& error);
 
 struct EigensolverPlanData;
 
@@ -191,6 +233,7 @@ class EigensolverPlan {
   [[nodiscard]] std::int64_t total_matrix_elements() const noexcept;
   [[nodiscard]] std::int64_t maximum_orbitals() const noexcept;
   [[nodiscard]] double minimum_overlap_rcond() const noexcept;
+  [[nodiscard]] bool single_precision_enabled() const noexcept;
   [[nodiscard]] std::size_t overlap_cache_size_bytes() const noexcept;
   [[nodiscard]] std::size_t worker_workspace_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
@@ -210,10 +253,12 @@ class EigensolverPlan {
 
   friend xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout,
                                                 EigensolverPlan& plan, std::string& error,
-                                                double minimum_overlap_rcond);
+                                                double minimum_overlap_rcond,
+                                                bool enable_single_precision);
   friend xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layout,
                                                 EigensolverPlan& plan, std::string& error,
-                                                double minimum_overlap_rcond);
+                                                double minimum_overlap_rcond,
+                                                bool enable_single_precision);
 };
 
 struct EigensolverOverlapCache {
@@ -244,6 +289,15 @@ struct EigensolverWorkspace {
   double* occupations = nullptr;
   double* lapack_work = nullptr;
   LapackInt* lapack_integer_work = nullptr;
+
+  /* Present only for explicitly opted-in plans. Default FP64, GFN1, and CUDA
+   * plans retain their established scratch sizes and bind these as null. */
+  float* single_coefficients = nullptr;
+  float* single_densities = nullptr;
+  float* single_energy_weighted_densities = nullptr;
+  float* single_eigenvalues = nullptr;
+  float* single_factor = nullptr;
+  float* single_lapack_work = nullptr;
 
   double* factor_staging = nullptr;
   std::uint64_t* factor_generation_staging = nullptr;
@@ -280,11 +334,14 @@ struct EigensolverThermodynamicsView {
   std::size_t free_energy_capacity = 0u;
 };
 
+/* FP32 workspace is opt-in at plan creation, never allocated during an iteration. */
 xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
-                                       std::string& error, double minimum_overlap_rcond = 1.0e-12);
+                                       std::string& error, double minimum_overlap_rcond = 1.0e-12,
+                                       bool enable_single_precision = false);
 xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layout,
                                        EigensolverPlan& plan, std::string& error,
-                                       double minimum_overlap_rcond = 1.0e-12);
+                                       double minimum_overlap_rcond = 1.0e-12,
+                                       bool enable_single_precision = false);
 
 xtbloom_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void* workspace,
                                                 std::size_t workspace_size,
@@ -349,6 +406,27 @@ xtbloom_status_t solve_eigensystem_cpu(
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error);
 xtbloom_status_t solve_eigensystem_cpu(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error);
+
+/*
+ * Allocation-free FP32 generalized eigensolve and density construction for
+ * one system. Overlap factorization/conditioning, occupations, energy traces,
+ * and all published wavefunction fields remain binary64. A numerical FP32
+ * failure is data-level so the SCC driver may retry that lane in FP64 before
+ * publishing a terminal status.
+ */
+xtbloom_status_t solve_eigensystem_cpu_single_precision(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
+    std::string& error);
+
+xtbloom_status_t solve_eigensystem_cpu_single_precision(
     const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
     std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,

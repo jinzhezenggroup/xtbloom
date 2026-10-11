@@ -58,6 +58,9 @@ repos:
         entry: '(?i)gpu[_-]?x[t]b'
         language: pygrep
         types: [text]
+        # These exact compact benchmark CSVs retain the source worktree path
+        # as immutable provenance. Their bytes are covered by SHA256SUMS.
+        exclude: ^benchmarks/evidence/issue-340/2026-08-11-node3/(?:adaptive|fp64)-(?:fresh|warm)-b(?:1|32)\.csv$
       - id: forbid-retired-project-name-path
         name: Forbid the retired project name in paths
         entry: Retired project name found in a tracked path
