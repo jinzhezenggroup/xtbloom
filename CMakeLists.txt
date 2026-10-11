@@ -5154,6 +5154,10 @@ if(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE)
     target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
       xtbloom_gfn2_mulliken_avx2_objects)
   endif()
+  if(TARGET xtbloom_gfn2_mulliken_avx512_objects)
+    target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+      xtbloom_gfn2_mulliken_avx512_objects)
+  endif()
 
   # Register the focused executables only in test-enabled source builds. They
   # are never installed, but exercising them in coverage builds validates the
