@@ -2199,6 +2199,53 @@ if(XTBLOOM_BUILD_TESTS)
       "MALLOC_CHECK_=3"
       "GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
     )
+
+    # The diagnostic has its own public API/runtime closure. Its hidden context
+    # resolver never interprets a handle allocated by the production DSO, and
+    # the snapshot macro never reaches libxtbloom or the shared model objects.
+    add_executable(xtbloom_cpu_scc_snapshot_test
+      tests/cpu_scc_snapshot_test.cpp
+      src/api.cpp
+      src/runtime/backend.cpp
+      src/runtime/gfn2_cpu_execution.cpp
+      src/runtime/gfn2_plan.cpp
+      src/runtime/model_plan.cpp
+      src/runtime/model_registry.cpp
+      src/runtime/request.cpp
+      src/runtime/result_owner.cpp
+      src/runtime/validation.cpp
+      ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
+      ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
+      $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
+    )
+    target_include_directories(xtbloom_cpu_scc_snapshot_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${XTBLOOM_GENERATED_INCLUDE_DIR}
+    )
+    target_compile_definitions(xtbloom_cpu_scc_snapshot_test PRIVATE
+      XTBLOOM_BUILDING_LIBRARY
+      XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING=1
+    )
+    target_compile_features(xtbloom_cpu_scc_snapshot_test PRIVATE cxx_std_17)
+    target_link_libraries(xtbloom_cpu_scc_snapshot_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME xtbloom.cpu.scc_snapshot COMMAND xtbloom_cpu_scc_snapshot_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_cpu_scc_snapshot_test xtbloom.cpu.scc_snapshot
+    )
+    if(BUILD_SHARED_LIBS)
+      add_test(NAME xtbloom.cpu.scc_snapshot_json
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_scc_snapshot_json_test.py
+          --executable $<TARGET_FILE:xtbloom_cpu_scc_snapshot_test>
+          --library $<TARGET_FILE:xtbloom>
+      )
+      xtbloom_configure_linalg_runtime_test(
+        xtbloom_cpu_scc_snapshot_test xtbloom.cpu.scc_snapshot_json
+      )
+    endif()
   endif()
 
   if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
@@ -3674,6 +3721,19 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.scc_iteration_deterministic_debug
       COMMAND xtbloom_cuda_scc_iteration_production_test --deterministic-debug
     )
+    if(XTBLOOM_CPU_LINALG_RUNTIME)
+      add_test(NAME xtbloom.cuda.scc_spin_frozen_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-frozen-replay
+      )
+      add_test(NAME xtbloom.cuda.scc_spin_two_origin_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-two-origin-replay
+      )
+      set_tests_properties(xtbloom.cuda.scc_spin_frozen_replay
+        xtbloom.cuda.scc_spin_two_origin_replay PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1;MKL_NUM_THREADS=1"
+        SKIP_RETURN_CODE 77
+      )
+    endif()
 
     # Focused #130 benchmark. It reuses the production SCC fixture but runs a
     # one-remaining-iteration state so the conditional WHILE body count and
