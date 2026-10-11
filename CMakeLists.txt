@@ -200,6 +200,8 @@ else()
   message(STATUS "xtbloom PyTorch extension disabled: XTBLOOM_ENABLE_TORCH_EXT=OFF")
 endif()
 option(XTBLOOM_BUILD_TESTS "Build xtbloom tests" ${PROJECT_IS_TOP_LEVEL})
+option(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE
+  "Build the isolated external energy SCC callback smoke test (research only)" OFF)
 option(XTBLOOM_BUILD_WEB_DEMO
   "Build the GitHub Pages WebAssembly demo assets (requires the Emscripten toolchain)"
   OFF)
@@ -940,6 +942,22 @@ set_target_properties(xtbloom_gfn2_mulliken_baseline_objects PROPERTIES
   VISIBILITY_INLINES_HIDDEN YES
 )
 
+add_library(xtbloom_integrals_baseline_objects OBJECT
+  src/model/common/integrals_kernels_baseline.cpp
+)
+target_compile_features(xtbloom_integrals_baseline_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_integrals_baseline_objects PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_integrals_baseline_objects PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  INTERPROCEDURAL_OPTIMIZATION OFF
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+
 # A single shared library carries the baseline kernels on every architecture.
 # Add the AVX2/FMA object only for a single x86-64 target whose compiler accepts
 # both flags; universal Apple builds, ARM, and WebAssembly remain baseline-only.
@@ -1004,6 +1022,7 @@ if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
       target_compile_options(xtbloom_cpu_dispatch_objects PRIVATE /GL-)
       target_compile_options(xtbloom_gfn2_mulliken_baseline_objects PRIVATE
         /GL-)
+      target_compile_options(xtbloom_integrals_baseline_objects PRIVATE /GL-)
     endif()
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
     check_cxx_compiler_flag("-mavx2" XTBLOOM_CXX_HAS_MAVX2)
@@ -1018,6 +1037,8 @@ if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
         -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
       target_compile_options(xtbloom_gfn2_mulliken_baseline_objects PRIVATE
         -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
+      target_compile_options(xtbloom_integrals_baseline_objects PRIVATE
+        -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
     endif()
   endif()
 endif()
@@ -1029,6 +1050,12 @@ set(XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
 set(XTBLOOM_GFN2_DISPATCH_OBJECTS
   $<TARGET_OBJECTS:xtbloom_cpu_dispatch_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_baseline_objects>
+)
+set(XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS
+  xtbloom_integrals_baseline_objects
+)
+set(XTBLOOM_COMMON_DISPATCH_OBJECTS
+  $<TARGET_OBJECTS:xtbloom_integrals_baseline_objects>
 )
 if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
   add_library(xtbloom_gfn2_mulliken_avx2_objects OBJECT
@@ -1051,20 +1078,45 @@ if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
     POSITION_INDEPENDENT_CODE ON
     VISIBILITY_INLINES_HIDDEN YES
   )
+  add_library(xtbloom_integrals_avx2_objects OBJECT
+    src/model/common/integrals_kernels_avx2.cpp
+  )
+  target_compile_features(xtbloom_integrals_avx2_objects PUBLIC cxx_std_17)
+  target_include_directories(xtbloom_integrals_avx2_objects PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_options(xtbloom_integrals_avx2_objects PRIVATE
+    ${XTBLOOM_AVX2_FMA_COMPILE_OPTIONS})
+  if(MSVC)
+    target_compile_options(xtbloom_integrals_avx2_objects PRIVATE /GL-)
+  endif()
+  set_target_properties(xtbloom_integrals_avx2_objects PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    INTERPROCEDURAL_OPTIMIZATION OFF
+    POSITION_INDEPENDENT_CODE ON
+    VISIBILITY_INLINES_HIDDEN YES
+  )
   target_compile_definitions(xtbloom_cpu_dispatch_objects PRIVATE
     XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
   list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
     xtbloom_gfn2_mulliken_avx2_objects)
   list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECTS
     $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_avx2_objects>)
-  message(STATUS "xtbloom CPU ISA dispatch: baseline + AVX2/FMA Mulliken kernels")
+  list(APPEND XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS
+    xtbloom_integrals_avx2_objects)
+  list(APPEND XTBLOOM_COMMON_DISPATCH_OBJECTS
+    $<TARGET_OBJECTS:xtbloom_integrals_avx2_objects>)
+  message(STATUS "xtbloom CPU ISA dispatch: baseline + AVX2/FMA Mulliken and integral kernels")
 else()
-  message(STATUS "xtbloom CPU ISA dispatch: baseline Mulliken kernels only")
+  message(STATUS "xtbloom CPU ISA dispatch: baseline Mulliken and integral kernels only")
 endif()
 
 add_library(xtbloom_model_common_cpu_objects OBJECT
   src/model/common/sto.cpp
   src/model/common/integrals.cpp
+  src/model/common/projection_basis.cpp
   src/model/common/scc_mixer.cpp
   # The generalized eigensolver and fixed periodic charge-response algebra
   # are model-neutral even though their established internal namespace is
@@ -1087,6 +1139,10 @@ set_target_properties(xtbloom_model_common_cpu_objects PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
+if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
+endif()
 if(CMAKE_DL_LIBS)
   target_link_libraries(xtbloom_model_common_cpu_objects PUBLIC ${CMAKE_DL_LIBS})
 endif()
@@ -1136,6 +1192,7 @@ endif()
 add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/backends/common/gfn2_plan_schema.cpp
   src/model/gfn2/aes2.cpp
+  src/model/gfn2/alpb.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
   src/model/gfn2/d4.cpp
@@ -1146,6 +1203,10 @@ add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/mulliken_kernels.cpp
+  src/model/gfn2/periodic_ewald.cpp
+  src/model/gfn2/periodic_integrals.cpp
+  src/model/gfn2/periodic_multipole.cpp
+  src/model/gfn2/periodic_topology.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
@@ -1207,18 +1268,47 @@ set_target_properties(xtbloom_gfn1_cpu_objects PROPERTIES
 # receives only its own terms plus the small shared-model target.
 add_library(xtbloom_gfn2_cpu INTERFACE)
 target_link_libraries(xtbloom_gfn2_cpu INTERFACE
+  ${XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS}
   ${XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS}
   xtbloom_model_common_cpu_objects
   xtbloom_gfn2_cpu_objects
+  ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
   ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
 )
 
+# CUDA's native-periodic correctness bridge reuses the already validated host
+# GFN2 executor while the device Ewald/multipole kernels are still being
+# integrated.  White-box CUDA executables link the backend object files
+# directly, so the bridge's hidden CPU symbols cannot be resolved from the
+# shared xtbloom library.  Keep a private archive for those consumers instead
+# of exporting a second public implementation or compiling the same source
+# into the CUDA backend object target (which would duplicate symbols in the
+# final shared library).
+add_library(xtbloom_gfn2_cpu_runtime STATIC
+  src/runtime/gfn2_cpu_execution.cpp
+)
+target_compile_features(xtbloom_gfn2_cpu_runtime PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn2_cpu_runtime PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${XTBLOOM_GENERATED_INCLUDE_DIR}
+)
+set_target_properties(xtbloom_gfn2_cpu_runtime PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+target_link_libraries(xtbloom_gfn2_cpu_runtime PUBLIC xtbloom_gfn2_cpu)
+
 add_library(xtbloom_gfn1_cpu INTERFACE)
 target_link_libraries(xtbloom_gfn1_cpu INTERFACE
+  ${XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS}
   xtbloom_model_common_cpu_objects
   xtbloom_gfn1_cpu_objects
+  ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
 )
@@ -1233,6 +1323,7 @@ add_library(xtbloom
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
+  ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
   ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
@@ -1625,6 +1716,7 @@ if(XTBLOOM_HAS_CUDA)
 
   add_library(xtbloom_cuda_backend OBJECT
     ${XTBLOOM_CUDA_DYNLOADER_SOURCES}
+    src/backends/cuda/external_energy_device_evaluator.cu
     src/backends/cuda/cuda_runtime.cu
     src/runtime/cuda_descriptor_validation.cu
     src/runtime/gfn2_cuda_topology_staging.cu
@@ -1652,11 +1744,16 @@ if(XTBLOOM_HAS_CUDA)
     src/backends/cuda/gfn2_inference_publication.cu
     src/backends/cuda/gfn2_integrals.cu
     src/backends/cuda/gfn2_mulliken.cu
+    src/backends/cuda/gfn2_native_periodic_d4.cu
+    src/backends/cuda/gfn2_native_periodic_ewald.cu
+    src/backends/cuda/gfn2_native_periodic_multipole.cu
+    src/backends/cuda/gfn2_native_periodic_short_range.cu
     src/backends/cuda/gfn2_occupations.cu
     src/backends/cuda/gfn2_pairlist.cu
     src/backends/cuda/gfn2_parameters.cu
     src/backends/cuda/gfn2_plan_schema.cu
     src/backends/cuda/gfn2_periodic_embedding.cu
+    src/backends/cuda/periodic_topology.cu
     src/backends/cuda/gfn2_post_scc_potential.cu
     src/backends/cuda/gfn2_repulsion.cu
     src/backends/cuda/gfn2_scc.cu
@@ -1699,6 +1796,10 @@ if(XTBLOOM_HAS_CUDA)
     # backend objects directly rather than resolving hidden symbols through
     # libxtbloom.
     xtbloom_gfn1_cpu
+    # Native XYZ periodic GFN2 currently uses the CPU periodic evaluator as a
+    # correctness bridge. The private archive supplies its hidden executor
+    # symbols to white-box CUDA binaries that consume this object target.
+    xtbloom_gfn2_cpu_runtime
   )
   # The CUDA runtime/math/driver shared libraries are deliberately NOT linked.
   # The priority-101 bootstrap pre-resolves the complete shim cohort before
@@ -1852,9 +1953,30 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
-      benchmarks.test_run benchmarks.test_natoms_scaling
+      benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_ao_grouping
+      benchmarks.test_convergence_grouping benchmarks.test_convergence_runner
+      benchmarks.test_frozen_inputs
+      benchmarks.test_build_receipt benchmarks.test_record_build
+      benchmarks.test_build_receipt_runner
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+    RESULT_VARIABLE xtbloom_benchmark_numpy_status
+    OUTPUT_QUIET
+    ERROR_QUIET
+  )
+  if(xtbloom_benchmark_numpy_status EQUAL 0)
+    add_test(
+      NAME xtbloom.benchmarks.omol25_inputs
+      COMMAND ${Python3_EXECUTABLE} -m unittest -v benchmarks.test_omol25_inputs
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+  else()
+    message(STATUS
+      "xtbloom.benchmarks.omol25_inputs NOT REGISTERED: selected Python lacks NumPy; locked project nox tests still require it"
+    )
+  endif()
   add_test(
     NAME xtbloom.cmake.cuda_toolkit_metadata
     COMMAND ${CMAKE_COMMAND} -P
@@ -1864,6 +1986,14 @@ if(XTBLOOM_BUILD_TESTS)
     NAME xtbloom.cmake.version_resolution
     COMMAND ${CMAKE_COMMAND} -P
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/version_resolution_test.cmake
+  )
+  # This source-only guard must run in ordinary CPU PR configurations as well
+  # as CUDA builds; hosted wheel jobs compile CUDA with tests disabled.
+  add_test(
+    NAME xtbloom.cuda.kernel_signature_audit
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_cuda_kernel_signatures.py
+            --source-root ${CMAKE_CURRENT_SOURCE_DIR}
   )
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -2061,6 +2191,7 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/request.cpp
       src/runtime/result_owner.cpp
       src/runtime/validation.cpp
+      ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
       ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
       $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
       $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
@@ -2089,6 +2220,53 @@ if(XTBLOOM_BUILD_TESTS)
       "MALLOC_CHECK_=3"
       "GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
     )
+
+    # The diagnostic has its own public API/runtime closure. Its hidden context
+    # resolver never interprets a handle allocated by the production DSO, and
+    # the snapshot macro never reaches libxtbloom or the shared model objects.
+    add_executable(xtbloom_cpu_scc_snapshot_test
+      tests/cpu_scc_snapshot_test.cpp
+      src/api.cpp
+      src/runtime/backend.cpp
+      src/runtime/gfn2_cpu_execution.cpp
+      src/runtime/gfn2_plan.cpp
+      src/runtime/model_plan.cpp
+      src/runtime/model_registry.cpp
+      src/runtime/request.cpp
+      src/runtime/result_owner.cpp
+      src/runtime/validation.cpp
+      ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
+      ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
+      $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
+    )
+    target_include_directories(xtbloom_cpu_scc_snapshot_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${XTBLOOM_GENERATED_INCLUDE_DIR}
+    )
+    target_compile_definitions(xtbloom_cpu_scc_snapshot_test PRIVATE
+      XTBLOOM_BUILDING_LIBRARY
+      XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING=1
+    )
+    target_compile_features(xtbloom_cpu_scc_snapshot_test PRIVATE cxx_std_17)
+    target_link_libraries(xtbloom_cpu_scc_snapshot_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME xtbloom.cpu.scc_snapshot COMMAND xtbloom_cpu_scc_snapshot_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_cpu_scc_snapshot_test xtbloom.cpu.scc_snapshot
+    )
+    if(BUILD_SHARED_LIBS)
+      add_test(NAME xtbloom.cpu.scc_snapshot_json
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_scc_snapshot_json_test.py
+          --executable $<TARGET_FILE:xtbloom_cpu_scc_snapshot_test>
+          --library $<TARGET_FILE:xtbloom>
+      )
+      xtbloom_configure_linalg_runtime_test(
+        xtbloom_cpu_scc_snapshot_test xtbloom.cpu.scc_snapshot_json
+      )
+    endif()
   endif()
 
   if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
@@ -3106,6 +3284,102 @@ if(XTBLOOM_BUILD_TESTS)
       COMMAND xtbloom_cuda_periodic_embedding_test
     )
 
+    add_executable(xtbloom_cuda_periodic_topology_test
+      tests/cuda_periodic_topology_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_periodic_topology_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_periodic_topology_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_periodic_topology_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_periodic_topology_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.periodic_topology
+      COMMAND xtbloom_cuda_periodic_topology_test
+    )
+
+    add_executable(xtbloom_cuda_native_periodic_short_range_test
+      tests/cuda_native_periodic_short_range_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_native_periodic_short_range_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_native_periodic_short_range_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_native_periodic_short_range_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_native_periodic_short_range_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.native_periodic_short_range
+      COMMAND xtbloom_cuda_native_periodic_short_range_test
+    )
+
+    add_executable(xtbloom_cuda_native_periodic_ewald_test
+      tests/cuda_native_periodic_ewald_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_native_periodic_ewald_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_native_periodic_ewald_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_native_periodic_ewald_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_native_periodic_ewald_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.native_periodic_ewald
+      COMMAND xtbloom_cuda_native_periodic_ewald_test
+    )
+
+    add_executable(xtbloom_cuda_native_periodic_multipole_test
+      tests/cuda_native_periodic_multipole_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_native_periodic_multipole_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_native_periodic_multipole_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_native_periodic_multipole_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_native_periodic_multipole_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.native_periodic_multipole
+      COMMAND xtbloom_cuda_native_periodic_multipole_test
+    )
+
     add_executable(xtbloom_cuda_scc_test tests/cuda_scc_test.cu)
     target_link_libraries(xtbloom_cuda_scc_test PRIVATE
       xtbloom::xtbloom
@@ -3468,6 +3742,19 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.scc_iteration_deterministic_debug
       COMMAND xtbloom_cuda_scc_iteration_production_test --deterministic-debug
     )
+    if(XTBLOOM_CPU_LINALG_RUNTIME)
+      add_test(NAME xtbloom.cuda.scc_spin_frozen_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-frozen-replay
+      )
+      add_test(NAME xtbloom.cuda.scc_spin_two_origin_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-two-origin-replay
+      )
+      set_tests_properties(xtbloom.cuda.scc_spin_frozen_replay
+        xtbloom.cuda.scc_spin_two_origin_replay PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1;MKL_NUM_THREADS=1"
+        SKIP_RETURN_CODE 77
+      )
+    endif()
 
     # Focused #130 benchmark. It reuses the production SCC fixture but runs a
     # one-remaining-iteration state so the conditional WHILE body count and
@@ -3705,6 +3992,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_repulsion_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.repulsion COMMAND xtbloom_repulsion_test)
 
+  add_executable(xtbloom_alpb_test tests/alpb_test.cpp)
+  target_link_libraries(xtbloom_alpb_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_alpb_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.alpb COMMAND xtbloom_alpb_test)
+
   add_executable(xtbloom_coordination_test tests/coordination_test.cpp)
   target_link_libraries(xtbloom_coordination_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_coordination_test PRIVATE cxx_std_17)
@@ -3714,6 +4006,32 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_lattice_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_lattice_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.lattice COMMAND xtbloom_lattice_test)
+
+  add_executable(xtbloom_periodic_short_range_test tests/periodic_short_range_test.cpp)
+  target_link_libraries(xtbloom_periodic_short_range_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_periodic_short_range_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.periodic_short_range COMMAND xtbloom_periodic_short_range_test)
+
+  add_executable(xtbloom_periodic_integrals_test tests/periodic_integrals_test.cpp)
+  target_link_libraries(xtbloom_periodic_integrals_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_periodic_integrals_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.periodic_integrals COMMAND xtbloom_periodic_integrals_test)
+  set_tests_properties(xtbloom.gfn2.periodic_integrals PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
+  add_executable(xtbloom_periodic_ewald_test tests/periodic_ewald_test.cpp)
+  target_link_libraries(xtbloom_periodic_ewald_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_periodic_ewald_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.periodic_ewald COMMAND xtbloom_periodic_ewald_test)
+
+  add_executable(xtbloom_periodic_multipole_test tests/periodic_multipole_test.cpp)
+  target_link_libraries(xtbloom_periodic_multipole_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_periodic_multipole_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.periodic_multipole COMMAND xtbloom_periodic_multipole_test)
+  set_tests_properties(xtbloom.gfn2.periodic_ewald PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
 
   add_executable(xtbloom_gfn1_coordination_test tests/gfn1_coordination_test.cpp)
   target_link_libraries(xtbloom_gfn1_coordination_test PRIVATE xtbloom_gfn1_cpu)
@@ -4450,6 +4768,20 @@ if(XTBLOOM_BUILD_TESTS)
       LABELS "conformance;public-api"
     )
     add_test(
+      NAME xtbloom.conformance.periodic_public_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_public_api.py
+              --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/periodic/manifest.json
+              --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
+              --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/periodic-public-api
+    )
+    set_tests_properties(xtbloom.conformance.periodic_public_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;periodic"
+    )
+    add_test(
       NAME xtbloom.conformance.gfn1_public_cpu
       COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_public_api.py
               --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
@@ -4678,7 +5010,11 @@ if(XTBLOOM_BUILD_TESTS)
 endif()
 
 install(TARGETS xtbloom EXPORT xtbloomTargets)
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# Keep the experimental external energy callback header out of any local install
+# artifact as well as out of the released xTBloom ABI. It remains available to
+# research-only targets from the source tree.
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  PATTERN "xtbloom_external_energy.h" EXCLUDE)
 install(FILES ${XTBLOOM_GENERATED_INCLUDE_DIR}/xtbloom/version.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xtbloom
 )
@@ -4754,4 +5090,48 @@ message(STATUS "xtbloom CUDA backend: ${XTBLOOM_HAS_CUDA}")
 
 if(XTBLOOM_BUILD_WEB_DEMO)
   add_subdirectory(web)
+endif()
+
+if(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE)
+  add_executable(xtbloom_external_energy_callback_smoke tools/external_energy_callback_smoke.cpp)
+  target_include_directories(xtbloom_external_energy_callback_smoke PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(xtbloom_external_energy_callback_smoke PRIVATE xtbloom)
+
+  add_executable(xtbloom_external_energy_projection_basis_smoke
+    tools/external_energy_projection_basis_smoke.cpp)
+  target_include_directories(xtbloom_external_energy_projection_basis_smoke PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+    xtbloom
+    xtbloom_cpu_dispatch_objects
+    xtbloom_model_common_cpu_objects
+    xtbloom_integrals_baseline_objects
+    xtbloom_gfn2_cpu_objects
+    xtbloom_gfn2_mulliken_baseline_objects)
+  if(TARGET xtbloom_integrals_avx2_objects)
+    target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+      xtbloom_integrals_avx2_objects)
+  endif()
+  if(TARGET xtbloom_gfn2_mulliken_avx2_objects)
+    target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+      xtbloom_gfn2_mulliken_avx2_objects)
+  endif()
+
+  # Register the focused executables only in test-enabled source builds. They
+  # are never installed, but exercising them in coverage builds validates the
+  # extension through the same shared-library boundary used by consumers.
+  if(XTBLOOM_BUILD_TESTS)
+    add_test(
+      NAME xtbloom.external_energy.callback_smoke
+      COMMAND xtbloom_external_energy_callback_smoke)
+    add_test(
+      NAME xtbloom.external_energy.projection_basis_smoke
+      COMMAND xtbloom_external_energy_projection_basis_smoke)
+    set_tests_properties(
+      xtbloom.external_energy.callback_smoke
+      xtbloom.external_energy.projection_basis_smoke
+      PROPERTIES LABELS "external-energy;public-api")
+  endif()
 endif()

@@ -24,6 +24,8 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from paper_runtime import comparison_workload
+
 try:
     import resource
 except (
@@ -1799,10 +1801,14 @@ def main() -> int:
                 row.get("batch_size"),
             )
         )
-        if baseline is None:
+        if (
+            baseline is None
+            or comparison_workload(row) is None
+            or comparison_workload(row) != comparison_workload(baseline)
+        ):
             row["worker_scaling"] = {
                 "availability": "unavailable",
-                "reason": "one-thread baseline missing",
+                "reason": "matched-input/success one-thread baseline missing",
             }
             continue
         speedup = (

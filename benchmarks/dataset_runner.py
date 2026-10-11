@@ -588,6 +588,8 @@ def storage_from_systems(
         point_charge_positions=[],
         point_charge_values=[],
         point_charge_gammas=[],
+        cell_matrices=[0.0] * (9 * len(systems)),
+        periodic_axes=[0] * len(systems),
         slices=slices,
         keepalive=[],
         efields=[None] * len(systems),

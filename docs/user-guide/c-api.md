@@ -195,7 +195,7 @@ Required batch topology uses flat arrays:
 
 See the public header for every optional field and its exact element type.
 
-## Native cell descriptors (ABI-v4 foundation)
+## Native cell descriptors (ABI-v4)
 
 The ABI-v4 `xtbloom_batch_t` suffix appends `cell_matrices` and
 `periodic_axes`. Both are caller-owned borrowed buffers with one entry per
@@ -209,10 +209,16 @@ reserved but not supported.
 The two buffers must be supplied together. A `NONE` item uses an all-zero cell;
 an `XYZ` item requires a finite, right-handed, nonsingular cell. V1/V2/V3
 callers and V4 batches containing only `NONE` items keep molecular behavior.
-Native periodic GFN1/GFN2 physics is not released yet: after complete host/CUDA
-descriptor, pointer, and cell validation, any `XYZ` item returns
-`XTBLOOM_STATUS_NOT_IMPLEMENTED` before output publication. This descriptor is
-not the caller-supplied periodic `b + A*q` embedding operator and does not make
+CPU GFN2 accepts complete `XYZ` requests for energy, forces, and atomic
+charges. A CPU GFN2 request may additionally set
+`XTBLOOM_COMPUTE_STRAIN_DERIVATIVES` and provide the ABI-v3 result suffix;
+the nine row-major values are the fixed-alpha derivative `Xi = dE/dε` in
+Hartree for the affine direct-cell deformation documented in
+`docs/theory/periodic-gfn2.md`. CUDA GFN2 `XYZ` requests currently use the same
+validated CPU periodic evaluator through an asynchronous host bridge; they are
+not yet CUDA-native Ewald/multipole execution. GFN1 `XYZ` remains explicitly
+refused until its periodic physics is connected. This descriptor is not the
+caller-supplied periodic `b + A*q` embedding operator and does not make
 solvation periodic.
 
 ## External interaction attachments (ABI-v3)

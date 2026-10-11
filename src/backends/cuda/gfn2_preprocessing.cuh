@@ -13,6 +13,8 @@
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
+#include "backends/cuda/gfn2_native_periodic_integrals.cuh"
+#include "backends/cuda/gfn2_native_periodic_short_range.cuh"
 #include "backends/cuda/gfn2_pairlist.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -106,6 +108,12 @@ struct Gfn2PreprocessingDevicePlan {
   Gfn2H0DevicePlan h0{};
   Gfn2ES2DeviceBatch es2{};
   Gfn2AES2DeviceBatch aes2{};
+  /* Native XYZ periodic S/D/Q integrals and image-dependent H0. */
+  Gfn2NativePeriodicIntegralDeviceBatch native_integrals{};
+  /* Native XYZ periodic short-range terms replace the molecular geometry CN
+   * for lattice requests.  The descriptor is immutable; positions are
+   * rebound to the refresh candidate at composition time. */
+  Gfn2NativePeriodicShortRangeDeviceBatch native_short_range{};
   /* Optional sparse pair-list view selected by the host dispatch policy.  When
    * batch_size is zero the sparse CN consistency check is disabled and all
    * pairlist pointers must be null.  When enabled it shares the canonical
@@ -228,6 +236,10 @@ struct Gfn2PreprocessingDeviceWorkspace {
   Gfn2ES2DeviceWorkspace es2{};
   Gfn2AES2DeviceCache aes2_candidate{};
   Gfn2AES2DeviceWorkspace aes2{};
+  /* Reuses the SCC arena's fixed native workspace.  The preprocessing
+   * composer writes CN and repulsion candidates before H0/integral consumers
+   * run, so no separate native-periodic allocation is needed here. */
+  Gfn2NativePeriodicShortRangeDeviceWorkspace native_short_range{};
   /* Sparse pair-list candidate state; only valid when the plan leaf is enabled
    * and its host scheduler has provisioned these buffers.  The sparse
    * coordination check writes here before the dense/parity gate publishes. */
@@ -315,6 +327,21 @@ static_assert(std::is_standard_layout_v<Gfn2PreprocessingLaunchDiagnostic>);
  */
 [[nodiscard]] Gfn2PreprocessingLaunchDiagnostic compose_gfn2_preprocessing_epoch_cuda(
     Gfn2PreprocessingDeviceBinding& binding, cudaStream_t stream = nullptr) noexcept;
+
+/*
+ * Evaluate the complete native-periodic one-electron transaction.  Unlike the
+ * molecular evaluator this sums the setup-owned Gaussian image list, applies
+ * the image H0 spatial factor to every translated shell pair, and publishes
+ * only complete peer slices.  The caller normally reaches this through
+ * compose_gfn2_preprocessing_*; the entry point is public to the CUDA test
+ * harness so the periodic leaf can be validated independently of SCC.
+ */
+[[nodiscard]] cudaError_t evaluate_gfn2_native_periodic_integrals_h0_cuda(
+    const Gfn2IntegralDeviceBatch& batch, const Gfn2H0DevicePlan& h0,
+    const Gfn2NativePeriodicIntegralDeviceBatch& periodic, const double* wrapped_positions,
+    const double* coordination_numbers, double* overlap, double* dipole, double* quadrupole,
+    double* hamiltonian, const Gfn2IntegralDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
  * Run only the sparse/dense CN consistency gate over an already-composed

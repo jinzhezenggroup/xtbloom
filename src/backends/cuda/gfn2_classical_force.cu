@@ -251,6 +251,110 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4TwoBody) ||
       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4ATM);
   const bool needs_gfn1_correction = plan.model == XtbModelFlavor::kGfn1;
+  const bool native_periodic = plan.native_short_range_batch.topology.plan_token != 0u ||
+                               plan.native_ewald_batch.topology.plan_token != 0u ||
+                               plan.native_multipole_batch.topology.plan_token != 0u;
+  const bool native_d4 = native_periodic && needs_d4;
+
+  if (native_periodic) {
+    /* Native XYZ terms are a GFN2-only post-SCC family.  All three batches
+     * borrow the same committed geometry and stationary multipole views; a
+     * mismatched projection would otherwise silently mix molecular and image
+     * derivatives in one force slice. */
+    const auto& short_range = plan.native_short_range_batch;
+    const auto& ewald = plan.native_ewald_batch;
+    const auto& multipole = plan.native_multipole_batch;
+    const auto& native_d4_batch = plan.native_d4_batch;
+    if (plan.model != XtbModelFlavor::kGfn2 || short_range.topology.plan_token != plan.plan_token ||
+        ewald.topology.plan_token != plan.plan_token ||
+        multipole.topology.plan_token != plan.plan_token ||
+        short_range.topology.batch_size != plan.batch_size ||
+        short_range.topology.total_atoms != plan.total_atoms ||
+        ewald.topology.batch_size != plan.batch_size ||
+        ewald.topology.total_atoms != plan.total_atoms ||
+        multipole.topology.batch_size != plan.batch_size ||
+        multipole.topology.total_atoms != plan.total_atoms ||
+        short_range.atomic_numbers != plan.atomic_numbers ||
+        short_range.atomic_number_elements != plan.total_atoms ||
+        short_range.positions != input.positions ||
+        short_range.position_elements != plan.total_atoms * 3 ||
+        short_range.covalent_radii != plan.geometry_batch.covalent_radii ||
+        short_range.covalent_radius_elements != plan.total_atoms ||
+        ewald.positions != input.positions || ewald.position_elements != plan.total_atoms * 3 ||
+        ewald.shell_charges != input.shell_charges ||
+        ewald.shell_charge_elements != plan.total_shells ||
+        multipole.positions != input.positions ||
+        multipole.position_elements != plan.total_atoms * 3 ||
+        multipole.coordination_numbers != input.coordination_numbers ||
+        multipole.coordination_number_elements != plan.total_atoms ||
+        multipole.atomic_charges != input.atomic_charges ||
+        multipole.atomic_charge_elements != plan.total_atoms ||
+        multipole.atomic_dipoles != input.atomic_dipoles ||
+        multipole.atomic_dipole_elements != plan.total_atoms * 3 ||
+        multipole.atomic_quadrupoles != input.atomic_quadrupoles ||
+        multipole.atomic_quadrupole_elements != plan.total_atoms * 6 ||
+        (ewald.active_mask != nullptr && ewald.active_mask_elements != plan.batch_size) ||
+        (multipole.active_mask != nullptr && multipole.active_mask_elements != plan.batch_size) ||
+        workspace.native_short_range_workspace.plan_token != plan.plan_token ||
+        workspace.native_ewald_workspace.plan_token != plan.plan_token ||
+        workspace.native_multipole_workspace.plan_token != plan.plan_token ||
+        workspace.native_short_range_workspace.repulsion_gradient_elements !=
+            plan.total_atoms * 3 ||
+        workspace.native_short_range_workspace.repulsion_strain_elements != plan.batch_size * 9 ||
+        workspace.native_ewald_workspace.gradient_elements != plan.total_atoms * 3 ||
+        workspace.native_ewald_workspace.strain_elements != plan.batch_size * 9 ||
+        workspace.native_multipole_workspace.gradient_elements != plan.total_atoms * 3 ||
+        workspace.native_multipole_workspace.strain_elements != plan.batch_size * 9 ||
+        !aligned_pointer(workspace.native_short_range_workspace.repulsion_gradients) ||
+        !aligned_pointer(workspace.native_ewald_workspace.gradients) ||
+        !aligned_pointer(workspace.native_multipole_workspace.gradients) ||
+        !aligned_pointer(workspace.native_multipole_workspace.coordination_adjoint)) {
+      return false;
+    }
+    if (native_d4 &&
+        (native_d4_batch.topology.plan_token != plan.plan_token ||
+         native_d4_batch.topology.batch_size != plan.batch_size ||
+         native_d4_batch.topology.total_atoms != plan.total_atoms ||
+         native_d4_batch.plan_token != plan.plan_token ||
+         native_d4_batch.atomic_numbers != plan.atomic_numbers ||
+         native_d4_batch.atomic_number_elements != plan.total_atoms ||
+         native_d4_batch.positions != input.positions ||
+         native_d4_batch.position_elements != plan.total_atoms * 3 ||
+         native_d4_batch.coordination_numbers != input.coordination_numbers ||
+         native_d4_batch.coordination_number_elements != plan.total_atoms ||
+         native_d4_batch.atomic_charges != input.atomic_charges ||
+         native_d4_batch.atomic_charge_elements != plan.total_atoms ||
+         native_d4_batch.image_cutoff < 50.0 ||
+         workspace.native_d4_workspace.plan_token != plan.plan_token ||
+         workspace.native_d4_workspace.wrapped_position_elements != plan.total_atoms * 3 ||
+         workspace.native_d4_workspace.weight_elements !=
+             plan.total_atoms * kGfn2D4MaximumReferences ||
+         workspace.native_d4_workspace.coordination_elements != plan.total_atoms ||
+         workspace.native_d4_workspace.atom_energy_elements != plan.total_atoms ||
+         workspace.native_d4_workspace.atom_potential_elements != plan.total_atoms ||
+         workspace.native_d4_workspace.gradient_elements != plan.total_atoms * 3 ||
+         workspace.native_d4_workspace.strain_elements != plan.batch_size * 9 ||
+         workspace.native_d4_workspace.coordination_adjoint_elements != plan.total_atoms ||
+         !aligned_pointer(workspace.native_d4_workspace.wrapped_positions) ||
+         !aligned_pointer(workspace.native_d4_workspace.weights) ||
+         !aligned_pointer(workspace.native_d4_workspace.weight_cn_derivatives) ||
+         !aligned_pointer(workspace.native_d4_workspace.weight_charge_derivatives) ||
+         !aligned_pointer(workspace.native_d4_workspace.coordination) ||
+         !aligned_pointer(workspace.native_d4_workspace.atom_energy) ||
+         !aligned_pointer(workspace.native_d4_workspace.atom_potential) ||
+         !aligned_pointer(workspace.native_d4_workspace.gradient) ||
+         !aligned_pointer(workspace.native_d4_workspace.strain) ||
+         !aligned_pointer(workspace.native_d4_workspace.coordination_adjoint))) {
+      return false;
+    }
+  } else if (plan.native_short_range_batch.topology.plan_token != 0u ||
+             plan.native_ewald_batch.topology.plan_token != 0u ||
+             plan.native_multipole_batch.topology.plan_token != 0u ||
+             workspace.native_short_range_workspace.plan_token != 0u ||
+             workspace.native_ewald_workspace.plan_token != 0u ||
+             workspace.native_multipole_workspace.plan_token != 0u) {
+    return false;
+  }
 
   if (needs_gfn1_correction &&
       (input.coordination_elements != plan.total_atoms ||
@@ -334,7 +438,7 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
    * d4_workspace.system_errors is the documented exact projection of
    * primitive_system_errors, so that range is represented only once.
    */
-  std::array<AddressRange, 40> writes{};
+  std::array<AddressRange, 80> writes{};
   std::size_t write_count = 0u;
   if (!append_range(writes, &write_count, output.forces, plan.total_atoms * 3) ||
       !append_range(writes, &write_count, workspace.gradient_scratch, plan.total_atoms * 3) ||
@@ -399,8 +503,64 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
                      workspace.gfn1_correction.gradient_scratch_elements))) {
     return false;
   }
+  if (native_periodic) {
+    const auto& sr = workspace.native_short_range_workspace;
+    const auto& ew = workspace.native_ewald_workspace;
+    const auto& mp = workspace.native_multipole_workspace;
+    if (!append_range(writes, &write_count, sr.wrapped_positions, sr.wrapped_position_elements) ||
+        !append_range(writes, &write_count, sr.coordination, sr.coordination_elements) ||
+        !append_range(writes, &write_count, sr.repulsion_energies, sr.repulsion_energy_elements) ||
+        !append_range(writes, &write_count, sr.repulsion_gradients,
+                      sr.repulsion_gradient_elements) ||
+        !append_range(writes, &write_count, sr.repulsion_strain, sr.repulsion_strain_elements) ||
+        !append_range(writes, &write_count, ew.wrapped_positions, ew.wrapped_position_elements) ||
+        !append_range(writes, &write_count, ew.matrix, ew.matrix_elements) ||
+        !append_range(writes, &write_count, ew.shell_potentials, ew.shell_potential_elements) ||
+        !append_range(writes, &write_count, ew.energies, ew.energy_elements) ||
+        !append_range(writes, &write_count, ew.gradients, ew.gradient_elements) ||
+        !append_range(writes, &write_count, ew.strain, ew.strain_elements) ||
+        !append_range(writes, &write_count, mp.wrapped_positions, mp.wrapped_position_elements) ||
+        !append_range(writes, &write_count, mp.charge_dipole_matrix,
+                      mp.charge_dipole_matrix_elements) ||
+        !append_range(writes, &write_count, mp.dipole_dipole_matrix,
+                      mp.dipole_dipole_matrix_elements) ||
+        !append_range(writes, &write_count, mp.charge_quadrupole_matrix,
+                      mp.charge_quadrupole_matrix_elements) ||
+        !append_range(writes, &write_count, mp.charge_potentials, mp.charge_potential_elements) ||
+        !append_range(writes, &write_count, mp.dipole_potentials, mp.dipole_potential_elements) ||
+        !append_range(writes, &write_count, mp.quadrupole_potentials,
+                      mp.quadrupole_potential_elements) ||
+        !append_range(writes, &write_count, mp.energies, mp.energy_elements) ||
+        !append_range(writes, &write_count, mp.gradients, mp.gradient_elements) ||
+        !append_range(writes, &write_count, mp.strain, mp.strain_elements) ||
+        !append_range(writes, &write_count, mp.coordination_adjoint,
+                      mp.coordination_adjoint_elements)) {
+      {
+        return false;
+      }
+      if (native_d4) {
+        const auto& d4 = workspace.native_d4_workspace;
+        if (!append_range(writes, &write_count, d4.wrapped_positions,
+                          d4.wrapped_position_elements) ||
+            !append_range(writes, &write_count, d4.weights, d4.weight_elements) ||
+            !append_range(writes, &write_count, d4.weight_cn_derivatives, d4.weight_elements) ||
+            !append_range(writes, &write_count, d4.weight_charge_derivatives, d4.weight_elements) ||
+            !append_range(writes, &write_count, d4.coordination, d4.coordination_elements) ||
+            !append_range(writes, &write_count, d4.atom_energy, d4.atom_energy_elements) ||
+            !append_range(writes, &write_count, d4.atom_potential, d4.atom_potential_elements) ||
+            !append_range(writes, &write_count, d4.gradient, d4.gradient_elements) ||
+            !append_range(writes, &write_count, d4.strain, d4.strain_elements) ||
+            !append_range(writes, &write_count, d4.coordination_adjoint,
+                          d4.coordination_adjoint_elements)) {
+          return false;
+        }
+      }
+    }
+  }
   if (!ranges_are_disjoint(writes, write_count)) {
-    return false;
+    {
+      return false;
+    }
   }
 
   std::array<AddressRange, 80> reads{};
@@ -413,7 +573,9 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
       !append_range(reads, &read_count, activity.requested_mask, plan.batch_size) ||
       !append_range(reads, &read_count, activity.system_statuses, plan.batch_size) ||
       !append_range(reads, &read_count, input.positions, plan.total_atoms * 3)) {
-    return false;
+    {
+      return false;
+    }
   }
   if (needs_es2 &&
       (!append_range(reads, &read_count, plan.es2_batch.batch_shell_offsets, plan.batch_size + 1) ||
@@ -424,7 +586,9 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
        !append_range(reads, &read_count, plan.es2_cache.coulomb_matrix,
                      plan.es2_batch.total_matrix_elements) ||
        !append_range(reads, &read_count, input.shell_charges, plan.total_shells))) {
-    return false;
+    {
+      return false;
+    }
   }
   if (needs_aes2 &&
       (!append_range(reads, &read_count, plan.aes2_batch.pair_offsets, plan.batch_size + 1) ||
@@ -444,7 +608,9 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
                      plan.total_atoms) ||
        !append_range(reads, &read_count, plan.geometry_cache.geometry_generations,
                      plan.batch_size))) {
-    return false;
+    {
+      return false;
+    }
   }
   if (needs_gfn1_correction) {
     const auto& correction = plan.gfn1_correction;
@@ -502,7 +668,50 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
   if (!needs_aes2 &&
       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4TwoBody) &&
       !append_range(reads, &read_count, input.atomic_charges, plan.total_atoms)) {
-    return false;
+    {
+      return false;
+    }
+  }
+  if (native_periodic) {
+    const auto& sr = plan.native_short_range_batch;
+    const auto& ew = plan.native_ewald_batch;
+    const auto& mp = plan.native_multipole_batch;
+    if (!append_range(reads, &read_count, sr.topology.cell_matrices, sr.topology.cell_elements) ||
+        !append_range(reads, &read_count, sr.topology.periodic_axes,
+                      sr.topology.periodic_axes_elements) ||
+        !append_range(reads, &read_count, sr.topology.translation_offsets,
+                      sr.topology.translation_offset_count) ||
+        !append_range(reads, &read_count, sr.topology.translations,
+                      sr.topology.total_translations) ||
+        !append_range(reads, &read_count, ew.batch_shell_offsets, ew.batch_shell_offset_elements) ||
+        !append_range(reads, &read_count, ew.atom_shell_offsets, ew.atom_shell_offset_elements) ||
+        !append_range(reads, &read_count, ew.matrix_offsets, ew.matrix_offset_elements) ||
+        !append_range(reads, &read_count, ew.shell_hardness, ew.shell_hardness_elements) ||
+        !append_range(reads, &read_count, ew.alphas, ew.alpha_elements) ||
+        !append_range(reads, &read_count, ew.direct_translation_offsets,
+                      ew.direct_translation_offset_elements) ||
+        !append_range(reads, &read_count, ew.direct_translations, ew.direct_translation_elements) ||
+        !append_range(reads, &read_count, ew.reciprocal_translation_offsets,
+                      ew.reciprocal_translation_offset_elements) ||
+        !append_range(reads, &read_count, ew.reciprocal_translations,
+                      ew.reciprocal_translation_elements) ||
+        !append_range(reads, &read_count, mp.matrix_offsets, mp.matrix_offset_elements) ||
+        !append_range(reads, &read_count, mp.volumes, mp.volume_elements) ||
+        !append_range(reads, &read_count, mp.alphas, mp.alpha_elements) ||
+        !append_range(reads, &read_count, mp.direct_translation_offsets,
+                      mp.direct_translation_offset_elements) ||
+        !append_range(reads, &read_count, mp.direct_translations, mp.direct_translation_elements) ||
+        !append_range(reads, &read_count, mp.reciprocal_translation_offsets,
+                      mp.reciprocal_translation_offset_elements) ||
+        !append_range(reads, &read_count, mp.reciprocal_translations,
+                      mp.reciprocal_translation_elements) ||
+        !append_range(reads, &read_count, mp.dipole_kernel, mp.dipole_kernel_elements) ||
+        !append_range(reads, &read_count, mp.quadrupole_kernel, mp.quadrupole_kernel_elements) ||
+        !append_range(reads, &read_count, mp.multipole_radius, mp.multipole_radius_elements) ||
+        !append_range(reads, &read_count, mp.multipole_valence_cn,
+                      mp.multipole_valence_cn_elements)) {
+      return false;
+    }
   }
   if (geometry_epoch != nullptr && !append_range(reads, &read_count, geometry_epoch->value, 1)) {
     return false;
@@ -756,6 +965,184 @@ __global__ void repulsion_gradient_kernel(Gfn2ClassicalForceDevicePlan plan,
   }
 }
 
+__global__ void add_native_periodic_gradients_kernel(Gfn2ClassicalForceDevicePlan plan,
+                                                     Gfn2ClassicalForceDeviceWorkspace workspace,
+                                                     std::uint32_t* system_errors,
+                                                     std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!system_is_selected(workspace, system_errors, system)) return;
+  const std::int64_t begin = plan.atom_offsets[system];
+  const std::int64_t end = plan.atom_offsets[system + 1];
+  for (std::int64_t atom = begin + threadIdx.x; atom < end; atom += blockDim.x) {
+    const std::int64_t coordinate = atom * 3;
+    bool finite = true;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double contribution =
+          workspace.native_short_range_workspace.repulsion_gradients[coordinate + axis] +
+          workspace.native_ewald_workspace.gradients[coordinate + axis] +
+          workspace.native_multipole_workspace.gradients[coordinate + axis];
+      const double updated = workspace.gradient_scratch[coordinate + axis] + contribution;
+      if (!isfinite(contribution) || !isfinite(updated)) {
+        finite = false;
+      } else {
+        workspace.gradient_scratch[coordinate + axis] = updated;
+      }
+    }
+    /* Native D4 contracts its own D4-CN adjoint internally because its CN
+     * model differs from the periodic GFN2 coordination model.  Only the
+     * multipole radius adjoint belongs in the standard periodic CN VJP. */
+    const double coordination = workspace.native_multipole_workspace.coordination_adjoint[atom];
+    const double updated_coordination = workspace.coordination_adjoints[atom] + coordination;
+    if (!isfinite(coordination) || !isfinite(updated_coordination))
+      finite = false;
+    else
+      workspace.coordination_adjoints[atom] = updated_coordination;
+    if (!finite) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure);
+    }
+  }
+}
+
+/* Contract the stationary AES2 radius adjoint through the image-aware GFN2
+ * coordination model.  The molecular geometry VJP cannot be reused here: its
+ * pair cache excludes lattice images and therefore misses self-image and
+ * wrapped-coordinate contributions.  One thread owns each ragged peer to
+ * keep the lower-triangular translation order deterministic and to stage the
+ * complete peer result before touching the common gradient accumulator. */
+__global__ void add_native_periodic_coordination_vjp_kernel(
+    Gfn2ClassicalForceDevicePlan plan, Gfn2ClassicalForceDeviceWorkspace workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error) {
+  constexpr double kCutoff = 25.0;
+  constexpr double kCutoffSquared = kCutoff * kCutoff;
+  constexpr double kMinimumDistanceSquared = 1.0e-12;
+  constexpr double kFirstSteepness = 10.0;
+  constexpr double kSecondSteepness = 20.0;
+  constexpr double kSecondRadiusShift = 2.0;
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (threadIdx.x != 0 || system >= plan.batch_size ||
+      !system_is_selected(workspace, system_errors, system)) {
+    return;
+  }
+  const std::int64_t atom_begin = plan.atom_offsets[system];
+  const std::int64_t atom_end = plan.atom_offsets[system + 1];
+  const std::int64_t translation_begin =
+      plan.native_short_range_batch.topology.translation_offsets[system];
+  const std::int64_t translation_end =
+      plan.native_short_range_batch.topology.translation_offsets[system + 1];
+  double* const staged = workspace.geometry_workspace.gradient_scratch;
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    staged[atom * 3] = 0.0;
+    staged[atom * 3 + 1] = 0.0;
+    staged[atom * 3 + 2] = 0.0;
+  }
+  /* The short-range wrapped view belongs to the preprocessing transaction and
+   * is not refreshed by this stationary force pass.  Multipole evaluation just
+   * above performs the same canonical wrapping with the force geometry, so use
+   * its freshly written view for the CN adjoint.  Reusing the stale short-range
+   * scratch would turn an uninitialized/zero image into a coincident pair. */
+  const double* const wrapped = workspace.native_multipole_workspace.wrapped_positions;
+  const double* const radii = plan.geometry_batch.covalent_radii;
+  const double* const adjoints = workspace.coordination_adjoints;
+  for (std::int64_t first = atom_begin; first < atom_end; ++first) {
+    const double* const center = wrapped + first * 3;
+    for (std::int64_t second = atom_begin; second <= first; ++second) {
+      const double* const image = wrapped + second * 3;
+      const double radius = radii[first] + radii[second];
+      if (!(radius > 0.0) || !isfinite(radius)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure);
+        return;
+      }
+      const double shifted_radius = radius + kSecondRadiusShift;
+      const double adjoint = adjoints[first] + (first == second ? 0.0 : adjoints[second]);
+      if (!isfinite(adjoint)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure);
+        return;
+      }
+      for (std::int64_t translation = translation_begin; translation < translation_end;
+           ++translation) {
+        const auto& value = plan.native_short_range_batch.topology.translations[translation];
+        if (first == second && value.index[0] == 0 && value.index[1] == 0 && value.index[2] == 0 &&
+            value.cartesian[0] == 0.0 && value.cartesian[1] == 0.0 && value.cartesian[2] == 0.0) {
+          continue;
+        }
+        double vector[3]{};
+        bool within_cutoff = true;
+        for (int axis = 0; axis < 3; ++axis) {
+          vector[axis] = image[axis] + value.cartesian[axis] - center[axis];
+          if (!isfinite(vector[axis]) || fabs(vector[axis]) > kCutoff) {
+            /* The native topology is a deliberately conservative image
+             * superset (it also serves D4).  Images outside the CN cutoff
+             * are simply absent from this VJP; zeroing the vector here would
+             * turn an out-of-range image into a false coincident pair. */
+            within_cutoff = false;
+            break;
+          }
+        }
+        if (!within_cutoff) continue;
+        const double distance_squared =
+            fma(vector[0], vector[0], fma(vector[1], vector[1], vector[2] * vector[2]));
+        if (!isfinite(distance_squared) || distance_squared > kCutoffSquared) continue;
+        if (distance_squared < kMinimumDistanceSquared) {
+          record_system_error(system_errors, system, device_error,
+                              Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure);
+          return;
+        }
+        const double distance = sqrt(distance_squared);
+        const auto logistic = [](double argument) {
+          const double exponential = argument >= 0.0 ? exp(-argument) : exp(argument);
+          return argument >= 0.0 ? 1.0 / (1.0 + exponential) : exponential / (1.0 + exponential);
+        };
+        const double first_argument = kFirstSteepness * (radius / distance - 1.0);
+        const double second_argument = kSecondSteepness * (shifted_radius / distance - 1.0);
+        const double first_value = logistic(first_argument);
+        const double second_value = logistic(second_argument);
+        const double derivative = first_value * (1.0 - first_value) *
+                                      (-kFirstSteepness * radius / distance_squared) *
+                                      second_value +
+                                  first_value * second_value * (1.0 - second_value) *
+                                      (-kSecondSteepness * shifted_radius / distance_squared);
+        const double scale = -adjoint * derivative / distance;
+        if (!isfinite(derivative) || !isfinite(scale)) {
+          record_system_error(system_errors, system, device_error,
+                              Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure);
+          return;
+        }
+        if (first != second) {
+          for (int axis = 0; axis < 3; ++axis) {
+            const double contribution = scale * vector[axis];
+            staged[first * 3 + axis] += contribution;
+            staged[second * 3 + axis] -= contribution;
+          }
+        }
+      }
+    }
+  }
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    for (int axis = 0; axis < 3; ++axis) {
+      if (!isfinite(staged[atom * 3 + axis])) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure);
+        return;
+      }
+    }
+  }
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    for (int axis = 0; axis < 3; ++axis) {
+      const std::int64_t coordinate = atom * 3 + axis;
+      const double updated = workspace.gradient_scratch[coordinate] + staged[coordinate];
+      if (!isfinite(updated)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure);
+        return;
+      }
+      workspace.gradient_scratch[coordinate] = updated;
+    }
+  }
+}
+
 __global__ void es2_topology_preflight_kernel(Gfn2ClassicalForceDevicePlan plan,
                                               std::uint32_t* device_error,
                                               std::uint32_t* sequence_active) {
@@ -955,6 +1342,8 @@ __global__ void merge_primitive_stage_kernel(std::int64_t batch_size,
   __syncthreads();
   for (std::int64_t system = threadIdx.x; system < batch_size; system += blockDim.x) {
     const std::uint32_t raw = workspace.primitive_system_errors[system];
+    if (raw != 0u && raw != kPrimitiveInactiveMarker) {
+    }
     if (raw != 0u && raw != kPrimitiveInactiveMarker && workspace.selected_mask[system] == 1u) {
       record_system_error(system_errors, system, device_error, mapped_error);
       if (raw == primitive_device_code) {
@@ -1099,7 +1488,83 @@ static cudaError_t add_classical_forces_impl(
     return status;
   }
 
-  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kRepulsion)) {
+  const bool native_periodic = plan.native_short_range_batch.topology.plan_token != 0u;
+  const bool native_d4 =
+      native_periodic &&
+      (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4TwoBody) ||
+       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4ATM));
+  if (native_periodic) {
+    /* Re-evaluate the converged q/d/Q state with derivatives enabled.  SCC
+     * iteration deliberately requests only potentials/energies; doing this
+     * after the terminal SCC status is known keeps the force reverse pass
+     * stationary and lets failed peers drop out before any caller output is
+     * touched. */
+    status = prepare_primitive_stage(plan, workspace, system_errors, stream);
+    if (status != cudaSuccess) return status;
+    auto ewald = plan.native_ewald_batch;
+    ewald.active_mask = workspace.selected_mask;
+    ewald.active_mask_elements = plan.batch_size;
+    status = evaluate_gfn2_native_periodic_ewald_cuda(
+        ewald, workspace.native_ewald_workspace, nullptr, nullptr, nullptr, nullptr, nullptr,
+        workspace.primitive_system_errors, workspace.primitive_device_error, stream);
+    if (status != cudaSuccess) return status;
+    status =
+        merge_primitive_stage(plan, workspace, Gfn2ClassicalForceDeviceError::kNativeEwaldFailure,
+                              false, system_errors, device_error, stream);
+    if (status != cudaSuccess) return status;
+
+    status = prepare_primitive_stage(plan, workspace, system_errors, stream);
+    if (status != cudaSuccess) return status;
+    auto multipole = plan.native_multipole_batch;
+    multipole.active_mask = workspace.selected_mask;
+    multipole.active_mask_elements = plan.batch_size;
+    status = evaluate_gfn2_native_periodic_multipole_cuda(
+        multipole, workspace.native_multipole_workspace, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, workspace.primitive_system_errors,
+        workspace.primitive_device_error, stream);
+    if (status != cudaSuccess) return status;
+    status = merge_primitive_stage(plan, workspace,
+                                   Gfn2ClassicalForceDeviceError::kNativeMultipoleFailure, false,
+                                   system_errors, device_error, stream);
+    if (status != cudaSuccess) return status;
+
+    if (native_d4) {
+      /* Native D4 owns both the image-aware two-body/ATM derivatives and the
+       * corresponding CN adjoint.  Its gradient is accumulated directly into
+       * the common dE/dR scratch; only the CN adjoint is folded by the helper
+       * kernel below before the periodic CN reverse pass. */
+      status = prepare_primitive_stage(plan, workspace, system_errors, stream);
+      if (status != cudaSuccess) return status;
+      auto d4 = plan.native_d4_batch;
+      d4.active_mask = workspace.selected_mask;
+      d4.active_mask_elements = plan.batch_size;
+      d4.coordination_numbers = workspace.native_d4_workspace.coordination;
+      d4.coordination_number_elements = plan.total_atoms;
+      status = evaluate_gfn2_native_periodic_d4_coordination_cuda(
+          d4, workspace.native_d4_workspace, workspace.native_d4_workspace.coordination,
+          workspace.primitive_system_errors, workspace.primitive_device_error, stream);
+      if (status != cudaSuccess) return status;
+      status =
+          merge_primitive_stage(plan, workspace, Gfn2ClassicalForceDeviceError::kNativeD4Failure,
+                                false, system_errors, device_error, stream);
+      if (status != cudaSuccess) return status;
+
+      status = prepare_primitive_stage(plan, workspace, system_errors, stream);
+      if (status != cudaSuccess) return status;
+      status = add_gfn2_native_periodic_d4_gradients_cuda(
+          d4, workspace.native_d4_workspace, workspace.gradient_scratch,
+          workspace.native_d4_workspace.strain, workspace.primitive_system_errors,
+          workspace.primitive_device_error, stream);
+      if (status != cudaSuccess) return status;
+      status =
+          merge_primitive_stage(plan, workspace, Gfn2ClassicalForceDeviceError::kNativeD4Failure,
+                                false, system_errors, device_error, stream);
+      if (status != cudaSuccess) return status;
+    }
+  }
+
+  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kRepulsion) &&
+      !native_periodic) {
     repulsion_gradient_kernel<<<static_cast<unsigned int>(plan.batch_size), kThreadsPerBlock, 0,
                                 stream>>>(plan, input.positions, workspace, system_errors,
                                           device_error);
@@ -1109,7 +1574,8 @@ static cudaError_t add_classical_forces_impl(
     }
   }
 
-  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kES2)) {
+  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kES2) &&
+      !native_periodic) {
     es2_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(plan, device_error,
                                                                       workspace.sequence_active);
     status = check_launch();
@@ -1124,26 +1590,28 @@ static cudaError_t add_classical_forces_impl(
     }
   }
 
-  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kAES2)) {
-    status = prepare_primitive_stage(plan, workspace, system_errors, stream);
-    if (status != cudaSuccess) {
-      return status;
+  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kAES2) &&
+      !native_periodic) {
+    {
+      status = prepare_primitive_stage(plan, workspace, system_errors, stream);
+      if (status != cudaSuccess) {
+        return status;
+      }
+      status = add_gfn2_aes2_vjp_cuda(
+          plan.aes2_batch, plan.aes2_cache, input.positions, input.coordination_numbers,
+          plan.geometry_generation, input.atomic_charges, input.atomic_dipoles,
+          input.atomic_quadrupoles, workspace.gradient_scratch, workspace.coordination_adjoints,
+          workspace.aes2_workspace, workspace.primitive_system_errors,
+          workspace.primitive_device_error, stream);
+      if (status != cudaSuccess) {
+        return status;
+      }
+      status = merge_primitive_stage(plan, workspace, Gfn2ClassicalForceDeviceError::kAES2Failure,
+                                     false, system_errors, device_error, stream);
+      if (status != cudaSuccess) {
+        return status;
+      }
     }
-    status = add_gfn2_aes2_vjp_cuda(
-        plan.aes2_batch, plan.aes2_cache, input.positions, input.coordination_numbers,
-        plan.geometry_generation, input.atomic_charges, input.atomic_dipoles,
-        input.atomic_quadrupoles, workspace.gradient_scratch, workspace.coordination_adjoints,
-        workspace.aes2_workspace, workspace.primitive_system_errors,
-        workspace.primitive_device_error, stream);
-    if (status != cudaSuccess) {
-      return status;
-    }
-    status = merge_primitive_stage(plan, workspace, Gfn2ClassicalForceDeviceError::kAES2Failure,
-                                   false, system_errors, device_error, stream);
-    if (status != cudaSuccess) {
-      return status;
-    }
-
     status = prepare_primitive_stage(plan, workspace, system_errors, stream);
     if (status != cudaSuccess) {
       return status;
@@ -1170,7 +1638,23 @@ static cudaError_t add_classical_forces_impl(
     }
   }
 
-  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4TwoBody)) {
+  if (native_periodic) {
+    add_native_periodic_gradients_kernel<<<static_cast<unsigned int>(plan.batch_size),
+                                           kThreadsPerBlock, 0, stream>>>(
+        plan, workspace, system_errors, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+    /* Native multipole radii depend on CN.  Contract that adjoint through the
+     * periodic image topology; the molecular pair cache omits self-images. */
+    add_native_periodic_coordination_vjp_kernel<<<static_cast<unsigned int>(plan.batch_size),
+                                                  kThreadsPerBlock, 0, stream>>>(
+        plan, workspace, system_errors, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  }
+
+  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4TwoBody) &&
+      !native_d4) {
     status = prepare_primitive_stage(plan, workspace, system_errors, stream);
     if (status != cudaSuccess) {
       return status;
@@ -1195,7 +1679,8 @@ static cudaError_t add_classical_forces_impl(
     }
   }
 
-  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4ATM)) {
+  if (component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4ATM) &&
+      !native_d4) {
     status = prepare_primitive_stage(plan, workspace, system_errors, stream);
     if (status != cudaSuccess) {
       return status;

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 import gfn1_conformance
+import periodic_gfn2
 import xtbloom_conformance as conformance
 
 XTBLOOM_STATUS_SUCCESS = 0
@@ -44,7 +45,9 @@ XTBLOOM_COMPUTE_FORCES = 1 << 1
 XTBLOOM_COMPUTE_ATOMIC_CHARGES = 1 << 2
 XTBLOOM_COMPUTE_POINT_CHARGE_FORCES = 1 << 3
 XTBLOOM_COMPUTE_DIPOLE_MOMENTS = 1 << 4
+XTBLOOM_COMPUTE_STRAIN_DERIVATIVES = 1 << 5
 XTBLOOM_RESULT_DIPOLE_MOMENTS = 1 << 4
+XTBLOOM_RESULT_STRAIN_DERIVATIVES = 1 << 5
 XTBLOOM_KELVIN_TO_HARTREE = 3.166808578545117e-6
 
 XTBLOOM_INTERACTION_ELECTRIC_FIELD = 0x0101
@@ -157,7 +160,7 @@ class ComputeOptions(ctypes.Structure):
 
 
 class BatchResult(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_result_t`` through ABI version 2."""
+    """ctypes mirror of ``xtbloom_batch_result_t`` through the ABI-v3 suffix."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -175,6 +178,7 @@ class BatchResult(ctypes.Structure):
         ("quadrupole_moments", Buffer),
         ("wiberg_orders", Buffer),
         ("spin_populations", Buffer),
+        ("strain_derivatives", Buffer),
     ]
 
 
@@ -368,6 +372,8 @@ class PublicBatchStorage:
     point_charge_positions: list[float]
     point_charge_values: list[float]
     point_charge_gammas: list[float]
+    cell_matrices: list[float]
+    periodic_axes: list[int]
     slices: list[CaseSlice]
     keepalive: list[Any]
     # Per-system electric field in atomic units aligned with ``slices``
@@ -384,6 +390,10 @@ MIXED_DEVICE_ROLES = {
     "point_charge_positions",
     "point_charge_values",
     "point_charge_gammas",
+    # Native periodic cell values are numerical geometry and follow positions
+    # into device memory in the mixed descriptor contract.  The fixed-width
+    # periodicity mask remains host-resident topology metadata.
+    "cell_matrices",
     # Split the independent interaction buffers across memory spaces. Host and
     # device modes still place both together, while mixed mode proves that a
     # device descriptor image may reference payload bytes staged from host.
@@ -590,12 +600,22 @@ def supported_cases(
     ]
 
 
+def is_periodic_manifest(manifest: dict[str, Any]) -> bool:
+    """Return whether ``manifest`` uses the native periodic GFN2 schema."""
+    return manifest.get("schema") == "xtbloom-periodic-gfn2-conformance-v2"
+
+
 def model_tag(manifest: dict[str, Any]) -> int:
     """Return the stable public tag for one validated corpus method."""
     method = manifest.get("method")
     if method == "GFN1-xTB":
         return XTBLOOM_MODEL_GFN1_XTB
     if method == "GFN2-xTB":
+        return XTBLOOM_MODEL_GFN2_XTB
+    if is_periodic_manifest(manifest):
+        # The periodic corpus predates the ordinary public-manifest method
+        # field.  Its schema is already specific to native periodic GFN2, so
+        # do not mutate the hash-pinned corpus just for dispatch metadata.
         return XTBLOOM_MODEL_GFN2_XTB
     raise conformance.ConformanceError(
         f"unsupported public conformance method: {method!r}"
@@ -658,10 +678,17 @@ def assemble_batch(
     point_charge_positions: list[float] = []
     point_charge_values: list[float] = []
     point_charge_gammas: list[float] = []
+    cell_matrices: list[float] = []
+    periodic_axes: list[int] = []
     slices: list[CaseSlice] = []
     efields: list[list[float] | None] = []
     is_gfn1 = model_tag(manifest) == XTBLOOM_MODEL_GFN1_XTB
-    hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
+    periodic_manifest = is_periodic_manifest(manifest)
+    hardness = (
+        manifest.get("reference_engines", {})
+        .get("xtb", {})
+        .get("point_charge_hardness_hartree")
+    )
 
     for case in cases:
         input_path = conformance.resolve_manifest_path(manifest_path, case["input"])
@@ -677,7 +704,42 @@ def assemble_batch(
                     "in atomic units"
                 )
             efields.append([float(component) for component in efield])
-        if case.get("input_schema") == "qmmm-v1":
+        if periodic_manifest:
+            try:
+                document = periodic_gfn2.parse_turbomole(input_path)
+            except periodic_gfn2.PeriodicOracleError as exc:
+                raise conformance.ConformanceError(str(exc)) from exc
+            symbol_numbers = {
+                symbol.lower(): number
+                for number, symbol in enumerate(conformance.ELEMENT_SYMBOLS)
+                if symbol
+            }
+            try:
+                atomic_numbers.extend(
+                    symbol_numbers[symbol.lower()] for symbol in document["symbols"]
+                )
+            except KeyError as exc:
+                raise conformance.ConformanceError(
+                    f"case {case['id']} contains unknown element symbol {exc.args[0]!r}"
+                ) from exc
+            positions.extend(float(value) for value in document["positions_bohr"])
+            cell = document["cell_matrix_row_major_bohr"]
+            if len(cell) != 9:
+                raise conformance.ConformanceError(
+                    f"case {case['id']} periodic cell must contain nine values"
+                )
+            cell_matrices.extend(float(value) for value in cell)
+            axis_mask = case.get("periodic_axes", 0)
+            if type(axis_mask) is not int:
+                raise conformance.ConformanceError(
+                    f"case {case['id']} periodic_axes must be an integer"
+                )
+            periodic_axes.append(axis_mask)
+        elif case.get("input_schema") == "qmmm-v1":
+            if hardness is None:
+                raise conformance.ConformanceError(
+                    "point-charge cases require the pinned xTB hardness table"
+                )
             document = (
                 gfn1_conformance.load_qmmm(input_path, case, hardness)
                 if is_gfn1
@@ -708,6 +770,8 @@ def assemble_batch(
                 document = conformance.load_turbomole_coord(input_path, case)
                 atomic_numbers.extend(document["atomic_numbers"])
                 positions.extend(_flatten(document["positions_bohr"]))
+            cell_matrices.extend(0.0 for _ in range(9))
+            periodic_axes.append(0)
 
         atom_offsets.append(len(atomic_numbers))
         point_charge_offsets.append(len(point_charge_values))
@@ -748,6 +812,8 @@ def assemble_batch(
         point_charge_positions=point_charge_positions,
         point_charge_values=point_charge_values,
         point_charge_gammas=point_charge_gammas,
+        cell_matrices=cell_matrices,
+        periodic_axes=periodic_axes,
         slices=slices,
         keepalive=[],
         efields=efields,
@@ -796,6 +862,19 @@ def _make_batch(
     if include_spin_channels:
         batch.spin_channels = memory.input(
             storage, storage.spin_channels, ctypes.c_int32, "spin_channels"
+        )
+    if any(axis != 0 for axis in storage.periodic_axes):
+        batch.cell_matrices = memory.input(
+            storage,
+            storage.cell_matrices,
+            ctypes.c_double,
+            "cell_matrices",
+        )
+        batch.periodic_axes = memory.input(
+            storage,
+            storage.periodic_axes,
+            ctypes.c_int32,
+            "periodic_axes",
         )
     if any(efield is not None for efield in storage.efields):
         descriptors, payload = pack_efield_interactions(storage.efields)
@@ -875,11 +954,23 @@ def _compare_case(
     unsupported_properties: dict[str, str],
 ) -> list[str]:
     """Compare exactly the properties exposed by the current public C result ABI."""
+    if case_slice.case.get("oracle_role") == "diagnostic-unbackgrounded-charged":
+        # The reviewed tblite periodic charged-cell diagnostic omits the
+        # uniform neutralizing background. Keep executing it and checking
+        # public status/finiteness, but never turn its known energy/response
+        # convention mismatch into an xTBloom acceptance failure.
+        for property_name in case_slice.expected:
+            print(  # noqa: T201 - CLI validation report
+                f"SKIP {case_slice.case['id']} {property_name}: "
+                "diagnostic-only unbackgrounded charged-cell oracle"
+            )
+        return []
     mappings = [
         ("energy_hartree", "energy"),
         ("forces_hartree_per_bohr", "forces"),
         ("partial_charges_e", "charges"),
         ("point_charge_forces_hartree_per_bohr", "point_charge_forces"),
+        ("strain_derivatives_hartree", "strain_derivatives"),
     ]
     failures: list[str] = []
     oracle_properties = case_slice.case.get("xtbloom_oracle_properties")
@@ -904,14 +995,38 @@ def _compare_case(
             print(f"FAIL {message}")  # noqa: T201 - CLI validation report
             failures.append(message)
             continue
-        tolerance = manifest["tolerances"][tolerance_name]
+        if is_periodic_manifest(manifest):
+            periodic_tolerance_name = {
+                "energy": "energy_hartree",
+                "forces": "forces_hartree_per_bohr",
+                "charges": "partial_charges_e",
+                "point_charge_forces": "point_charge_forces_hartree_per_bohr",
+                "strain_derivatives": "strain_derivatives_hartree",
+            }[tolerance_name]
+            raw_tolerance = case_slice.case.get("tolerances", {}).get(
+                periodic_tolerance_name
+            )
+            if not isinstance(raw_tolerance, (int, float)):
+                message = (
+                    f"{case_slice.case['id']} has no numeric periodic tolerance "
+                    f"for {tolerance_name}"
+                )
+                print(f"FAIL {message}")  # noqa: T201 - CLI validation report
+                failures.append(message)
+                continue
+            atol = float(raw_tolerance)
+            rtol = 0.0
+        else:
+            tolerance = manifest["tolerances"][tolerance_name]
+            atol = float(tolerance["atol"])
+            rtol = float(tolerance["rtol"])
         passed, message = conformance.compare_values(
             case_slice.case["id"],
             property_name,
             case_slice.expected[property_name],
             actual[property_name],
-            float(tolerance["atol"]),
-            float(tolerance["rtol"]),
+            atol,
+            rtol,
         )
         print(  # noqa: T201 - CLI validation report
             ("PASS " if passed else "FAIL ") + message
@@ -928,6 +1043,8 @@ def pinned_compute_options(
     request_charges: bool,
     request_point_forces: bool,
     request_dipoles: bool = True,
+    request_strain: bool = False,
+    electronic_temperature: float | None = None,
 ) -> ComputeOptions:
     """Build strict single-shot model options shared by every conformance run.
 
@@ -955,10 +1072,20 @@ def pinned_compute_options(
         options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
     if request_dipoles:
         options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS
+    if request_strain:
+        options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES
     options.max_scc_iterations = 500
     options.charge_tolerance = 1.0e-10
     options.energy_tolerance = 1.0e-12
-    options.electronic_temperature = 300.0 * XTBLOOM_KELVIN_TO_HARTREE
+    # Both the ordinary and native-periodic tblite corpora are generated at
+    # the CLI's released 300 K Helmholtz convention.  Preserve that default
+    # unless a caller explicitly requests a different energy scale (for
+    # example, a focused zero-temperature physics check).
+    options.electronic_temperature = (
+        300.0 * XTBLOOM_KELVIN_TO_HARTREE
+        if electronic_temperature is None
+        else float(electronic_temperature)
+    )
     return options
 
 
@@ -971,6 +1098,7 @@ class RawBatchOutputs:
     charges: Any | None
     point_forces: Any | None
     dipoles: Any | None
+    strain_derivatives: Any | None
     iterations: Any
     converged: Any
     statuses: Any
@@ -999,6 +1127,7 @@ def run_compute(
     request_charges = bool(options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES)
     request_point_forces = bool(options.flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)
     request_dipoles = bool(options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS)
+    request_strain = bool(options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES)
     energies = (ctypes.c_double * systems)()
     forces = (ctypes.c_double * (3 * atoms))() if request_forces else None
     charges = (ctypes.c_double * atoms)() if request_charges else None
@@ -1006,6 +1135,7 @@ def run_compute(
         (ctypes.c_double * (3 * points))() if request_point_forces and points else None
     )
     dipoles = (ctypes.c_double * (3 * systems))() if request_dipoles else None
+    strain_derivatives = (ctypes.c_double * (9 * systems))() if request_strain else None
     iterations = (ctypes.c_int32 * systems)()
     converged = (ctypes.c_uint8 * systems)()
     statuses = (ctypes.c_int32 * systems)()
@@ -1037,6 +1167,10 @@ def run_compute(
                 )
             if dipoles is not None:
                 result.dipole_moments = memory.output(dipoles, "dipole_moments")
+            if strain_derivatives is not None:
+                result.strain_derivatives = memory.output(
+                    strain_derivatives, "strain_derivatives"
+                )
             result.scc_iterations = memory.output(iterations, "scc_iterations")
             result.scc_converged = memory.output(converged, "scc_converged")
             result.per_system_status = memory.output(statuses, "per_system_status")
@@ -1075,12 +1209,26 @@ def run_compute(
                     f"{backend}/{memory_mode} public inference produced a "
                     f"non-finite dipole for {item.case['id']}"
                 )
+    if request_strain and not (result.flags & XTBLOOM_RESULT_STRAIN_DERIVATIVES):
+        raise conformance.ConformanceError(
+            f"{backend}/{memory_mode} public inference did not publish the "
+            "requested strain derivative result flag"
+        )
+    if strain_derivatives is not None:
+        for index, item in enumerate(storage.slices):
+            values = strain_derivatives[9 * index : 9 * index + 9]
+            if any(not math.isfinite(float(value)) for value in values):
+                raise conformance.ConformanceError(
+                    f"{backend}/{memory_mode} public inference produced non-finite "
+                    f"strain derivatives for {item.case['id']}"
+                )
     return RawBatchOutputs(
         energies=energies,
         forces=forces,
         charges=charges,
         point_forces=point_forces,
         dipoles=dipoles,
+        strain_derivatives=strain_derivatives,
         iterations=iterations,
         converged=converged,
         statuses=statuses,
@@ -1112,16 +1260,21 @@ def run_backend(
         request_charges,
         request_point_forces=bool(storage.point_charge_values),
         request_dipoles=model_tag(manifest) == XTBLOOM_MODEL_GFN2_XTB,
+        request_strain=any(
+            "strain_derivatives_hartree" in item.expected for item in storage.slices
+        ),
+        electronic_temperature=None,
     )
     outputs = run_compute(
         library, storage, options, backend, device_id, cpu_threads, memory_mode
     )
-    energies, forces, charges, point_forces, dipoles = (
+    energies, forces, charges, point_forces, dipoles, strain_derivatives = (
         outputs.energies,
         outputs.forces,
         outputs.charges,
         outputs.point_forces,
         outputs.dipoles,
+        outputs.strain_derivatives,
     )
 
     artifact_name = backend if memory_mode == "host" else f"{backend}-{memory_mode}"
@@ -1151,6 +1304,13 @@ def run_backend(
             properties["molecular_dipole_e_bohr"] = [
                 float(value) for value in dipoles[3 * index : 3 * index + 3]
             ]
+        if (
+            strain_derivatives is not None
+            and "strain_derivatives_hartree" in item.expected
+        ):
+            properties["strain_derivatives_hartree"] = [
+                float(value) for value in strain_derivatives[9 * index : 9 * index + 9]
+            ]
         document = {
             "backend": backend,
             "case_id": item.case["id"],
@@ -1160,7 +1320,7 @@ def run_backend(
                 "scc_iterations": int(outputs.iterations[index]),
             },
             "memory_mode": memory_mode,
-            "method": manifest["method"],
+            "method": manifest.get("method", "GFN2-xTB"),
             "properties": properties,
             "provenance": {
                 "backend": backend,
@@ -1169,7 +1329,9 @@ def run_backend(
                 "spin_channels": storage.spin_channels[index],
             },
             "result_flags": int(outputs.flags),
-            "schema_version": manifest["golden_schema_version"],
+            "schema_version": manifest.get(
+                "golden_schema_version", manifest.get("schema", "unknown")
+            ),
             "unsupported_properties": unsupported_properties,
             "units": manifest["units"],
         }

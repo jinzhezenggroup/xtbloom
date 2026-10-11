@@ -60,6 +60,18 @@ struct ArenaShape {
   std::int64_t d4_weight_elements = 0;
   std::int64_t classical_scratch_elements = 0;
   std::int64_t free_scratch_elements = 0;
+  /* Native XYZ periodic primitive scratch.  These extents are kept in the
+   * arena shape (rather than reconstructed by the launcher) so the setup
+   * query and bind paths share one immutable allocation contract. */
+  bool native_periodic_enabled = false;
+  bool native_d4_enabled = false;
+  std::int64_t native_d4_weight_elements = 0;
+  std::int64_t native_ewald_matrix_elements = 0;
+  std::int64_t native_multipole_matrix_elements = 0;
+  std::int64_t native_multipole_charge_dipole_elements = 0;
+  std::int64_t native_multipole_dipole_dipole_elements = 0;
+  std::int64_t native_multipole_charge_quadrupole_elements = 0;
+  std::int64_t strain_elements = 0;
   std::uint32_t enabled_components = 0u;
   std::uint64_t plan_token = 0u;
   std::size_t provider_device_bytes = 0u;
@@ -185,6 +197,45 @@ struct ArenaShape {
   shape.plan_token = plan.plan_token;
   shape.provider_device_bytes = provider_requirements.solver_device_workspace_bytes;
   shape.provider_host_bytes = provider_requirements.solver_host_workspace_bytes;
+
+  /* Native periodic descriptors are an all-or-nothing setup projection.  A
+   * non-zero topology token marks the native plan; the individual matrix
+   * extents are copied from the sealed setup owner and checked below so a
+   * partially forged descriptor cannot silently reserve molecular scratch. */
+  const auto& native_ewald = plan.native_ewald_batch;
+  const auto& native_multipole = plan.native_multipole_batch;
+  const bool native_any = native_ewald.topology.plan_token != 0u ||
+                          native_multipole.topology.plan_token != 0u ||
+                          plan.native_short_range_batch.topology.plan_token != 0u;
+  if (native_any && (native_ewald.topology.plan_token != plan.plan_token ||
+                     native_multipole.topology.plan_token != plan.plan_token ||
+                     plan.native_short_range_batch.topology.plan_token != plan.plan_token ||
+                     native_ewald.matrix_elements <= 0 || native_multipole.matrix_elements <= 0)) {
+    error = Gfn2SccIterationArenaError::kInvalidPlan;
+    return false;
+  }
+  shape.native_periodic_enabled = native_any;
+  shape.native_d4_enabled =
+      native_any && component_enabled(shape, Gfn2SccPotentialComponent::kD4TwoBody);
+  if (shape.native_d4_enabled &&
+      !checked_multiply(shape.atoms, kGfn2D4MaximumReferences, shape.native_d4_weight_elements)) {
+    error = Gfn2SccIterationArenaError::kSizeOverflow;
+    return false;
+  }
+  if (native_any) {
+    shape.native_ewald_matrix_elements = native_ewald.matrix_elements;
+    shape.native_multipole_matrix_elements = native_multipole.matrix_elements;
+    if (!checked_multiply(shape.native_multipole_matrix_elements, 3,
+                          shape.native_multipole_charge_dipole_elements) ||
+        !checked_multiply(shape.native_multipole_matrix_elements, 9,
+                          shape.native_multipole_dipole_dipole_elements) ||
+        !checked_multiply(shape.native_multipole_matrix_elements, 6,
+                          shape.native_multipole_charge_quadrupole_elements) ||
+        !checked_multiply(shape.batch, 9, shape.strain_elements)) {
+      error = Gfn2SccIterationArenaError::kSizeOverflow;
+      return false;
+    }
+  }
 
   std::int64_t history_square = 0;
   if (!checked_multiply(shape.atoms, 3, shape.coordinates) ||
@@ -346,6 +397,15 @@ void hash_append(std::uint64_t value, std::uint64_t& hash) noexcept {
   hash_append(shape.plan_token, hash);
   hash_append(static_cast<std::uint64_t>(shape.provider_device_bytes), hash);
   hash_append(static_cast<std::uint64_t>(shape.provider_host_bytes), hash);
+  hash_append(shape.native_periodic_enabled ? 1u : 0u, hash);
+  hash_append(shape.native_d4_enabled ? 1u : 0u, hash);
+  hash_append(static_cast<std::uint64_t>(shape.native_d4_weight_elements), hash);
+  hash_append(static_cast<std::uint64_t>(shape.native_ewald_matrix_elements), hash);
+  hash_append(static_cast<std::uint64_t>(shape.native_multipole_matrix_elements), hash);
+  hash_append(static_cast<std::uint64_t>(shape.native_multipole_charge_dipole_elements), hash);
+  hash_append(static_cast<std::uint64_t>(shape.native_multipole_dipole_dipole_elements), hash);
+  hash_append(static_cast<std::uint64_t>(shape.native_multipole_charge_quadrupole_elements), hash);
+  hash_append(static_cast<std::uint64_t>(shape.strain_elements), hash);
   hash_append(static_cast<std::uint64_t>(shape.reports.report_count), hash);
   hash_append(static_cast<std::uint64_t>(shape.reports.system_error_elements), hash);
   return hash == 0u ? 1u : hash;
@@ -894,6 +954,91 @@ void project_primitive_workspace_front(ArenaCursor& cursor, const ArenaShape& sh
                                     shape.atoms,
                                     1,
                                     shape.plan_token};
+  }
+
+  if (shape.native_periodic_enabled) {
+    /* Native XYZ stages are transactionally staged independently from the
+     * legacy ES2/AES2 workspaces.  Keeping these ranges disjoint allows the
+     * SCC composer to switch consumers without exposing a partially evaluated
+     * periodic peer and makes the arena layout stable for Graph replay. */
+    auto& short_range = workspace.native_short_range_workspace;
+    short_range.wrapped_positions = cursor.take<double>(shape.coordinates);
+    short_range.wrapped_position_elements = shape.coordinates;
+    short_range.coordination = cursor.take<double>(shape.atoms);
+    short_range.coordination_elements = shape.atoms;
+    short_range.repulsion_energies = cursor.take<double>(shape.batch);
+    short_range.repulsion_energy_elements = shape.batch;
+    short_range.repulsion_gradients = cursor.take<double>(shape.coordinates);
+    short_range.repulsion_gradient_elements = shape.coordinates;
+    short_range.repulsion_strain = cursor.take<double>(shape.strain_elements);
+    short_range.repulsion_strain_elements = shape.strain_elements;
+    short_range.plan_token = shape.plan_token;
+
+    auto& ewald = workspace.native_ewald_workspace;
+    ewald.wrapped_positions = cursor.take<double>(shape.coordinates);
+    ewald.wrapped_position_elements = shape.coordinates;
+    ewald.matrix = cursor.take<double>(shape.native_ewald_matrix_elements);
+    ewald.matrix_elements = shape.native_ewald_matrix_elements;
+    ewald.shell_potentials = cursor.take<double>(shape.shells);
+    ewald.shell_potential_elements = shape.shells;
+    ewald.energies = cursor.take<double>(shape.batch);
+    ewald.energy_elements = shape.batch;
+    ewald.gradients = cursor.take<double>(shape.coordinates);
+    ewald.gradient_elements = shape.coordinates;
+    ewald.strain = cursor.take<double>(shape.strain_elements);
+    ewald.strain_elements = shape.strain_elements;
+    ewald.plan_token = shape.plan_token;
+
+    auto& multipole = workspace.native_multipole_workspace;
+    multipole.wrapped_positions = cursor.take<double>(shape.coordinates);
+    multipole.wrapped_position_elements = shape.coordinates;
+    multipole.charge_dipole_matrix =
+        cursor.take<double>(shape.native_multipole_charge_dipole_elements);
+    multipole.charge_dipole_matrix_elements = shape.native_multipole_charge_dipole_elements;
+    multipole.dipole_dipole_matrix =
+        cursor.take<double>(shape.native_multipole_dipole_dipole_elements);
+    multipole.dipole_dipole_matrix_elements = shape.native_multipole_dipole_dipole_elements;
+    multipole.charge_quadrupole_matrix =
+        cursor.take<double>(shape.native_multipole_charge_quadrupole_elements);
+    multipole.charge_quadrupole_matrix_elements = shape.native_multipole_charge_quadrupole_elements;
+    multipole.charge_potentials = cursor.take<double>(shape.atoms);
+    multipole.charge_potential_elements = shape.atoms;
+    multipole.dipole_potentials = cursor.take<double>(shape.dipoles);
+    multipole.dipole_potential_elements = shape.dipoles;
+    multipole.quadrupole_potentials = cursor.take<double>(shape.quadrupoles);
+    multipole.quadrupole_potential_elements = shape.quadrupoles;
+    multipole.energies = cursor.take<double>(shape.batch);
+    multipole.energy_elements = shape.batch;
+    multipole.gradients = cursor.take<double>(shape.coordinates);
+    multipole.gradient_elements = shape.coordinates;
+    multipole.strain = cursor.take<double>(shape.strain_elements);
+    multipole.strain_elements = shape.strain_elements;
+    multipole.coordination_adjoint = cursor.take<double>(shape.atoms);
+    multipole.coordination_adjoint_elements = shape.atoms;
+    multipole.plan_token = shape.plan_token;
+
+    if (shape.native_d4_enabled) {
+      auto& d4 = workspace.native_d4_workspace;
+      d4.wrapped_positions = cursor.take<double>(shape.coordinates);
+      d4.wrapped_position_elements = shape.coordinates;
+      d4.weights = cursor.take<double>(shape.native_d4_weight_elements);
+      d4.weight_cn_derivatives = cursor.take<double>(shape.native_d4_weight_elements);
+      d4.weight_charge_derivatives = cursor.take<double>(shape.native_d4_weight_elements);
+      d4.weight_elements = shape.native_d4_weight_elements;
+      d4.coordination = cursor.take<double>(shape.atoms);
+      d4.coordination_elements = shape.atoms;
+      d4.atom_energy = cursor.take<double>(shape.atoms);
+      d4.atom_energy_elements = shape.atoms;
+      d4.atom_potential = cursor.take<double>(shape.atoms);
+      d4.atom_potential_elements = shape.atoms;
+      d4.gradient = cursor.take<double>(shape.coordinates);
+      d4.gradient_elements = shape.coordinates;
+      d4.strain = cursor.take<double>(shape.strain_elements);
+      d4.strain_elements = shape.strain_elements;
+      d4.coordination_adjoint = cursor.take<double>(shape.atoms);
+      d4.coordination_adjoint_elements = shape.atoms;
+      d4.plan_token = shape.plan_token;
+    }
   }
 
   workspace.potential_workspace = {cursor.take<double>(shape.spin_shells),

@@ -16,6 +16,10 @@
 #include "model/gfn2/h0.hpp"
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/mulliken.hpp"
+#include "model/gfn2/periodic_ewald.hpp"
+#include "model/gfn2/periodic_integrals.hpp"
+#include "model/gfn2/periodic_multipole.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 #include "model/gfn2/repulsion.hpp"
 #include "xtbloom/xtbloom.h"
 
@@ -88,6 +92,36 @@ struct RestrictedGfn2ComponentGradients {
 };
 
 /*
+ * Native XYZ-periodic inputs consumed by the stationary force composer.
+ *
+ * The SCC driver evaluates the fixed-charge Ewald and q/d/Q terms after
+ * convergence and retains their Cartesian/strain adjoints in these arrays.
+ * The composer supplies the reverse-mode one-electron/H0 contraction and the
+ * short-range CN/D4 VJPs, so all fields are borrowed views into storage owned
+ * by the enclosing execution object.  An all-zero value selects the original
+ * molecular force path; partially populated values are rejected before any
+ * output is touched.
+ */
+struct RestrictedGfn2PeriodicForceInput {
+  const PeriodicIntegralPlan* integral_plan = nullptr;
+  const PeriodicShortRangePlan* topology_plan = nullptr;
+  const PeriodicShortRangeGeometry* topology_geometry = nullptr;
+  const PeriodicShortRangeWorkspace* topology_workspace = nullptr;
+  const PeriodicEwaldPlan* ewald_plan = nullptr;
+  const PeriodicMultipolePlan* multipole_plan = nullptr;
+
+  const double* ewald_gradients = nullptr;
+  const double* ewald_strain_derivatives = nullptr;
+  const double* multipole_gradients = nullptr;
+  const double* multipole_strain_derivatives = nullptr;
+  const double* multipole_coordination_adjoint = nullptr;
+  const double* d4_coordination_numbers = nullptr;
+
+  void* integral_workspace = nullptr;
+  std::size_t integral_workspace_size = 0u;
+};
+
+/*
  * Caller-owned unpublished storage. Element counts use doubles. Energy-only
  * execution needs only energy_scratch and component workspaces required by
  * enabled energy terms; all force-only pointers/counts may be null/zero.
@@ -120,6 +154,14 @@ struct RestrictedGfn2ForceWorkspace {
   ES2Workspace es2_workspace;
   AES2Workspace aes2_workspace;
   D4Workspace d4_workspace;
+
+  /* Native periodic evaluators need atom-energy and cell-derivative scratch
+   * even for energy-only calls because their public primitive contracts are
+   * transactional over the complete result tuple. */
+  double* periodic_atom_energy_scratch = nullptr;
+  std::int64_t periodic_atom_energy_elements = 0;
+  double* periodic_strain_scratch = nullptr;
+  std::int64_t periodic_strain_elements = 0;
 };
 
 /*
@@ -154,7 +196,8 @@ xtbloom_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     const ExternalPointChargePlan* external_point_charges,
     const RestrictedGfn2StationaryInput& input, double* energies, double* qm_forces,
     double* point_forces, const RestrictedGfn2ComponentGradients& components,
-    const RestrictedGfn2ForceWorkspace& workspace, std::string& error);
+    const RestrictedGfn2ForceWorkspace& workspace, std::string& error,
+    const RestrictedGfn2PeriodicForceInput& periodic = {});
 
 }  // namespace xtbloom::detail::gfn2
 

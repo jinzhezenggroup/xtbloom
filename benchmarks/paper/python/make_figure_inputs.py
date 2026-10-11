@@ -13,6 +13,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from paper_runtime import comparison_workload
+
 
 def qualified_performance_row(row: dict[str, Any]) -> bool:
     return (
@@ -49,6 +51,11 @@ def performance_rows(root: Path) -> list[dict[str, Any]]:
             rows.append(
                 {
                     "source": str(path.relative_to(root)),
+                    "comparison_workload_json": (
+                        json.dumps(comparison_workload(row))
+                        if comparison_workload(row) is not None
+                        else None
+                    ),
                     "suite": row.get("suite"),
                     "hardware_id": row.get("hardware_id"),
                     "dataset": row.get("dataset"),
@@ -137,6 +144,9 @@ def performance_rows(root: Path) -> list[dict[str, Any]]:
         if (
             not candidate["claim_eligible"]
             or baseline is None
+            or candidate["comparison_workload_json"] is None
+            or candidate["comparison_workload_json"]
+            != baseline["comparison_workload_json"]
             or not candidate["_raw_ms"]
             or not baseline["_raw_ms"]
         ):
@@ -244,7 +254,11 @@ def process_pool_comparisons(root: Path) -> list[dict[str, Any]]:
                 int(row["processes"]),
             )
             baseline = baselines.get(key)
-            if baseline is None:
+            if (
+                baseline is None
+                or comparison_workload(row) is None
+                or comparison_workload(row) != comparison_workload(baseline)
+            ):
                 continue
             baseline_samples = [
                 float(value) for value in baseline["steady_fresh"]["raw_ms"]
@@ -306,6 +320,13 @@ def process_pool_comparisons(root: Path) -> list[dict[str, Any]]:
         for row in members:
             row["best_external_reference_at_core_budget"] = row is best
     return output
+
+
+def annotate_gpu_throughput(rows: list[dict[str, Any]]) -> None:
+    """Use the same qualified source/core-budget/workload pair as CPU speedup."""
+    for row in rows:
+        # performance_rows already matched these identities and both claim gates.
+        row["gpu_cpu_throughput_ratio"] = row.get("speedup_vs_cpu")
 
 
 def finite_difference_rows(root: Path) -> list[dict[str, Any]]:
@@ -480,22 +501,7 @@ def main() -> int:
         args.output_dir / "si-second-hardware.csv",
         (row for row in performance if row["suite"] == "second-hardware"),
     )
-    cpu = {
-        (row["dataset"], row["ao_bin"], row["batch_size"]): row["systems_per_second"]
-        for row in figure3
-        if row["backend"] == "cpu"
-        and row["availability"] == "available"
-        and row["claim_eligible"]
-    }
-    for row in figure3:
-        baseline = cpu.get((row["dataset"], row["ao_bin"], row["batch_size"]))
-        row["gpu_cpu_throughput_ratio"] = (
-            row["systems_per_second"] / baseline
-            if row["backend"] == "cuda"
-            and baseline
-            and row["systems_per_second"] is not None
-            else None
-        )
+    annotate_gpu_throughput(figure3)
     write_csv(args.output_dir / "figure3-gpu-crossover.csv", figure3)
     convergence_rows = [
         {

@@ -160,6 +160,36 @@ void pack_vector(std::byte* image, const Segment& segment, const std::vector<T>&
   }
 }
 
+/* LatticeTranslation is a model-only type.  Convert element-by-element at
+ * this boundary instead of relying on coincidental std::array layout so the
+ * CUDA descriptor remains an explicitly sealed POD image. */
+void pack_translation_vector(std::byte* image, const Segment& segment,
+                             const std::vector<gfn2::LatticeTranslation>& source) noexcept {
+  if (segment.elements == 0) return;
+  auto* const destination = reinterpret_cast<Gfn2CudaPeriodicTranslation*>(image + segment.offset);
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    for (int component = 0; component < 3; ++component) {
+      destination[index].index[component] = source[index].index[component];
+      destination[index].cartesian[component] = source[index].cartesian[component];
+    }
+  }
+}
+
+bool valid_translation_metadata(const std::vector<std::int64_t>& offsets,
+                                const std::vector<gfn2::LatticeTranslation>& translations,
+                                std::int64_t batch) noexcept {
+  if (translations.size() > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) ||
+      !valid_offsets(offsets, batch, static_cast<std::int64_t>(translations.size()))) {
+    return false;
+  }
+  for (const auto& translation : translations) {
+    for (int component = 0; component < 3; ++component) {
+      if (!std::isfinite(translation.cartesian[component])) return false;
+    }
+  }
+  return true;
+}
+
 template <typename T>
 T* device_pointer(std::byte* arena, const Segment& segment) noexcept {
   return segment.elements == 0 ? nullptr : reinterpret_cast<T*>(arena + segment.offset);
@@ -323,6 +353,28 @@ struct Gfn2SccSetupInputs::Impl {
     Segment periodic_matrix_offsets;
     Segment periodic_shifts;
     Segment periodic_response;
+    /* Native XYZ periodic immutable image metadata.  The short-range
+     * topology itself is owned by the dedicated CUDA topology owner; this
+     * image carries the one-electron and reciprocal/direct plan leaves that
+     * are specific to the Ewald and multipole descriptors. */
+    Segment native_integral_translation_offsets;
+    Segment native_integral_translations;
+    Segment native_ewald_batch_shell_offsets;
+    Segment native_ewald_atom_shell_offsets;
+    Segment native_ewald_matrix_offsets;
+    Segment native_ewald_shell_hardness;
+    Segment native_ewald_alphas;
+    Segment native_ewald_direct_translation_offsets;
+    Segment native_ewald_direct_translations;
+    Segment native_ewald_reciprocal_translation_offsets;
+    Segment native_ewald_reciprocal_translations;
+    Segment native_multipole_matrix_offsets;
+    Segment native_multipole_volumes;
+    Segment native_multipole_alphas;
+    Segment native_multipole_direct_translation_offsets;
+    Segment native_multipole_direct_translations;
+    Segment native_multipole_reciprocal_translation_offsets;
+    Segment native_multipole_reciprocal_translations;
     Segment warm_start_generations;
     Segment provenance_bindings;
     std::size_t total_bytes = 0u;
@@ -362,8 +414,18 @@ struct Gfn2SccSetupInputs::Impl {
   bool d4_enabled = false;
   bool point_enabled = false;
   bool periodic_enabled = false;
+  bool native_periodic_enabled = false;
   std::int64_t point_count = 0;
   std::int64_t periodic_matrix_elements = 0;
+  std::int64_t native_integral_translation_elements = 0;
+  std::int64_t native_integral_max_translations_per_system = 0;
+  double native_integral_realspace_cutoff = 0.0;
+  std::int64_t native_ewald_matrix_elements = 0;
+  std::int64_t native_multipole_matrix_elements = 0;
+  std::int64_t native_ewald_direct_translation_elements = 0;
+  std::int64_t native_ewald_reciprocal_translation_elements = 0;
+  std::int64_t native_multipole_direct_translation_elements = 0;
+  std::int64_t native_multipole_reciprocal_translation_elements = 0;
   void* upload_image = nullptr;
 
   ~Impl() {
@@ -451,6 +513,47 @@ struct Gfn2SccSetupInputs::Impl {
                                   layout.periodic_shifts) &&
            append_segment<double>(periodic_enabled ? periodic_matrix_elements : 0, cursor,
                                   layout.periodic_response) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_integral_translation_offsets) &&
+           append_segment<Gfn2CudaPeriodicTranslation>(
+               native_periodic_enabled ? native_integral_translation_elements : 0, cursor,
+               layout.native_integral_translations) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_ewald_batch_shell_offsets) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? total_atoms + 1 : 0, cursor,
+                                        layout.native_ewald_atom_shell_offsets) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_ewald_matrix_offsets) &&
+           append_segment<double>(native_periodic_enabled ? total_shells : 0, cursor,
+                                  layout.native_ewald_shell_hardness) &&
+           append_segment<double>(native_periodic_enabled ? batch_size : 0, cursor,
+                                  layout.native_ewald_alphas) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_ewald_direct_translation_offsets) &&
+           append_segment<Gfn2CudaPeriodicTranslation>(
+               native_periodic_enabled ? native_ewald_direct_translation_elements : 0, cursor,
+               layout.native_ewald_direct_translations) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_ewald_reciprocal_translation_offsets) &&
+           append_segment<Gfn2CudaPeriodicTranslation>(
+               native_periodic_enabled ? native_ewald_reciprocal_translation_elements : 0, cursor,
+               layout.native_ewald_reciprocal_translations) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_multipole_matrix_offsets) &&
+           append_segment<double>(native_periodic_enabled ? batch_size : 0, cursor,
+                                  layout.native_multipole_volumes) &&
+           append_segment<double>(native_periodic_enabled ? batch_size : 0, cursor,
+                                  layout.native_multipole_alphas) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_multipole_direct_translation_offsets) &&
+           append_segment<Gfn2CudaPeriodicTranslation>(
+               native_periodic_enabled ? native_multipole_direct_translation_elements : 0, cursor,
+               layout.native_multipole_direct_translations) &&
+           append_segment<std::int64_t>(native_periodic_enabled ? batch_offsets : 0, cursor,
+                                        layout.native_multipole_reciprocal_translation_offsets) &&
+           append_segment<Gfn2CudaPeriodicTranslation>(
+               native_periodic_enabled ? native_multipole_reciprocal_translation_elements : 0,
+               cursor, layout.native_multipole_reciprocal_translations) &&
            append_segment<std::uint64_t>(warm_start_generation == 0u ? 0 : batch_size, cursor,
                                          layout.warm_start_generations) &&
            append_segment<Gfn2SccCacheProvenanceBinding>(provenance_count, cursor,
@@ -709,6 +812,110 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic);
   }
 
+  /* Native XYZ is a complete plan family.  Accepting one leaf without the
+   * matching topology, Ewald, and multipole plans would leave a device
+   * descriptor with plausible but unrelated extents, so reject the whole
+   * source transaction before allocating its upload image. */
+  const auto& native = sources.native_periodic;
+  const bool native_any = native.topology != nullptr || native.integrals != nullptr ||
+                          native.ewald != nullptr || native.multipole != nullptr;
+  const bool native_enabled = native_any;
+  if (native_enabled && periodic_enabled) {
+    return failure(XTBLOOM_STATUS_NOT_SUPPORTED, Error::kCrossPlan, Field::kPeriodic);
+  }
+  if (!native_enabled) {
+    if (driver.native_periodic_enabled()) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+    }
+  } else {
+    if (native.topology == nullptr || native.integrals == nullptr || native.ewald == nullptr ||
+        native.multipole == nullptr || !native.topology->sealed() || !native.integrals->sealed() ||
+        !native.ewald->sealed() || !native.multipole->sealed() ||
+        !driver.native_periodic_enabled()) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic);
+    }
+
+    const auto& topology = *native.topology;
+    const auto& periodic_integrals = *native.integrals;
+    const auto& ewald = *native.ewald;
+    const auto& multipole = *native.multipole;
+    if (topology.batch_size() != batch || topology.total_atoms() != atoms ||
+        topology.atom_offsets() != basis.atom_offsets ||
+        !valid_offsets(topology.atom_offsets(), batch, atoms) ||
+        periodic_integrals.batch_size() != batch || periodic_integrals.total_atoms() != atoms ||
+        periodic_integrals.atom_offsets() != basis.atom_offsets ||
+        periodic_integrals.matrix_offsets() != integrals.matrix_offsets ||
+        periodic_integrals.total_matrix_elements() != matrices ||
+        !valid_offsets(periodic_integrals.atom_offsets(), batch, atoms) ||
+        !valid_offsets(periodic_integrals.matrix_offsets(), batch, matrices) ||
+        periodic_integrals.data() == nullptr ||
+        !valid_translation_metadata(periodic_integrals.data()->translation_offsets,
+                                    periodic_integrals.data()->translations, batch)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+    }
+    std::int64_t expected_ewald_matrix_elements = 0;
+    if (ewald.batch_size() != batch || ewald.total_atoms() != atoms ||
+        ewald.total_shells() != shells || ewald.atom_offsets() != basis.atom_offsets ||
+        ewald.batch_shell_offsets() != basis.batch_shell_offsets ||
+        ewald.atom_shell_offsets() != basis.atom_shell_offsets ||
+        ewald.matrix_offsets() != es2.matrix_offsets() ||
+        !valid_offsets(ewald.atom_offsets(), batch, atoms) ||
+        !valid_offsets(ewald.batch_shell_offsets(), batch, shells) ||
+        !valid_offsets(ewald.atom_shell_offsets(), atoms, shells) ||
+        !valid_offsets(ewald.matrix_offsets(), batch, ewald.total_matrix_elements()) ||
+        !exact_vector(ewald.shell_hardness(), shells) || !exact_vector(ewald.alphas(), batch) ||
+        !valid_translation_metadata(ewald.direct_translation_offsets(), ewald.direct_translations(),
+                                    batch) ||
+        !valid_translation_metadata(ewald.reciprocal_translation_offsets(),
+                                    ewald.reciprocal_translations(), batch)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+    }
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const std::int64_t shell_count =
+          ewald.batch_shell_offsets()[static_cast<std::size_t>(system + 1)] -
+          ewald.batch_shell_offsets()[static_cast<std::size_t>(system)];
+      std::int64_t square = 0;
+      if (!checked_multiply(shell_count, shell_count, square) ||
+          !checked_add(expected_ewald_matrix_elements, square, expected_ewald_matrix_elements)) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kPeriodic,
+                       system);
+      }
+    }
+    if (ewald.total_matrix_elements() != expected_ewald_matrix_elements) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+    }
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const double alpha = ewald.alpha(system);
+      if (!std::isfinite(alpha) || !(alpha > 0.0)) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic,
+                       system);
+      }
+    }
+    if (multipole.batch_size() != batch || multipole.total_atoms() != atoms ||
+        multipole.atom_offsets() != basis.atom_offsets ||
+        !valid_offsets(multipole.atom_offsets(), batch, atoms) ||
+        !valid_offsets(multipole.matrix_offsets(), batch, multipole.matrix_elements()) ||
+        !exact_vector(multipole.dipole_kernel(), atoms) ||
+        !exact_vector(multipole.quadrupole_kernel(), atoms) ||
+        !exact_vector(multipole.multipole_radius(), atoms) ||
+        !exact_vector(multipole.multipole_valence_cn(), atoms) ||
+        !valid_translation_metadata(multipole.direct_translation_offsets(),
+                                    multipole.direct_translations(), batch) ||
+        !valid_translation_metadata(multipole.reciprocal_translation_offsets(),
+                                    multipole.reciprocal_translations(), batch)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+    }
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const double alpha = multipole.alpha(system);
+      const auto& lattice = multipole.lattice(system);
+      if (!std::isfinite(alpha) || !(alpha > 0.0) || !std::isfinite(lattice.volume) ||
+          !(lattice.volume > 0.0)) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic,
+                       system);
+      }
+    }
+  }
+
   try {
     /* Spin constants are chemistry- and shell-order-dependent. Build them
      * from the same sealed basis/wavefunction pair instead of accepting a
@@ -806,8 +1013,34 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     candidate->d4_enabled = d4_enabled;
     candidate->point_enabled = point_enabled;
     candidate->periodic_enabled = periodic_enabled;
+    candidate->native_periodic_enabled = native_enabled;
     candidate->point_count = point_count;
     candidate->periodic_matrix_elements = periodic_matrices;
+    if (native_enabled) {
+      /* Native periodic evaluators own ragged, non-AO matrix layouts.  Seal
+       * their exact aggregate extents here so the device descriptors and
+       * arena query cannot accidentally publish zero-sized matrices. */
+      candidate->native_ewald_matrix_elements = native.ewald->total_matrix_elements();
+      candidate->native_multipole_matrix_elements = native.multipole->matrix_elements();
+      candidate->native_integral_translation_elements =
+          static_cast<std::int64_t>(native.integrals->data()->translations.size());
+      candidate->native_integral_realspace_cutoff = native.integrals->realspace_cutoff(0);
+      for (std::int64_t system = 0; system < batch; ++system) {
+        const auto& translation_offsets = native.integrals->data()->translation_offsets;
+        const auto begin = translation_offsets[static_cast<std::size_t>(system)];
+        const auto end = translation_offsets[static_cast<std::size_t>(system + 1)];
+        candidate->native_integral_max_translations_per_system =
+            std::max(candidate->native_integral_max_translations_per_system, end - begin);
+      }
+      candidate->native_ewald_direct_translation_elements =
+          static_cast<std::int64_t>(native.ewald->direct_translations().size());
+      candidate->native_ewald_reciprocal_translation_elements =
+          static_cast<std::int64_t>(native.ewald->reciprocal_translations().size());
+      candidate->native_multipole_direct_translation_elements =
+          static_cast<std::int64_t>(native.multipole->direct_translations().size());
+      candidate->native_multipole_reciprocal_translation_elements =
+          static_cast<std::int64_t>(native.multipole->reciprocal_translations().size());
+    }
     candidate->enabled_components =
         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
@@ -939,6 +1172,74 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       pack_array(image, candidate->layout.periodic_matrix_offsets, periodic_offsets);
       pack_array(image, candidate->layout.periodic_shifts, sources.periodic.shifts);
       pack_array(image, candidate->layout.periodic_response, sources.periodic.response_matrices);
+    }
+    if (native_enabled) {
+      const auto& periodic_integrals = *native.integrals;
+      const auto& ewald = *native.ewald;
+      const auto& multipole = *native.multipole;
+      const auto& integral_data = *periodic_integrals.data();
+
+      Gfn2SccSetupHostArray<std::int64_t> integral_translation_offsets{
+          integral_data.translation_offsets.data(), batch + 1};
+      pack_array(image, candidate->layout.native_integral_translation_offsets,
+                 integral_translation_offsets);
+      pack_translation_vector(image, candidate->layout.native_integral_translations,
+                              integral_data.translations);
+
+      Gfn2SccSetupHostArray<std::int64_t> ewald_batch_shell_offsets{
+          ewald.batch_shell_offsets().data(), batch + 1};
+      Gfn2SccSetupHostArray<std::int64_t> ewald_atom_shell_offsets{
+          ewald.atom_shell_offsets().data(), atoms + 1};
+      Gfn2SccSetupHostArray<std::int64_t> ewald_matrix_offsets{ewald.matrix_offsets().data(),
+                                                               batch + 1};
+      Gfn2SccSetupHostArray<double> ewald_shell_hardness{ewald.shell_hardness().data(), shells};
+      Gfn2SccSetupHostArray<double> ewald_alphas{ewald.alphas().data(), batch};
+      Gfn2SccSetupHostArray<std::int64_t> ewald_direct_offsets{
+          ewald.direct_translation_offsets().data(), batch + 1};
+      Gfn2SccSetupHostArray<std::int64_t> ewald_reciprocal_offsets{
+          ewald.reciprocal_translation_offsets().data(), batch + 1};
+      pack_array(image, candidate->layout.native_ewald_batch_shell_offsets,
+                 ewald_batch_shell_offsets);
+      pack_array(image, candidate->layout.native_ewald_atom_shell_offsets,
+                 ewald_atom_shell_offsets);
+      pack_array(image, candidate->layout.native_ewald_matrix_offsets, ewald_matrix_offsets);
+      pack_array(image, candidate->layout.native_ewald_shell_hardness, ewald_shell_hardness);
+      pack_array(image, candidate->layout.native_ewald_alphas, ewald_alphas);
+      pack_array(image, candidate->layout.native_ewald_direct_translation_offsets,
+                 ewald_direct_offsets);
+      pack_translation_vector(image, candidate->layout.native_ewald_direct_translations,
+                              ewald.direct_translations());
+      pack_array(image, candidate->layout.native_ewald_reciprocal_translation_offsets,
+                 ewald_reciprocal_offsets);
+      pack_translation_vector(image, candidate->layout.native_ewald_reciprocal_translations,
+                              ewald.reciprocal_translations());
+
+      std::vector<double> multipole_volumes(static_cast<std::size_t>(batch), 0.0);
+      std::vector<double> multipole_alphas(static_cast<std::size_t>(batch), 0.0);
+      for (std::int64_t system = 0; system < batch; ++system) {
+        multipole_volumes[static_cast<std::size_t>(system)] = multipole.lattice(system).volume;
+        multipole_alphas[static_cast<std::size_t>(system)] = multipole.alpha(system);
+      }
+      Gfn2SccSetupHostArray<std::int64_t> multipole_matrix_offsets{
+          multipole.matrix_offsets().data(), batch + 1};
+      Gfn2SccSetupHostArray<double> multipole_volume_values{multipole_volumes.data(), batch};
+      Gfn2SccSetupHostArray<double> multipole_alpha_values{multipole_alphas.data(), batch};
+      Gfn2SccSetupHostArray<std::int64_t> multipole_direct_offsets{
+          multipole.direct_translation_offsets().data(), batch + 1};
+      Gfn2SccSetupHostArray<std::int64_t> multipole_reciprocal_offsets{
+          multipole.reciprocal_translation_offsets().data(), batch + 1};
+      pack_array(image, candidate->layout.native_multipole_matrix_offsets,
+                 multipole_matrix_offsets);
+      pack_array(image, candidate->layout.native_multipole_volumes, multipole_volume_values);
+      pack_array(image, candidate->layout.native_multipole_alphas, multipole_alpha_values);
+      pack_array(image, candidate->layout.native_multipole_direct_translation_offsets,
+                 multipole_direct_offsets);
+      pack_translation_vector(image, candidate->layout.native_multipole_direct_translations,
+                              multipole.direct_translations());
+      pack_array(image, candidate->layout.native_multipole_reciprocal_translation_offsets,
+                 multipole_reciprocal_offsets);
+      pack_translation_vector(image, candidate->layout.native_multipole_reciprocal_translations,
+                              multipole.reciprocal_translations());
     }
     if (warm) {
       pack_array(image, candidate->layout.warm_start_generations, sources.warm_start_generations);
@@ -1776,6 +2077,154 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
         cptr(impl_->layout.periodic_shifts, static_cast<double*>(nullptr)),
         cptr(impl_->layout.periodic_response, static_cast<double*>(nullptr)),
         impl_->geometry_generation};
+  }
+
+  if (impl_->native_periodic_enabled) {
+    /* The lattice topology view is supplied by the dedicated CUDA topology
+     * owner after this setup upload.  All immutable Ewald/multipole metadata
+     * already lives in this arena, so the later patch only installs that view
+     * and never allocates or copies plan data. */
+    candidate.native_integrals = {batch + 1,
+                                  impl_->native_integral_translation_elements,
+                                  impl_->native_integral_max_translations_per_system,
+                                  impl_->native_integral_realspace_cutoff,
+                                  cptr(impl_->layout.native_integral_translation_offsets,
+                                       static_cast<std::int64_t*>(nullptr)),
+                                  cptr(impl_->layout.native_integral_translations,
+                                       static_cast<Gfn2CudaPeriodicTranslation*>(nullptr)),
+                                  token};
+    candidate.native_ewald_batch.topology = {};
+    candidate.native_ewald_batch.batch_shell_offsets =
+        cptr(impl_->layout.native_ewald_batch_shell_offsets, static_cast<std::int64_t*>(nullptr));
+    candidate.native_ewald_batch.batch_shell_offset_elements = batch + 1;
+    candidate.native_ewald_batch.atom_shell_offsets =
+        cptr(impl_->layout.native_ewald_atom_shell_offsets, static_cast<std::int64_t*>(nullptr));
+    candidate.native_ewald_batch.atom_shell_offset_elements = atoms + 1;
+    candidate.native_ewald_batch.matrix_offsets =
+        cptr(impl_->layout.native_ewald_matrix_offsets, static_cast<std::int64_t*>(nullptr));
+    candidate.native_ewald_batch.matrix_offset_elements = batch + 1;
+    /* Native Ewald stores one shell-square matrix per ragged peer.  The AO
+     * ES2 extent is a different topology (shell-pair packed by AO matrix),
+     * so borrowing it here would make the descriptor appear valid while
+     * under-sizing the native matrix arena for heterogeneous batches. */
+    candidate.native_ewald_batch.matrix_elements = impl_->native_ewald_matrix_elements;
+    candidate.native_ewald_batch.shell_hardness =
+        cptr(impl_->layout.native_ewald_shell_hardness, static_cast<double*>(nullptr));
+    candidate.native_ewald_batch.shell_hardness_elements = shells;
+    candidate.native_ewald_batch.alphas =
+        cptr(impl_->layout.native_ewald_alphas, static_cast<double*>(nullptr));
+    candidate.native_ewald_batch.alpha_elements = batch;
+    candidate.native_ewald_batch.direct_translation_offsets = cptr(
+        impl_->layout.native_ewald_direct_translation_offsets, static_cast<std::int64_t*>(nullptr));
+    candidate.native_ewald_batch.direct_translation_offset_elements = batch + 1;
+    candidate.native_ewald_batch.direct_translations =
+        cptr(impl_->layout.native_ewald_direct_translations,
+             static_cast<Gfn2CudaPeriodicTranslation*>(nullptr));
+    candidate.native_ewald_batch.direct_translation_elements =
+        impl_->native_ewald_direct_translation_elements;
+    candidate.native_ewald_batch.reciprocal_translation_offsets =
+        cptr(impl_->layout.native_ewald_reciprocal_translation_offsets,
+             static_cast<std::int64_t*>(nullptr));
+    candidate.native_ewald_batch.reciprocal_translation_offset_elements = batch + 1;
+    candidate.native_ewald_batch.reciprocal_translations =
+        cptr(impl_->layout.native_ewald_reciprocal_translations,
+             static_cast<Gfn2CudaPeriodicTranslation*>(nullptr));
+    candidate.native_ewald_batch.reciprocal_translation_elements =
+        impl_->native_ewald_reciprocal_translation_elements;
+    candidate.native_ewald_batch.positions =
+        cptr(impl_->layout.positions, static_cast<double*>(nullptr));
+    candidate.native_ewald_batch.position_elements = 3 * atoms;
+
+    candidate.native_short_range_batch.atomic_numbers =
+        cptr(impl_->layout.atomic_numbers, static_cast<std::int32_t*>(nullptr));
+    candidate.native_short_range_batch.atomic_number_elements = atoms;
+    candidate.native_short_range_batch.positions =
+        cptr(impl_->layout.positions, static_cast<double*>(nullptr));
+    candidate.native_short_range_batch.position_elements = 3 * atoms;
+    candidate.native_short_range_batch.covalent_radii =
+        cptr(impl_->layout.covalent_radii, static_cast<double*>(nullptr));
+    candidate.native_short_range_batch.covalent_radius_elements = atoms;
+
+    candidate.native_multipole_batch.topology = {};
+    candidate.native_multipole_batch.matrix_offsets =
+        cptr(impl_->layout.native_multipole_matrix_offsets, static_cast<std::int64_t*>(nullptr));
+    candidate.native_multipole_batch.matrix_offset_elements = batch + 1;
+    /* Multipole matrices are packed as local atom-by-atom squares.  Use the
+     * setup owner's sealed aggregate rather than reconstructing atoms*atoms;
+     * ragged batches may have a different packed extent. */
+    candidate.native_multipole_batch.matrix_elements = impl_->native_multipole_matrix_elements;
+    candidate.native_multipole_batch.volumes =
+        cptr(impl_->layout.native_multipole_volumes, static_cast<double*>(nullptr));
+    candidate.native_multipole_batch.volume_elements = batch;
+    candidate.native_multipole_batch.alphas =
+        cptr(impl_->layout.native_multipole_alphas, static_cast<double*>(nullptr));
+    candidate.native_multipole_batch.alpha_elements = batch;
+    candidate.native_multipole_batch.direct_translation_offsets =
+        cptr(impl_->layout.native_multipole_direct_translation_offsets,
+             static_cast<std::int64_t*>(nullptr));
+    candidate.native_multipole_batch.direct_translation_offset_elements = batch + 1;
+    candidate.native_multipole_batch.direct_translations =
+        cptr(impl_->layout.native_multipole_direct_translations,
+             static_cast<Gfn2CudaPeriodicTranslation*>(nullptr));
+    candidate.native_multipole_batch.direct_translation_elements =
+        impl_->native_multipole_direct_translation_elements;
+    candidate.native_multipole_batch.reciprocal_translation_offsets =
+        cptr(impl_->layout.native_multipole_reciprocal_translation_offsets,
+             static_cast<std::int64_t*>(nullptr));
+    candidate.native_multipole_batch.reciprocal_translation_offset_elements = batch + 1;
+    candidate.native_multipole_batch.reciprocal_translations =
+        cptr(impl_->layout.native_multipole_reciprocal_translations,
+             static_cast<Gfn2CudaPeriodicTranslation*>(nullptr));
+    candidate.native_multipole_batch.reciprocal_translation_elements =
+        impl_->native_multipole_reciprocal_translation_elements;
+    candidate.native_multipole_batch.dipole_kernel =
+        cptr(impl_->layout.aes2_dipole_kernel, static_cast<double*>(nullptr));
+    candidate.native_multipole_batch.dipole_kernel_elements = atoms;
+    candidate.native_multipole_batch.quadrupole_kernel =
+        cptr(impl_->layout.aes2_quadrupole_kernel, static_cast<double*>(nullptr));
+    candidate.native_multipole_batch.quadrupole_kernel_elements = atoms;
+    candidate.native_multipole_batch.multipole_radius =
+        cptr(impl_->layout.aes2_multipole_radius, static_cast<double*>(nullptr));
+    candidate.native_multipole_batch.multipole_radius_elements = atoms;
+    candidate.native_multipole_batch.multipole_valence_cn =
+        cptr(impl_->layout.aes2_multipole_valence_cn, static_cast<double*>(nullptr));
+    candidate.native_multipole_batch.multipole_valence_cn_elements = atoms;
+    candidate.native_multipole_batch.positions =
+        cptr(impl_->layout.positions, static_cast<double*>(nullptr));
+    candidate.native_multipole_batch.position_elements = 3 * atoms;
+    candidate.native_short_range_batch.topology = {};
+    candidate.native_ewald_batch.shell_charges = nullptr;
+    candidate.native_ewald_batch.shell_charge_elements = 0;
+    candidate.native_multipole_batch.coordination_numbers = nullptr;
+    candidate.native_multipole_batch.coordination_number_elements = 0;
+    candidate.native_multipole_batch.atomic_charges = nullptr;
+    candidate.native_multipole_batch.atomic_charge_elements = 0;
+    candidate.native_multipole_batch.atomic_dipoles = nullptr;
+    candidate.native_multipole_batch.atomic_dipole_elements = 0;
+    candidate.native_multipole_batch.atomic_quadrupoles = nullptr;
+    candidate.native_multipole_batch.atomic_quadrupole_elements = 0;
+
+    /* Native D4 shares the immutable 50-bohr lattice topology and parameter
+     * image with the molecular D4 plan, but keeps its own role-specific
+     * evaluator and workspace.  Numerical CN/charge views are installed by
+     * the runtime once the committed SCC transaction is available. */
+    if (impl_->d4_enabled) {
+      candidate.native_d4_batch.topology = {};
+      candidate.native_d4_batch.parameters = candidate.d4_parameters;
+      candidate.native_d4_batch.atomic_numbers =
+          cptr(impl_->layout.atomic_numbers, static_cast<std::int32_t*>(nullptr));
+      candidate.native_d4_batch.atomic_number_elements = atoms;
+      candidate.native_d4_batch.positions =
+          cptr(impl_->layout.positions, static_cast<double*>(nullptr));
+      candidate.native_d4_batch.position_elements = 3 * atoms;
+      candidate.native_d4_batch.coordination_numbers = nullptr;
+      candidate.native_d4_batch.coordination_number_elements = 0;
+      candidate.native_d4_batch.atomic_charges = nullptr;
+      candidate.native_d4_batch.atomic_charge_elements = 0;
+      candidate.native_d4_batch.plan_token = token;
+      candidate.native_d4_batch.geometry_generation = impl_->geometry_generation;
+      candidate.native_d4_batch.image_cutoff = 50.0;
+    }
   }
 
   candidate.scalar_bridge_batch = {device_topology, batch + 1, batch + 1,

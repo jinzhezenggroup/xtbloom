@@ -80,12 +80,14 @@ device, and mixed descriptors, including independently placed interaction
 descriptor and payload buffers.
 
 The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
-periodic `XYZ` inputs, but valid `XYZ` compute requests return
+periodic `XYZ` inputs. CPU GFN2 and CUDA GFN2 (through a validated CPU host
+bridge) execute the released periodic path; CUDA-native Ewald/multipole
+kernels remain outstanding, and GFN1 periodic requests still return
 `NOT_IMPLEMENTED` transactionally. GFN1 field/dipole properties, ROCm, native
 drivers for geometry optimization and molecular dynamics, solvation,
-native/analytic Hessians, and periodic GFN1/GFN2 execution are not implemented.
-C-ABI geometry-optimization and molecular-dynamics drivers, solvation,
-native/analytic Hessians, and periodic GFN1/GFN2 execution are not implemented.
+native/analytic Hessians, and periodic GFN1 execution are not implemented.
+C-ABI geometry-optimization and molecular-dynamics drivers, solvation, and
+native/analytic Hessians are not implemented.
 The direct Python optimizer, ASE-driven molecular dynamics, Python numerical
 Hessian/vibrational analysis, and browser/dpdata optimizers are higher-level
 adapters built on repeated native calculations.

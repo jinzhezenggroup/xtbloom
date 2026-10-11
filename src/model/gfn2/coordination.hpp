@@ -11,6 +11,10 @@
 
 namespace xtbloom::detail::gfn2 {
 
+class PeriodicShortRangePlan;
+struct PeriodicShortRangeGeometry;
+struct PeriodicShortRangeWorkspace;
+
 /*
  * Geometry-independent data for the GFN2 double-exponential coordination
  * number. The atom-wise radii are laid out like the input batch so this plan
@@ -49,6 +53,24 @@ xtbloom_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const d
 xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
                                                const double* positions, const double* dE_dcn,
                                                double* gradients, std::string& error);
+
+/*
+ * Periodic counterparts use the complete 25-bohr translation topology and a
+ * prepared wrapped geometry. The value output is overwritten. Cartesian and
+ * strain derivatives are accumulated transactionally; strain is row-major
+ * dE/d epsilon with nine Hartree values per system.
+ */
+xtbloom_status_t evaluate_periodic_coordination_cpu(const CoordinationPlan& plan,
+                                                    const PeriodicShortRangePlan& periodic_plan,
+                                                    const PeriodicShortRangeGeometry& geometry,
+                                                    double* coordination_numbers,
+                                                    const PeriodicShortRangeWorkspace& workspace,
+                                                    std::string& error);
+
+xtbloom_status_t add_periodic_coordination_gradient_cpu(
+    const CoordinationPlan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* dE_dcn, double* gradients,
+    double* strain_derivatives, const PeriodicShortRangeWorkspace& workspace, std::string& error);
 
 }  // namespace xtbloom::detail::gfn2
 

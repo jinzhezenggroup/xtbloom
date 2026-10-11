@@ -71,6 +71,16 @@ def _gfn1_case_data_dict(case_id: str) -> dict[str, object]:
     }
 
 
+def _periodic_case_data_dict(
+    case_id: str, nframes: int = 1, distort: bool = False
+) -> dict[str, object]:
+    """Build a full-XYZ periodic dpdata fixture with an 8 Angstrom cell."""
+    data = _case_data_dict(case_id, nframes=nframes, distort=distort)
+    data["cells"] = np.repeat(np.diag([8.0, 8.0, 8.0])[None, ...], nframes, axis=0)
+    data["nopbc"] = False
+    return data
+
+
 def _ensure_driver_registered() -> type:
     """Load and return the registered xTBloom dpdata driver class."""
     # The entry point is registered after a normal wheel install; for a source
@@ -330,16 +340,68 @@ def test_driver_raises_instead_of_publishing_failed_frame_nans() -> None:
         system.predict(driver="xtbloom", charge=-1, backend="cpu", max_scc_iterations=1)
 
 
-def test_driver_rejects_periodic() -> None:
-    """Reject periodic dpdata systems unsupported by the molecular ABI."""
+def test_driver_labels_periodic_frames() -> None:
+    """Convert dpdata cells to bohr and publish native periodic labels."""
     _ensure_driver_registered()
-    from xtbloom.exceptions import XTBloomNotSupportedError
-
-    data = _case_data_dict("ketene")
-    data["nopbc"] = False
+    data = _periodic_case_data_dict("ketene")
     system = dpdata.System(data=data)
-    with pytest.raises(XTBloomNotSupportedError):
-        system.predict(driver="xtbloom")
+    labeled = system.predict(driver="xtbloom", backend="cpu")
+
+    assert np.isfinite(labeled.data["energies"]).all()
+    assert labeled.data["forces"].shape == (1, 5, 3)
+    assert np.isfinite(labeled.data["forces"]).all()
+    np.testing.assert_allclose(labeled.data["cells"], data["cells"])
+    assert bool(np.asarray(labeled.data["nopbc"]).item()) is False
+
+
+def test_driver_labels_mixed_periodic_and_molecular_frames() -> None:
+    """Pack periodic and nonperiodic frames together without losing either."""
+    from xtbloom.dpdata import XTBloomDriver
+
+    data = _periodic_case_data_dict("ketene", nframes=2)
+    data["nopbc"] = np.array([False, True], dtype=bool)
+    labeled = XTBloomDriver(backend="cpu").label(data)
+
+    assert labeled["energies"].shape == (2,)
+    assert labeled["forces"].shape == (2, 5, 3)
+    assert np.isfinite(labeled["energies"]).all()
+    assert np.isfinite(labeled["forces"]).all()
+    np.testing.assert_array_equal(np.asarray(labeled["nopbc"]), np.array([False, True]))
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (lambda data: data.pop("cells"), "cells"),
+        (lambda data: data.__setitem__("cells", np.eye(3)), "shape"),
+        (
+            lambda data: data.__setitem__(
+                "cells",
+                np.array([[[np.nan, 0.0, 0.0], [0.0, 8.0, 0.0], [0.0, 0.0, 8.0]]]),
+            ),
+            "finite",
+        ),
+        (
+            lambda data: data.__setitem__("nopbc", np.array([False, True])),
+            "nopbc",
+        ),
+        (
+            lambda data: data.__setitem__("nopbc", np.array([0.5])),
+            "boolean",
+        ),
+    ],
+)
+def test_driver_rejects_malformed_periodic_metadata(
+    mutator: Callable[[dict[str, object]], object], message: str
+) -> None:
+    """Reject periodic metadata before constructing a native batch request."""
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomValueError
+
+    data = _periodic_case_data_dict("ketene")
+    mutator(data)
+    with pytest.raises(XTBloomValueError, match=message):
+        XTBloomDriver(backend="cpu").label(data)
 
 
 @pytest.mark.parametrize("coords", [None, np.array(1.0)])
@@ -588,14 +650,47 @@ def test_minimizer_raises_for_failed_frames() -> None:
         )
 
 
-def test_minimizer_rejects_periodic() -> None:
-    """Reject periodic dpdata systems unsupported by the molecular ABI."""
-    from xtbloom.dpdata import XTBloomDriver
-    from xtbloom.exceptions import XTBloomNotSupportedError
+def test_minimizer_preserves_periodic_cell_during_geometry_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep dpdata's fixed cell while the minimizer updates coordinates."""
+    from xtbloom.dpdata import XTBloomDriver, XTBloomMinimizer
 
     _ensure_minimizer_registered()
-    data = _distorted_data("ketene")
-    data["nopbc"] = False
-    system = dpdata.System(data=data)
-    with pytest.raises(XTBloomNotSupportedError):
-        system.minimize(minimizer="xtbloom", driver=XTBloomDriver(backend="cpu"))
+    data = _periodic_case_data_dict("ketene")
+    captured: list[list[Structure]] = []
+
+    class FakeBatchCalculator:
+        """Return a converged result while exposing adapter-owned structures."""
+
+        def __init__(
+            self, structures: list[Structure], _method: str, **_kwargs: object
+        ) -> None:
+            captured.append(structures)
+            self._structures = structures
+
+        def compute(self) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(
+                    energy=0.0,
+                    forces=np.zeros_like(structure.positions),
+                )
+                for structure in self._structures
+            ]
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
+    labeled = XTBloomMinimizer(
+        driver=XTBloomDriver(backend="cpu"), max_steps=1
+    ).minimize(data)
+
+    assert len(captured) == 1
+    assert captured[0][0].pbc is True
+    np.testing.assert_allclose(
+        captured[0][0].cell,
+        np.diag([8.0, 8.0, 8.0]) / _BOHR,
+    )
+    np.testing.assert_allclose(labeled["cells"], data["cells"])
+    np.testing.assert_array_equal(labeled["nopbc"], data["nopbc"])

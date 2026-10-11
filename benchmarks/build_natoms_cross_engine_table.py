@@ -18,6 +18,7 @@ import json
 import math
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,15 @@ TABLE_COLUMNS = (
 
 class PublicationError(RuntimeError):
     """An invalid or incomplete public benchmark selection."""
+
+
+@dataclass(frozen=True)
+class LegacyArtifact:
+    """One exact artifact record retained through the Git-history ledger."""
+
+    sha256: str
+    bytes: int
+    source_commit: str
 
 
 def _sha256(path: Path) -> str:
@@ -179,21 +189,32 @@ def _validate_checksummed_artifact(
         raise PublicationError(f"reference artifact is not checksum-qualified: {path}")
 
 
-def _legacy_large_artifacts() -> dict[str, str]:
-    """Load exact hashes for reproducible raw evidence omitted by the size policy."""
+def _legacy_large_artifacts() -> dict[str, LegacyArtifact]:
+    """Load exact identities for reproducible evidence omitted by size policy."""
     ledger = REPOSITORY_ROOT / "benchmarks/evidence/legacy-large-artifacts.tsv"
     try:
         with ledger.open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle, delimiter="\t"))
     except OSError as exc:
         raise PublicationError(f"cannot read {ledger}: {exc}") from exc
-    bindings: dict[str, str] = {}
+    bindings: dict[str, LegacyArtifact] = {}
     for row in rows:
         path = row.get("path", "")
         digest = row.get("sha256", "")
-        if not path or HEX_64.fullmatch(digest) is None or path in bindings:
+        source_commit = row.get("source_commit", "")
+        try:
+            byte_count = int(row.get("bytes", ""))
+        except ValueError as exc:
+            raise PublicationError(f"invalid record in {ledger}") from exc
+        if (
+            not path
+            or HEX_64.fullmatch(digest) is None
+            or HEX_40.fullmatch(source_commit) is None
+            or byte_count <= 0
+            or path in bindings
+        ):
             raise PublicationError(f"invalid record in {ledger}")
-        bindings[path] = digest
+        bindings[path] = LegacyArtifact(digest, byte_count, source_commit)
     return bindings
 
 
@@ -217,9 +238,30 @@ def _validate_reference_binding(
     if kind == "retained-artifact":
         if path.is_file():
             _validate_checksummed_artifact(path, reference_sha256)
-        elif _legacy_large_artifacts().get(relative) != reference_sha256:
+        else:
+            legacy = _legacy_large_artifacts().get(relative)
+            if legacy is not None and legacy.sha256 == reference_sha256:
+                return
             raise PublicationError(
                 f"{engine}.{panel_id} reference is neither retained nor size-ledgered"
+            )
+        return
+    if kind == "legacy-artifact":
+        if path.is_file():
+            raise PublicationError(
+                f"{engine}.{panel_id} legacy reference is still retained"
+            )
+        legacy = _legacy_large_artifacts().get(relative)
+        declared_bytes = _positive_int(binding, "bytes")
+        declared_source_commit = _required_string(binding, "source_commit")
+        if (
+            legacy is None
+            or legacy.sha256 != reference_sha256
+            or legacy.bytes != declared_bytes
+            or legacy.source_commit != declared_source_commit
+        ):
+            raise PublicationError(
+                f"{engine}.{panel_id} legacy reference does not match the size ledger"
             )
         return
     if kind == "consumer-record":

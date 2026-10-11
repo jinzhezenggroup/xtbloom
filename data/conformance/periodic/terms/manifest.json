@@ -1,0 +1,308 @@
+{
+  "conventions": {
+    "ao_order": "real spherical harmonics m=-l,...,+l; p order is py,pz,px",
+    "array_storage": "Fortran column-major; logical shapes are stored with every array",
+    "charge_ewald": "neutral shell-resolved GFN2 ES2; no uniform charged-cell background",
+    "cn_cartesian_derivative": "[cartesian_axis, displaced_atom, coordination_atom]",
+    "cn_strain_derivative": "[affine_row, affine_column, coordination_atom]",
+    "gradient": "positive Cartesian derivative dE/dR in Hartree/bohr",
+    "moment_origin": "multipole integral operator centered on the last AO index",
+    "multipole_boundary": "conducting periodic boundary; reviewed direct cutoff is 100 bohr",
+    "quadrupole_packing": [
+      "xx",
+      "xy",
+      "yy",
+      "xz",
+      "yz",
+      "zz"
+    ],
+    "real_values": "IEEE binary64 atomic units",
+    "strain_derivative": "dE/d_epsilon for simultaneous affine deformation of positions and direct lattice"
+  },
+  "fixtures": [
+    {
+      "golden": "data/conformance/periodic/terms/golden/cn.json",
+      "golden_sha256": "9c5069fb9a80b7ba1fb2068ccdd1ecd0dc89bc072463e9d8002013191fc17494",
+      "mode": "cn",
+      "raw": "data/conformance/periodic/terms/raw/cn.txt",
+      "raw_sha256": "535bc7520e269c89c622cae646105b142881d1ca551c40b3c499a9ae1957cd45"
+    },
+    {
+      "golden": "data/conformance/periodic/terms/golden/repulsion.json",
+      "golden_sha256": "b42f9a1c0147537106523d9703f783dc8e645e26c67a0f80e5bd006ba2f039cb",
+      "mode": "repulsion",
+      "raw": "data/conformance/periodic/terms/raw/repulsion.txt",
+      "raw_sha256": "b4d1e5c9b335808dabe70b9a4ee6c59c18a02d6addcacf1b1d34b1fab330931d"
+    },
+    {
+      "golden": "data/conformance/periodic/terms/golden/d4.json",
+      "golden_sha256": "55d4b914979a5c0ca7652eba9cfbeb69039e3f85661195fa838276d509d3daef",
+      "mode": "d4",
+      "raw": "data/conformance/periodic/terms/raw/d4.txt",
+      "raw_sha256": "17f67d6703a5995b729a19c1588b3013852384306c9c71eb60d4c18f6b9e56d5"
+    },
+    {
+      "golden": "data/conformance/periodic/terms/golden/integrals-h0.json",
+      "golden_sha256": "fc017352c46135cfcb668bad5de5e6fcdd4c5d74051aa8a7b986496335675e67",
+      "mode": "integrals-h0",
+      "raw": "data/conformance/periodic/terms/raw/integrals-h0.txt",
+      "raw_sha256": "45e1d156e97eec5140a6365aa0bfd39fcca8cc54e05861c304a31009b89d591b"
+    },
+    {
+      "golden": "data/conformance/periodic/terms/golden/charge-ewald.json",
+      "golden_sha256": "52c5adcb03c577a3f7ae6635c4a4df21154442ccd9ab10b5c080b420568546e2",
+      "mode": "charge-ewald",
+      "raw": "data/conformance/periodic/terms/raw/charge-ewald.txt",
+      "raw_sha256": "18e8aeacf53b012df92721d053c590add7146900f9ce445310fe680174c537be"
+    },
+    {
+      "golden": "data/conformance/periodic/terms/golden/multipoles.json",
+      "golden_sha256": "1615da35581fc08f97d4cc08d48591436461fc970e00fbb8daacda833a0dc5be",
+      "mode": "multipoles",
+      "raw": "data/conformance/periodic/terms/raw/multipoles.txt",
+      "raw_sha256": "28890dda48d08da03929ac346dd888e8f8d6440e40b266629343ca9742b11a2e"
+    }
+  ],
+  "generator": {
+    "path": "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py",
+    "sha256": "5459513ce86dc5680531d63b436219fd38a415b7362ebd3718f1fa6f3b336ebd"
+  },
+  "input": {
+    "id": "water_skew",
+    "lattice_order": "three direct lattice vectors stored as columns",
+    "path": "data/conformance/periodic/terms/inputs/water_skew.in",
+    "quadrupole_packing": [
+      "xx",
+      "xy",
+      "yy",
+      "xz",
+      "yz",
+      "zz"
+    ],
+    "sha256": "d97437bb78898c57b72a2f1015aab678748ec55d887ba52640dc65c95748f9a3",
+    "units": {
+      "charges": "elementary_charge",
+      "lattice_vectors": "bohr",
+      "positions": "bohr"
+    }
+  },
+  "legal": {
+    "oracle_license": "LGPL-3.0-or-later",
+    "probe_license": "GPL-3.0-or-later",
+    "source_data_boundary": "Tracked raw and golden files are independently generated numerical output; no upstream source or geometry bytes are copied."
+  },
+  "probe": {
+    "build_attestation": {
+      "build_id": "tblite-133f91ef-gfortran14-netlib-613ec662",
+      "path": "data/conformance/periodic/tblite-build.json",
+      "sha256": "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782"
+    },
+    "build_script": "tools/oracle/periodic_gfn2_terms/build_probe.sh",
+    "build_script_sha256": "4e8c92f36e336131034db5da5da822bb36f9ece2773c3b1a5e8c3ed37b4c6407",
+    "command_template": [
+      "{probe}",
+      "{mode}",
+      "data/conformance/periodic/terms/inputs/water_skew.in"
+    ],
+    "compiler": {
+      "sha256": "8b326f73392ec291fe6b0a75a6c54f3d36fe8a55f5ad6a8cbaaef11392198810",
+      "version": "GNU Fortran (conda-forge gcc 14.3.0-20) 14.3.0"
+    },
+    "environment": {
+      "MKL_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1"
+    },
+    "fortran_modules": {
+      "mctc_env.mod": "bb9a5628f35651483f740070c4779d9775fd8c24c7285e2e6b42fd9a2fbe5f9c",
+      "mctc_io.mod": "bf8ea57040ede5f3f6652567561eeed78556502b8466156b570e622cbbb4620b",
+      "tblite_adjlist.mod": "d5c14eaf40eb86ea435942b2e60c2517aa30fa93ae4626b1bdf1882af5aa41c2",
+      "tblite_basis_type.mod": "0c79e58f9844f9c164709a524fd414d1b20959827dbe3b33ef597c4c49e85101",
+      "tblite_container_cache.mod": "53912c83afd8cbe43e346282955e524718367c4ad68638065ef31da23780ee23",
+      "tblite_coulomb_cache.mod": "b94df51216feee993235e2f0644aa3e7b9e7bee8e1858fa30b6a88143a63d650",
+      "tblite_cutoff.mod": "c55cb14792120a49f55b646155fda22481c30a9eac025d5bc9fd4562868272f8",
+      "tblite_disp_cache.mod": "9e8789960327ee2eb6e5e5e5e9a0711cef687128cd2a847abcafccc428bf09b4",
+      "tblite_scf_potential.mod": "3d18457941a8d5d1fbf5c3c18c230b7b24583fb36dfb1864f99250fe5d3144fa",
+      "tblite_wavefunction_type.mod": "92f49b025d83354d60e22027c4236ccd3760b13ed75d589d95389af86f7b615f",
+      "tblite_xtb_calculator.mod": "303555da3eafed5c0a61551ed68898807025996f0ce2cc95f177ad6a262ddefa",
+      "tblite_xtb_gfn2.mod": "319344b7ddff38a645c6efdf7c19480504c5e52d7e7c04ce34abc359b7ba7478",
+      "tblite_xtb_h0.mod": "1c6eff49618b0216952ad1065cb31a9f2fbdbb2b1298f51911ce492356f1da4d"
+    },
+    "runtime": {
+      "discovery": "ldd",
+      "non_system_libraries": [
+        {
+          "filename": "libblas.so.3.9.0",
+          "sha256": "870abf9a519469ade3697ecdfbaec0353bf196005ec4127ce28e045aabb04e30",
+          "soname": "libblas.so.3"
+        },
+        {
+          "filename": "libdftd4.so.4.2.0",
+          "sha256": "5eaf8f6a243643fba2a9cb32ab18348ece9c23913a73a6f5cc15d3534f643e5f",
+          "soname": "libdftd4.so.4"
+        },
+        {
+          "filename": "libgcc_s.so.1",
+          "sha256": "506dfa70381132c6eee046d7b59b42203bdce7eb0e8a734eaa6f9bfe729e7cb8",
+          "soname": "libgcc_s.so.1"
+        },
+        {
+          "filename": "libgfortran.so.5.0.0",
+          "sha256": "936db6cb4edb1f41f53f5f73c5438efc068bf092ce9a8172940f21fe9e9abf42",
+          "soname": "libgfortran.so.5"
+        },
+        {
+          "filename": "libgomp.so.1.0.0",
+          "sha256": "3e77b229db1bc47d2f5136a0640a31c48af9e7f6c555b3334858bf298876d95f",
+          "soname": "libgomp.so.1"
+        },
+        {
+          "filename": "libjonquil.so.0.3.2",
+          "sha256": "ce2762627ed5c51ccdcf7c87b7a158a17b644163e78caaeb7cfa2a9fb1dc40a2",
+          "soname": "libjonquil.so.0"
+        },
+        {
+          "filename": "liblapack.so.3.9.0",
+          "sha256": "185986f1366b05ae29ebaeb5c61aa2273aa72e7b0ffc5d89b35b8f1d1db9b881",
+          "soname": "liblapack.so.3"
+        },
+        {
+          "filename": "libmctc-lib.so.0.5.2",
+          "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38",
+          "soname": "libmctc-lib.so.0"
+        },
+        {
+          "filename": "libmulticharge.so.0.5.0",
+          "sha256": "d8db344a0a2fce9595711d35eec40e624bd75ab514c971458e46bf96cd3db407",
+          "soname": "libmulticharge.so.0"
+        },
+        {
+          "filename": "libquadmath.so.0.0.0",
+          "sha256": "8cdeae02cda73d07773a97b9939f7e25b594081a288c60cf058e1c32959e1252",
+          "soname": "libquadmath.so.0"
+        },
+        {
+          "filename": "libs-dftd3.so.1.4.0",
+          "sha256": "1c856b7edf915c3d32ed181684b5bc1785ff0b4c42804882e47a571e14904a78",
+          "soname": "libs-dftd3.so.1"
+        },
+        {
+          "filename": "libtblite.so.0.7.0",
+          "sha256": "145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93",
+          "soname": "libtblite.so.0"
+        },
+        {
+          "filename": "libtoml-f.so.0.5.2",
+          "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b",
+          "soname": "libtoml-f.so.0"
+        }
+      ],
+      "sha256": "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc"
+    },
+    "source": "tools/oracle/periodic_gfn2_terms/probe.f90",
+    "source_sha256": "89b6500f08dd89b0b1d2f4f45d62bd46ce127ea4b07b8b75340c8355d21ff6dd"
+  },
+  "schema": "xtbloom-periodic-gfn2-term-manifest-v1",
+  "sources": {
+    "dftd4": {
+      "files": {
+        "src/dftd4/cutoff.f90": {
+          "git_blob": "86a856b5e738f6c43bde5b0597f05987c9502de5",
+          "sha256": "e9e4b2b6d0cfdb138ff304cf109e59a9549998d2b9008821b4c53a5361c01e1a"
+        },
+        "src/dftd4/damping/atm.f90": {
+          "git_blob": "c6162c97a380362a0bf4059bad7c24d7434f8d4d",
+          "sha256": "7f7e718bfa0892bd48591258b00430e3f7327693275f757fa6e3b27947b4f252"
+        },
+        "src/dftd4/damping/rational.f90": {
+          "git_blob": "9d359c95d2b67365b9e61ec33ad663b564e53334",
+          "sha256": "449c052716272c1bb35ad0f41bb23b9a0df019de45c43eb308267c568724d396"
+        },
+        "src/dftd4/disp.f90": {
+          "git_blob": "73253cee0288803eedcea29f9704b6b9b2bbf4ce",
+          "sha256": "e83b1b3cdf1bb2caa56d4ec5b7014b02eb41f362a160dba7e3adbf82dabe2cad"
+        },
+        "src/dftd4/model/d4.f90": {
+          "git_blob": "33ed0ea918a81bc88a22110cc856d7988b18f956",
+          "sha256": "dc421a2ccf76227ae028f45ad84efd1683505b803f926dfda24be1b5d223b220"
+        },
+        "src/dftd4/model/type.f90": {
+          "git_blob": "f0b4a8465ac55e00f88a0fdbd23984669f7af58f",
+          "sha256": "5c7c9170328386c2799036a0ee047525a2911367aba818ba161fb17b720338b3"
+        }
+      },
+      "license": "LGPL-3.0-or-later",
+      "repository": "https://github.com/dftd4/dftd4",
+      "revision": "6e1f59c3f39d919a2dbef0601d2576727c8b30e8"
+    },
+    "mctc-lib": {
+      "files": {
+        "src/mctc/ncoord/erf.f90": {
+          "git_blob": "5ea3c2c4056c3eca51e76629e0e780061923f253",
+          "sha256": "6bc976e03e290bc01bccfeee3016513e6154ef6267f152d36b7c99a7d706fea9"
+        },
+        "src/mctc/ncoord/erf/dftd4.f90": {
+          "git_blob": "830098d3040230fafc730a59d4c611b8875e0462",
+          "sha256": "3bc326ecfbd5a8b43cac9f021a1472df335f7ef041e2f33916906fa71c60a3ab"
+        }
+      },
+      "license": "Apache-2.0",
+      "repository": "https://github.com/grimme-lab/mctc-lib",
+      "revision": "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
+    },
+    "multicharge": {
+      "license": "LGPL-3.0-or-later",
+      "repository": "https://github.com/grimme-lab/multicharge",
+      "revision": "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
+      "scientific_role": "linked runtime provenance only; GFN2 qmod does not invoke EEQ"
+    },
+    "tblite": {
+      "files": {
+        "src/tblite/coulomb/charge/effective.f90": {
+          "git_blob": "67b91d63e13803e5bc297597e7312404bb1e576c",
+          "sha256": "1d66415c1046e3b83bde1434f6e1ea5697a95362332c70a8db08b2668a07214a"
+        },
+        "src/tblite/coulomb/ewald.f90": {
+          "git_blob": "363a3b824d57185d19df79a2d7ce09e382f54a65",
+          "sha256": "561e46c89f7dd2551936faf13d1749de1712aa186ef4ca1e83a05f5168236b44"
+        },
+        "src/tblite/coulomb/multipole.f90": {
+          "git_blob": "9c4f86dc242f7b161c8d9cddeff0df6c2bb72f75",
+          "sha256": "16f464f878876e9948c16042af7665518dc2c86d98332b51f661f22dffe2a8b6"
+        },
+        "src/tblite/disp/d4.f90": {
+          "git_blob": "55b110037de26e260b3c761c352248268081b90f",
+          "sha256": "3eb1577c7504da68da0bb7f8345ea9945996f45939dcb26744c9d4d034ede0d8"
+        },
+        "src/tblite/integral/native/integrals.f90": {
+          "git_blob": "37a0c95d13c39aaf42c28c75bd264ae5efbaf7a3",
+          "sha256": "39a44a9a03e5a5c8e0a70d5217e36ca50544e7e652e5dbeedb8fe95544341798"
+        },
+        "src/tblite/repulsion/effective.f90": {
+          "git_blob": "236d646e365f229e9ab36976d00523290091e47a",
+          "sha256": "41f3ff370a59daba5687d00c47b804c14c8af0837da4c51d3a83d594fe079ed5"
+        },
+        "src/tblite/xtb/gfn2.f90": {
+          "git_blob": "1da6f7389bac5a8ade24276652c6da6f64b5978d",
+          "sha256": "cfe0d99d744be38f8e25a3271734ac16ae06156999b6182059b63782e8e6b432"
+        },
+        "src/tblite/xtb/h0.f90": {
+          "git_blob": "14edb1d731f7ba716a83db3bb7583bc245075e0b",
+          "sha256": "40935bb3a80286fac01670e2b7945770fc4f2d1ed922e22e8b859ce4b283608a"
+        }
+      },
+      "license": "LGPL-3.0-or-later",
+      "repository": "https://github.com/tblite/tblite",
+      "revision": "133f91efb94b47f05848e1f86832f40a1accc385"
+    }
+  },
+  "tolerances": {
+    "absolute_scalar": 5e-12,
+    "finite_difference": 2e-07,
+    "finite_difference_cn": 2e-07,
+    "finite_difference_convergence": 2e-06,
+    "matrix_symmetry": 5e-12,
+    "net_gradient": 5e-11,
+    "quadrupole_trace": 5e-12
+  }
+}

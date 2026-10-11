@@ -601,6 +601,13 @@ def main() -> int:
                 "dataset": args.dataset,
                 "ao_bin": ao_label,
                 "system_ids": [item.system_id for item in items[: args.batch_size]],
+                "correctness": {
+                    "system_outcomes": [
+                        {"system_id": item.system_id, "successful": True}
+                        for item in items[: args.batch_size]
+                    ],
+                    "scope": "all measured samples; all requested energies/forces qualified",
+                },
                 "ao_counts": [ao_count(item) for item in items[: args.batch_size]],
                 "atom_counts": [
                     len(item.system.atomic_numbers) for item in items[: args.batch_size]

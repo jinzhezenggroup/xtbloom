@@ -84,6 +84,62 @@ def test_h2o_singlepoint_smoke() -> None:
     assert result["gradient"] == pytest.approx(-result.forces, abs=0.0)
 
 
+def test_periodic_calculator_publishes_strain_and_accepts_cell_updates() -> None:
+    """Exercise the high-level native XYZ cell and ABI-v3 strain outlet."""
+    numbers = np.array([1, 1], dtype=np.int32)
+    positions = np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])
+    cell = np.diag([8.0, 8.0, 8.0])
+    calculator = Calculator(
+        "GFN2-xTB",
+        numbers,
+        positions,
+        cell=cell,
+        pbc=True,
+        backend="cpu",
+    )
+
+    first = calculator.singlepoint(compute_strain=True)
+    assert first.strain_derivatives is not None
+    assert first.strain_derivatives.shape == (9,)
+    assert np.isfinite(first.strain_derivatives).all()
+    assert calculator.cell is not None
+
+    # Cell changes are explicit topology changes.  The Python object updates
+    # transactionally and the native context rebuilds its fixed-cell plan.
+    calculator.update(cell=np.diag([8.5, 8.0, 8.0]), pbc=True)
+    second = calculator.singlepoint(compute_strain=True)
+    assert second.strain_derivatives is not None
+    assert np.isfinite(second.strain_derivatives).all()
+    assert second.energy != pytest.approx(first.energy, abs=1.0e-10)
+
+
+def test_periodic_calculator_rejects_unreleased_model_and_attachment() -> None:
+    """Keep GFN1 and external field combinations fail-closed for native PBC."""
+    numbers = np.array([1, 1], dtype=np.int32)
+    positions = np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])
+    cell = np.diag([8.0, 8.0, 8.0])
+    with pytest.raises(XTBloomRuntimeError, match="not implemented"):
+        Calculator(
+            "GFN1-xTB",
+            numbers,
+            positions,
+            cell=cell,
+            pbc=True,
+            backend="cpu",
+        ).singlepoint()
+
+    with pytest.raises(XTBloomRuntimeError, match="periodic"):
+        Calculator(
+            "GFN2-xTB",
+            numbers,
+            positions,
+            cell=cell,
+            pbc=True,
+            efield=[0.1, 0.0, 0.0],
+            backend="cpu",
+        ).singlepoint()
+
+
 @pytest.mark.parametrize("case_id", ["gfn1_ketene", "gfn1_oh_radical"])
 def test_gfn1_singlepoint_matches_independent_golden(case_id: str) -> None:
     """Match closed-shell and shared-orbital open-shell GFN1 to oracles."""

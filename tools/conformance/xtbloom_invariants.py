@@ -373,6 +373,12 @@ def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchSt
     point_charge_positions: list[float] = []
     point_charge_values: list[float] = []
     point_charge_gammas: list[float] = []
+    # ABI-v4 native periodic suffixes are required by the public batch
+    # storage model even for the historical molecular corpus.  Keep ordinary
+    # invariant cases explicitly nonperiodic instead of relying on a missing
+    # field to be interpreted differently by each descriptor binder.
+    cell_matrices: list[float] = []
+    periodic_axes: list[int] = []
     efields: list[list[float] | None] = []
     slices: list[public_api.CaseSlice] = []
     for geometry in geometries:
@@ -386,6 +392,8 @@ def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchSt
         point_charge_positions.extend(geometry.point_positions)
         point_charge_values.extend(geometry.point_values)
         point_charge_gammas.extend(geometry.point_gammas)
+        cell_matrices.extend([0.0] * 9)
+        periodic_axes.append(0)
         efields.append(None if geometry.efield is None else list(geometry.efield))
         atom_offsets.append(len(atomic_numbers))
         point_charge_offsets.append(len(point_charge_values))
@@ -410,6 +418,8 @@ def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchSt
         point_charge_positions=point_charge_positions,
         point_charge_values=point_charge_values,
         point_charge_gammas=point_charge_gammas,
+        cell_matrices=cell_matrices,
+        periodic_axes=periodic_axes,
         slices=slices,
         keepalive=[],
         efields=efields,

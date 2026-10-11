@@ -735,6 +735,7 @@ static cudaError_t refresh_post_scc_potentials_impl(
 
   const Gfn2SccIterationDeviceActivity activity{workspace.active_mask, workspace.sequence_active,
                                                 batch_size, 1, plan.plan_token};
+  const bool native_periodic = plan.native_ewald_batch.topology.plan_token != 0u;
   const auto merge_stage = [&](Gfn2PostSccPotentialStage stage, bool plan_only,
                                const std::uint32_t* stage_sequence) {
     merge_stage_kernel<<<gate_blocks, kThreadsPerBlock, 0, stream>>>(
@@ -744,13 +745,30 @@ static cudaError_t refresh_post_scc_potentials_impl(
     return check_launch();
   };
 
-  status = reset_gfn2_es2_scc_errors_cuda(batch_size, workspace.stage_system_errors,
-                                          workspace.stage_device_error, stream);
+  status =
+      native_periodic
+          ? reset_gfn2_native_periodic_ewald_errors_cuda(batch_size, workspace.stage_system_errors,
+                                                         workspace.stage_device_error, stream)
+          : reset_gfn2_es2_scc_errors_cuda(batch_size, workspace.stage_system_errors,
+                                           workspace.stage_device_error, stream);
   if (status == cudaSuccess) {
-    status = evaluate_gfn2_es2_scc_potential_cuda(
-        plan.es2_batch, plan.es2_cache, plan.geometry_generation, activity, input.raw_shell_charges,
-        intermediates.es2_shell, workspace.es2, workspace.stage_system_errors,
-        workspace.stage_device_error, stream);
+    if (native_periodic) {
+      auto native = plan.native_ewald_batch;
+      native.active_mask = workspace.active_mask;
+      native.active_mask_elements = batch_size;
+      native.positions = plan.native_ewald_batch.positions;
+      native.position_elements = plan.native_ewald_batch.position_elements;
+      native.shell_charges = input.raw_shell_charges;
+      native.shell_charge_elements = input.shell_elements;
+      status = evaluate_gfn2_native_periodic_ewald_cuda(
+          native, workspace.native_ewald, nullptr, intermediates.es2_shell, nullptr, nullptr,
+          nullptr, workspace.stage_system_errors, workspace.stage_device_error, stream);
+    } else {
+      status = evaluate_gfn2_es2_scc_potential_cuda(
+          plan.es2_batch, plan.es2_cache, plan.geometry_generation, activity,
+          input.raw_shell_charges, intermediates.es2_shell, workspace.es2,
+          workspace.stage_system_errors, workspace.stage_device_error, stream);
+    }
   }
   if (status == cudaSuccess) {
     status = merge_stage(Gfn2PostSccPotentialStage::kES2, true, nullptr);
@@ -774,14 +792,40 @@ static cudaError_t refresh_post_scc_potentials_impl(
   }
 
   if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kAES2)) {
-    status = reset_gfn2_aes2_device_errors_cuda(batch_size, workspace.stage_system_errors,
-                                                workspace.stage_device_error, stream);
+    status =
+        native_periodic
+            ? reset_gfn2_native_periodic_multipole_errors_cuda(
+                  batch_size, workspace.stage_system_errors, workspace.stage_device_error, stream)
+            : reset_gfn2_aes2_device_errors_cuda(batch_size, workspace.stage_system_errors,
+                                                 workspace.stage_device_error, stream);
     if (status == cudaSuccess) {
-      status = evaluate_gfn2_aes2_scc_potential_cuda(
-          plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, activity,
-          input.raw_atomic_charges, input.raw_atomic_dipoles, input.raw_atomic_quadrupoles,
-          intermediates.aes2_atomic, intermediates.aes2_dipole, intermediates.aes2_quadrupole,
-          workspace.aes2, workspace.stage_system_errors, workspace.stage_device_error, stream);
+      if (native_periodic) {
+        auto native = plan.native_multipole_batch;
+        native.active_mask = workspace.active_mask;
+        native.active_mask_elements = batch_size;
+        native.positions = plan.native_multipole_batch.positions;
+        native.position_elements = plan.native_multipole_batch.position_elements;
+        native.coordination_numbers = plan.native_multipole_batch.coordination_numbers;
+        native.coordination_number_elements =
+            plan.native_multipole_batch.coordination_number_elements;
+        native.atomic_charges = input.raw_atomic_charges;
+        native.atomic_charge_elements = input.atom_elements;
+        native.atomic_dipoles = input.raw_atomic_dipoles;
+        native.atomic_dipole_elements = input.dipole_elements;
+        native.atomic_quadrupoles = input.raw_atomic_quadrupoles;
+        native.atomic_quadrupole_elements = input.quadrupole_elements;
+        status = evaluate_gfn2_native_periodic_multipole_cuda(
+            native, workspace.native_multipole, nullptr, nullptr, nullptr,
+            intermediates.aes2_atomic, intermediates.aes2_dipole, intermediates.aes2_quadrupole,
+            nullptr, nullptr, nullptr, nullptr, workspace.stage_system_errors,
+            workspace.stage_device_error, stream);
+      } else {
+        status = evaluate_gfn2_aes2_scc_potential_cuda(
+            plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, activity,
+            input.raw_atomic_charges, input.raw_atomic_dipoles, input.raw_atomic_quadrupoles,
+            intermediates.aes2_atomic, intermediates.aes2_dipole, intermediates.aes2_quadrupole,
+            workspace.aes2, workspace.stage_system_errors, workspace.stage_device_error, stream);
+      }
     }
     if (status == cudaSuccess) {
       status = merge_stage(Gfn2PostSccPotentialStage::kAES2, true, nullptr);
@@ -792,18 +836,49 @@ static cudaError_t refresh_post_scc_potentials_impl(
   }
 
   if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kD4TwoBody)) {
-    status = reset_gfn2_d4_device_errors_cuda(batch_size, workspace.stage_system_errors,
-                                              workspace.stage_device_error, stream);
+    status =
+        native_periodic
+            ? reset_gfn2_native_periodic_d4_errors_cuda(batch_size, workspace.stage_system_errors,
+                                                        workspace.stage_device_error, stream)
+            : reset_gfn2_d4_device_errors_cuda(batch_size, workspace.stage_system_errors,
+                                               workspace.stage_device_error, stream);
     if (status == cudaSuccess) {
-      status = geometry == nullptr
-                   ? evaluate_gfn2_d4_scc_potential_pairlist_cuda(
-                         plan.d4_batch, plan.d4_parameters, plan.geometry_generation, plan.d4_cache,
-                         input.raw_atomic_charges, activity, intermediates.d4_atomic, workspace.d4,
-                         workspace.stage_device_error, stream)
-                   : evaluate_gfn2_d4_scc_potential_pairlist_cuda(
-                         plan.d4_batch, plan.d4_parameters, geometry->epoch, plan.d4_cache,
-                         input.raw_atomic_charges, activity, intermediates.d4_atomic, workspace.d4,
-                         workspace.stage_device_error, stream);
+      if (native_periodic) {
+        auto native = plan.native_d4_batch;
+        native.active_mask = workspace.active_mask;
+        native.active_mask_elements = batch_size;
+        native.positions = plan.native_d4_batch.positions;
+        native.position_elements = plan.native_d4_batch.position_elements;
+        /* Native D4 has its own image-complete CN response.  The shared
+         * geometry cache carries the periodic H0/AES2 coordination numbers,
+         * which use a different element weighting and must not feed D4's
+         * charge-dependent reference weights.  Rebuild the D4 CN into the
+         * persistent native workspace before evaluating the final stationary
+         * D4 potential so this post-SCC refresh matches the SCC and CPU paths. */
+        native.coordination_numbers = workspace.native_d4.coordination;
+        native.coordination_number_elements = workspace.native_d4.coordination_elements;
+        native.atomic_charges = input.raw_atomic_charges;
+        native.atomic_charge_elements = input.atom_elements;
+        status = evaluate_gfn2_native_periodic_d4_coordination_cuda(
+            native, workspace.native_d4, workspace.native_d4.coordination,
+            workspace.stage_system_errors, workspace.stage_device_error, stream);
+        if (status == cudaSuccess) {
+          status = evaluate_gfn2_native_periodic_d4_two_body_cuda(
+              native, workspace.native_d4, workspace.native_d4.atom_energy, intermediates.d4_atomic,
+              workspace.stage_system_errors, workspace.stage_device_error, stream);
+        }
+      } else {
+        status =
+            geometry == nullptr
+                ? evaluate_gfn2_d4_scc_potential_pairlist_cuda(
+                      plan.d4_batch, plan.d4_parameters, plan.geometry_generation, plan.d4_cache,
+                      input.raw_atomic_charges, activity, intermediates.d4_atomic, workspace.d4,
+                      workspace.stage_device_error, stream)
+                : evaluate_gfn2_d4_scc_potential_pairlist_cuda(
+                      plan.d4_batch, plan.d4_parameters, geometry->epoch, plan.d4_cache,
+                      input.raw_atomic_charges, activity, intermediates.d4_atomic, workspace.d4,
+                      workspace.stage_device_error, stream);
+      }
     }
     if (status == cudaSuccess) {
       status = merge_stage(Gfn2PostSccPotentialStage::kD4, false, nullptr);

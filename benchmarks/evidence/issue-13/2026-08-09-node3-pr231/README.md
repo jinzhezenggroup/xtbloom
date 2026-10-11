@@ -11,10 +11,13 @@ All measured JSON/CSV artifacts were produced from clean xTBloom commit
 samples, complete final force vectors, per-sample output checks, convergence
 state, build/runtime identity, CPU affinity, and GPU UUID. Issue #348 removed
 seven JSON files over the repository's 1 MiB evidence limit from the current
-tree while retaining their compact CSV views. Their exact historical path,
-byte count, SHA-256, and retrieval revision are recorded in
-`benchmarks/evidence/legacy-large-artifacts.tsv`; under-limit JSON remains in
-this bundle. The SVG was derived from the complete measured artifacts with
+tree while retaining their compact CSV views. Issue #498 later superseded the
+xTBloom CPU series and removed its 62,656-byte `xtbloom-cpu-cold.json` from
+the current tree as well. Every removed artifact's exact historical path,
+byte count, SHA-256, and retrieval revision is recorded in
+`benchmarks/evidence/legacy-large-artifacts.tsv`; other under-limit JSON
+remains in this bundle. The SVG was derived from the complete measured
+artifacts with
 `benchmarks/plot_natoms_cross_engine.py` SHA-256
 `deeaf58589cabc2b9ae71a314492be8a9420e3eeef1ddc00c9728ddeabac9aa9`.
 
@@ -194,5 +197,5 @@ uv run --script /path/to/xtbloom/benchmarks/plot_natoms_cross_engine.py \
   release-wide performance guarantee.
 
 `SHA256SUMS` covers the JSON, CSV, scripts, README, and SVG retained in the
-current tree. The legacy artifact table independently pins the removed raw
-JSON bytes.
+current tree. The legacy artifact table independently pins all removed raw
+JSON bytes, including the superseded xTBloom CPU cold artifact.

@@ -41,6 +41,14 @@ assert GFN1_SPEC is not None and GFN1_SPEC.loader is not None
 GFN1_CONFORMANCE = importlib.util.module_from_spec(GFN1_SPEC)
 GFN1_SPEC.loader.exec_module(GFN1_CONFORMANCE)
 sys.modules.setdefault("gfn1_conformance", GFN1_CONFORMANCE)
+PERIODIC_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "periodic_gfn2.py"
+PERIODIC_SPEC = importlib.util.spec_from_file_location(
+    "periodic_gfn2_tool", PERIODIC_TOOL
+)
+assert PERIODIC_SPEC is not None and PERIODIC_SPEC.loader is not None
+PERIODIC = importlib.util.module_from_spec(PERIODIC_SPEC)
+PERIODIC_SPEC.loader.exec_module(PERIODIC)
+sys.modules.setdefault("periodic_gfn2", PERIODIC)
 PUBLIC_SPEC = importlib.util.spec_from_file_location(
     "xtbloom_public_api_tool", PUBLIC_API_TOOL
 )
@@ -171,15 +179,16 @@ class ConformanceToolTest(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            [name for name, _ in PUBLIC_API.BatchResult._fields_[-4:]],
+            [name for name, _ in PUBLIC_API.BatchResult._fields_[-5:]],
             [
                 "dipole_moments",
                 "quadrupole_moments",
                 "wiberg_orders",
                 "spin_populations",
+                "strain_derivatives",
             ],
         )
-        self.assertEqual(ctypes.sizeof(PUBLIC_API.BatchResult), 280)
+        self.assertEqual(ctypes.sizeof(PUBLIC_API.BatchResult), 304)
         self.assertEqual(PUBLIC_API.BatchResult.dipole_moments.offset, 184)
 
         completed = subprocess.run(
@@ -251,6 +260,34 @@ class ConformanceToolTest(unittest.TestCase):
         failures = PUBLIC_API._compare_case(manifest, case_slice, actual, unsupported)
         self.assertEqual(len(failures), 1)
         self.assertIn("energy_hartree", failures[0])
+
+    def test_periodic_charged_diagnostic_is_not_an_acceptance_failure(self) -> None:
+        """The no-background charged-cell probe remains executable evidence only."""
+        manifest_path = (
+            REPOSITORY_ROOT / "data" / "conformance" / "periodic" / "manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        case = next(
+            item
+            for item in manifest["cases"]
+            if item["oracle_role"] == "diagnostic-unbackgrounded-charged"
+        )
+        case_slice = PUBLIC_API.assemble_batch(manifest_path, manifest, [case]).slices[
+            0
+        ]
+        # Deliberately use values that would fail every numerical tolerance if
+        # this diagnostic were accidentally treated as a primary oracle.
+        actual = {
+            "energy_hartree": 123.0,
+            "forces_hartree_per_bohr": [123.0] * (3 * case["atom_count"]),
+            "partial_charges_e": [123.0] * case["atom_count"],
+            "strain_derivatives_hartree": [123.0] * 9,
+        }
+        with redirect_stdout(io.StringIO()) as captured:
+            failures = PUBLIC_API._compare_case(manifest, case_slice, actual, {})
+        self.assertEqual(failures, [])
+        self.assertIn("SKIP periodic_lithium_cation_diagnostic", captured.getvalue())
+        self.assertIn("diagnostic-only", captured.getvalue())
 
     def test_public_runner_rejects_cuda_memory_for_cpu_before_loading(self) -> None:
         """Device descriptors cannot accidentally be routed through the CPU backend."""

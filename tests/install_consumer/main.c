@@ -79,8 +79,10 @@ _Static_assert(XTBLOOM_BATCH_RESULT_V1_SIZE == 184,
                "installed ABI-v1 batch-result prefix must remain 184 bytes");
 _Static_assert(XTBLOOM_BATCH_RESULT_V2_SIZE == 280,
                "installed ABI-v2 batch-result image must remain 280 bytes");
-_Static_assert(sizeof(xtbloom_batch_result_t) == XTBLOOM_BATCH_RESULT_V2_SIZE,
-               "installed batch-result layout must include the ABI-v2 suffix");
+_Static_assert(XTBLOOM_BATCH_RESULT_V3_SIZE == 304,
+               "installed ABI-v3 batch-result image must remain 304 bytes");
+_Static_assert(sizeof(xtbloom_batch_result_t) == XTBLOOM_BATCH_RESULT_V3_SIZE,
+               "installed batch-result layout must include the ABI-v3 suffix");
 _Static_assert(sizeof(xtbloom_interaction_t) == XTBLOOM_INTERACTION_V1_SIZE,
                "installed interaction descriptor image must remain 32 bytes");
 _Static_assert(offsetof(xtbloom_batch_t, interaction_descriptors) == 360,
@@ -89,6 +91,8 @@ _Static_assert(offsetof(xtbloom_interaction_t, payload_offset) == 16,
                "installed interaction payload offset must remain stable");
 _Static_assert(offsetof(xtbloom_batch_result_t, spin_populations) == 256,
                "installed reserved result outlet offsets must remain stable");
+_Static_assert(offsetof(xtbloom_batch_result_t, strain_derivatives) == 280,
+               "installed strain result outlet offset must remain stable");
 _Static_assert(XTBLOOM_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "installed dipole publication result flag must remain at bit 4");
 _Static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
@@ -212,11 +216,11 @@ static xtbloom_buffer_t output_buffer(void* data, size_t size_bytes) {
   return buffer;
 }
 
-/* Exercise the installed ABI-v4 availability boundary without a linear-
- * algebra provider. Complete descriptor validation must precede the explicit
- * periodic-execution refusal, and that call-level refusal must not publish a
- * single caller-owned byte. This runs in smoke mode for both shared and
- * static install consumers. */
+/* Exercise the installed ABI-v4 validation boundary without a linear-algebra
+ * provider. Native periodic CPU forces are released, so deliberately alias a
+ * caller-owned input with the output to prove the request is rejected before
+ * any caller-owned byte is touched. This runs in smoke mode for both shared
+ * and static install consumers. */
 static int run_installed_native_lattice_refusal(xtbloom_context_t* context) {
   const int64_t atom_offsets[] = {0, 1};
   const int32_t atomic_numbers[] = {1};
@@ -248,26 +252,29 @@ static int run_installed_native_lattice_refusal(xtbloom_context_t* context) {
   batch.unpaired_electrons = input_buffer(unpaired_electrons, sizeof(unpaired_electrons));
   batch.cell_matrices = input_buffer(cell, sizeof(cell));
   batch.periodic_axes = input_buffer(periodic_axes, sizeof(periodic_axes));
-  options.flags = XTBLOOM_COMPUTE_ENERGY;
+  options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES;
 
   double energy = energy_canary;
+  double forces[3] = {31.0, 32.0, 33.0};
   int32_t iterations = iterations_canary;
   uint8_t converged = converged_canary;
   xtbloom_status_t system_status = status_canary;
   result.flags = flags_canary;
   result.energies = output_buffer(&energy, sizeof(energy));
+  result.forces = output_buffer((void*)cell, sizeof(forces));
   result.scc_iterations = output_buffer(&iterations, sizeof(iterations));
   result.scc_converged = output_buffer(&converged, sizeof(converged));
   result.per_system_status = output_buffer(&system_status, sizeof(system_status));
 
-  const xtbloom_status_t call_status = xtbloom_compute(context, &batch, &options, &result);
-  if (call_status != XTBLOOM_STATUS_NOT_IMPLEMENTED || result.flags != flags_canary ||
+  const xtbloom_status_t alias_status = xtbloom_compute(context, &batch, &options, &result);
+  if (alias_status != XTBLOOM_STATUS_INVALID_ARGUMENT || result.flags != flags_canary ||
       energy != energy_canary || iterations != iterations_canary || converged != converged_canary ||
-      system_status != status_canary) {
+      system_status != status_canary || forces[0] != 31.0 || forces[1] != 32.0 ||
+      forces[2] != 33.0) {
     fprintf(stderr,
             "installed native-lattice refusal is not transactional: call=%d flags=0x%08x "
             "energy=%.17g iterations=%d converged=%u system=%d error=%s\n",
-            (int)call_status, (unsigned int)result.flags, energy, (int)iterations,
+            (int)alias_status, (unsigned int)result.flags, energy, (int)iterations,
             (unsigned int)converged, (int)system_status, xtbloom_get_last_error());
     return 41;
   }

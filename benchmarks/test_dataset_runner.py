@@ -678,6 +678,8 @@ class AdapterReuseAndSerializationTest(unittest.TestCase):
         self.assertEqual(storage.molecular_charges, [1.0])
         self.assertEqual(storage.unpaired_electrons, [2])
         self.assertEqual(storage.spin_channels, [2])
+        self.assertEqual(storage.cell_matrices, [0.0] * 9)
+        self.assertEqual(storage.periodic_axes, [0])
         self.assertEqual(storage.positions[-3:], [-1.0, 0.0, 0.0])
 
 

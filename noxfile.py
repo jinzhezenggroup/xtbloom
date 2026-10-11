@@ -29,6 +29,7 @@ CPU_REQUIRED_TESTS = {
     "xtbloom.conformance.gfn1_invariants_cpu",
     "xtbloom.conformance.gfn1_public_cpu",
     "xtbloom.conformance.gfn1_spin2_public_cpu",
+    "xtbloom.conformance.periodic_public_cpu",
     "xtbloom.conformance.public_cpu",
     "xtbloom.cpu.public_inference",
     "xtbloom.gfn2.eigensolver",
@@ -297,6 +298,16 @@ def _run_python_tests(session: nox.Session) -> None:
         "benchmarks.test_natoms_cross_engine",
         "benchmarks.test_dxtb_adapter",
         "benchmarks.test_evidence_size",
+        "benchmarks.test_convergence_grouping",
+        "benchmarks.test_convergence_runner",
+        "benchmarks.test_frozen_inputs",
+        "benchmarks.test_ao_grouping",
+        "benchmarks.test_build_receipt",
+        "benchmarks.test_record_build",
+        "benchmarks.test_build_receipt_runner",
+        "benchmarks.test_runtime_mapped_images",
+        "benchmarks.test_runtime_mapped_images_runner",
+        "benchmarks.test_omol25_inputs",
         env=test_environment,
     )
 
@@ -346,6 +357,24 @@ def _run_canonical(session: nox.Session) -> None:
         "--no-sync",
         "python",
         "tools/conformance/gfn1_conformance.py",
+        "check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "tools/conformance/periodic_gfn2.py",
+        "check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py",
         "check",
     )
     _run(

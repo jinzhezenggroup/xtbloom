@@ -50,4 +50,12 @@ data/conformance/scc-traces/manifest-v2.json -text
 data/conformance/scc-traces/oh_radical.json -text
 data/conformance/scc-traces/specs/oh_radical.spec -text
 
+# The periodic GFN2 oracle corpus and standalone probe inputs are bound by
+# exact SHA-256 values. Preserve their canonical LF bytes in Windows checkouts
+# so source, wheel, and sdist provenance checks evaluate the same artifacts.
+data/conformance/periodic/** -text
+tools/oracle/periodic_gfn2_terms/build_probe.sh -text
+tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py -text
+tools/oracle/periodic_gfn2_terms/probe.f90 -text
+
 .git_archival.txt export-subst

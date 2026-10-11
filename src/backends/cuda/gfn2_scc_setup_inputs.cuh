@@ -12,6 +12,7 @@
 #include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_plan_schema.cuh"
 #include "backends/cuda/gfn2_scc_iteration.cuh"
+#include "backends/cuda/periodic_topology.cuh"
 #include "model/gfn1/basis.hpp"
 #include "model/gfn1/es2.hpp"
 #include "model/gfn1/es3.hpp"
@@ -33,6 +34,10 @@
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
+#include "model/gfn2/periodic_ewald.hpp"
+#include "model/gfn2/periodic_integrals.hpp"
+#include "model/gfn2/periodic_multipole.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 #include "model/gfn2/scc_driver.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
@@ -85,6 +90,21 @@ struct Gfn2SccSetupPeriodicSource {
   const gfn2::PeriodicEmbeddingPlan* plan = nullptr;
   Gfn2SccSetupHostArray<double> shifts{};
   Gfn2SccSetupHostArray<double> response_matrices{};
+};
+
+/*
+ * Immutable native XYZ periodic plans projected into the CUDA setup image.
+ * The model plans remain the scientific owners of all cutoffs and image
+ * ordering; setup only copies their sealed metadata into device-readable POD
+ * arrays.  Numerical charges, multipoles, and coordination outlets are
+ * intentionally not part of this source because they are refreshed by the
+ * SCC transaction after setup.
+ */
+struct Gfn2SccSetupNativePeriodicSource {
+  const gfn2::PeriodicShortRangePlan* topology = nullptr;
+  const gfn2::PeriodicIntegralPlan* integrals = nullptr;
+  const gfn2::PeriodicEwaldPlan* ewald = nullptr;
+  const gfn2::PeriodicMultipolePlan* multipole = nullptr;
 };
 
 struct Gfn1SccSetupPointChargeSource {
@@ -169,6 +189,7 @@ struct Gfn2SccSetupInputSources {
   Gfn2SccSetupD4Source d4{};
   Gfn2SccSetupPointChargeSource point_charges{};
   Gfn2SccSetupPeriodicSource periodic{};
+  Gfn2SccSetupNativePeriodicSource native_periodic{};
 
   Gfn2EigensolverOptions eigensolver_options{};
 };

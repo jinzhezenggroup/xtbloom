@@ -730,6 +730,8 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.iteration_arena_bytes == second.iteration_arena_bytes &&
          first.eigensolver_setup_arena_bytes == second.eigensolver_setup_arena_bytes &&
          first.provider_host_workspace_bytes == second.provider_host_workspace_bytes &&
+         first.integral_task_arena == second.integral_task_arena &&
+         first.integral_task_arena_bytes == second.integral_task_arena_bytes &&
          first.force_immutable_arena_bytes == second.force_immutable_arena_bytes &&
          first.force_execution_arena_bytes == second.force_execution_arena_bytes &&
          first.numerical_refresh_arena_bytes == second.numerical_refresh_arena_bytes &&
@@ -799,6 +801,7 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK(identity.input_arena % 256u == 0u);
   CHECK(identity.iteration_arena % 256u == 0u);
   CHECK(identity.eigensolver_setup_arena % 256u == 0u);
+  CHECK(identity.integral_task_arena % 256u == 0u);
   CHECK(identity.force_immutable_arena % 256u == 0u);
   CHECK(identity.force_execution_arena % 256u == 0u);
   CHECK(identity.numerical_refresh_arena % 256u == 0u);
@@ -807,6 +810,7 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK(identity.input_arena_bytes > 0u);
   CHECK(identity.iteration_arena_bytes > 0u);
   CHECK(identity.eigensolver_setup_arena_bytes > 0u);
+  CHECK(identity.integral_task_arena_bytes > 0u);
   CHECK(identity.force_immutable_arena_bytes > 0u || !force_mode);
   CHECK((identity.force_immutable_arena == 0u) == !force_mode);
   CHECK(identity.force_execution_arena_bytes > 0u);
@@ -841,14 +845,15 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
             identity.runtime_owner_host_bytes + identity.host_plans_bytes +
             identity.topology_setup_host_bytes + identity.inputs_setup_host_bytes +
             identity.eigensolver_setup_host_bytes + identity.initializer_host_bytes);
-  CHECK(
-      identity.retained_device_workspace_bytes ==
-      identity.topology_arena_bytes + identity.input_arena_bytes + identity.iteration_arena_bytes +
-          identity.eigensolver_setup_arena_bytes + identity.force_immutable_arena_bytes +
-          identity.force_execution_arena_bytes + identity.numerical_refresh_arena_bytes +
-          identity.inference_arena_bytes + identity.public_result_device_arena_bytes +
-          identity.interaction_device_staging_arena_bytes + identity.topology_staging_device_bytes +
-          identity.initializer_device_checkpoint_bytes + identity.scc_loop_device_control_bytes);
+  CHECK(identity.retained_device_workspace_bytes ==
+        identity.topology_arena_bytes + identity.input_arena_bytes +
+            identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
+            identity.integral_task_arena_bytes + identity.force_immutable_arena_bytes +
+            identity.force_execution_arena_bytes + identity.numerical_refresh_arena_bytes +
+            identity.inference_arena_bytes + identity.public_result_device_arena_bytes +
+            identity.interaction_device_staging_arena_bytes +
+            identity.topology_staging_device_bytes + identity.initializer_device_checkpoint_bytes +
+            identity.scc_loop_device_control_bytes);
   CHECK(identity.numerical_refresh_binding != 0u);
   CHECK(identity.numerical_epoch != 0u);
   CHECK(identity.committed_generations != 0u);

@@ -239,7 +239,10 @@ class PaperEvidenceRegressionTest(unittest.TestCase):
             name, SUITE / "python" / f"{name}.py"
         )
         module = importlib.util.module_from_spec(spec)
-        with mock.patch.object(sys, "dont_write_bytecode", True):
+        with (
+            mock.patch.object(sys, "dont_write_bytecode", True),
+            mock.patch.object(sys, "path", [str(SUITE / "python"), *sys.path]),
+        ):
             spec.loader.exec_module(module)
         return module
 
@@ -773,6 +776,178 @@ class PaperEvidenceRegressionTest(unittest.TestCase):
             candidate = next(row for row in output if row["engine"] == "xtbloom-ragged")
             self.assertFalse(candidate["claim_eligible"])
             self.assertNotIn("speedup_vs_xtb", candidate)
+
+    def test_comparison_workload_requires_ordered_ids_and_complete_masks(self) -> None:
+        module = self.load("paper_runtime")
+        row = {
+            "batch_size": 2,
+            "system_ids": ["a", "b"],
+            "correctness": {
+                "system_outcomes": [
+                    {"system_id": "a", "successful": True},
+                    {"system_id": "b", "successful": False},
+                ]
+            },
+        }
+        self.assertEqual(module.comparison_workload(row), (("a", "b"), (True, False)))
+        for field, value in (("system_ids", ["a", "a"]), ("batch_size", 1)):
+            with self.subTest(field=field):
+                self.assertIsNone(module.comparison_workload({**row, field: value}))
+        for outcomes in (
+            [],
+            [{"system_id": "b", "successful": True}],
+            [
+                {"system_id": "a", "successful": 1},
+                {"system_id": "b", "successful": False},
+            ],
+        ):
+            self.assertIsNone(
+                module.comparison_workload(
+                    {**row, "correctness": {"system_outcomes": outcomes}}
+                )
+            )
+
+    def test_speedups_require_matched_inputs_success_masks_and_claims(self) -> None:
+        module = self.load("make_figure_inputs")
+
+        def row(engine: str, backend: str = "cpu") -> dict:
+            return {
+                "suite": "gpu-crossover",
+                "dataset": "omol25",
+                "ao_bin": "1-64",
+                "batch_size": 2,
+                "cpu_threads": 1,
+                "engine": engine,
+                "backend": backend,
+                "memory_mode": "host",
+                "system_ids": ["a", "b"],
+                "availability": "available",
+                "claim_eligible": True,
+                "memory": {"status": "available"},
+                "correctness": {
+                    "status": "pass",
+                    "performance_claim_eligible": True,
+                    "system_outcomes": [
+                        {"system_id": "a", "successful": True},
+                        {"system_id": "b", "successful": False},
+                    ],
+                },
+                "steady_fresh": {"raw_ms": [2, 2], "median_ms": 2},
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for mode in (
+                "matched",
+                "different_inputs",
+                "reordered",
+                "different_mask",
+                "missing_outcomes",
+                "unqualified",
+                "different_threads",
+                "different_source",
+            ):
+                with self.subTest(mode=mode):
+                    baseline = row("xtbloom-ragged")
+                    candidate = row("xtbloom-ragged", "cuda")
+                    if mode == "different_inputs":
+                        candidate["system_ids"][1] = "c"
+                        candidate["correctness"]["system_outcomes"][1]["system_id"] = (
+                            "c"
+                        )
+                    elif mode == "reordered":
+                        candidate["system_ids"].reverse()
+                        candidate["correctness"]["system_outcomes"].reverse()
+                    elif mode == "different_mask":
+                        candidate["correctness"]["system_outcomes"][1]["successful"] = (
+                            True
+                        )
+                    elif mode == "missing_outcomes":
+                        candidate["correctness"].pop("system_outcomes")
+                    elif mode == "unqualified":
+                        candidate["claim_eligible"] = False
+                    elif mode == "different_threads":
+                        candidate["cpu_threads"] = 2
+                    (root / "a.json").write_text(
+                        json.dumps(
+                            {
+                                "rows": [baseline]
+                                if mode == "different_source"
+                                else [baseline, candidate]
+                            }
+                        )
+                    )
+                    if mode == "different_source":
+                        (root / "b.json").write_text(json.dumps({"rows": [candidate]}))
+                    output = module.performance_rows(root)
+                    module.annotate_gpu_throughput(output)
+                    gpu = next(item for item in output if item["backend"] == "cuda")
+                    self.assertEqual("speedup_vs_cpu" in gpu, mode == "matched")
+                    self.assertEqual(
+                        gpu["gpu_cpu_throughput_ratio"],
+                        1.0 if mode == "matched" else None,
+                    )
+            (root / "b.json").unlink()
+            # CPU engine/sequential comparisons use the identical matching gate.
+            for engine, label in (
+                ("xtb", "speedup_vs_xtb"),
+                ("xtbloom-sequential", "speedup_vs_sequential"),
+            ):
+                baseline, candidate = row(engine), row("xtbloom-ragged")
+                (root / "a.json").write_text(
+                    json.dumps({"rows": [baseline, candidate]})
+                )
+                output = module.performance_rows(root)
+                self.assertEqual(output[1][label], 1.0)
+                candidate["correctness"]["system_outcomes"][0]["successful"] = False
+                (root / "a.json").write_text(
+                    json.dumps({"rows": [baseline, candidate]})
+                )
+                self.assertNotIn(label, module.performance_rows(root)[1])
+
+    def test_process_pool_ratios_require_matched_successful_inputs(self) -> None:
+        module = self.load("make_figure_inputs")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage = root / "si-cpu-process-pool" / "raw"
+            stage.mkdir(parents=True)
+            outcomes = [{"system_id": "a", "successful": True}]
+            common = {
+                "dataset": "qm9",
+                "ao_bin": "1-64",
+                "batch_size": 1,
+                "system_ids": ["a"],
+                "availability": "available",
+                "claim_eligible": True,
+                "correctness": {
+                    "status": "pass",
+                    "performance_claim_eligible": True,
+                    "system_outcomes": outcomes,
+                },
+            }
+            baseline = {
+                **common,
+                "cpu_threads": 1,
+                "memory": {"status": "available"},
+                "steady_fresh": {"raw_ms": [1, 1], "median_ms": 1},
+            }
+            pool = {
+                **common,
+                "engine": "xtb",
+                "processes": 1,
+                "raw_samples": [{"wall_ms": 2}, {"wall_ms": 2}],
+                "summary": {"median_wall_ms": 2},
+            }
+            (stage / "qm9-xtbloom.json").write_text(json.dumps({"rows": [baseline]}))
+            (stage / "qm9-xtb.json").write_text(json.dumps({"rows": [pool]}))
+            self.assertEqual(
+                module.process_pool_comparisons(root)[0]["xtbloom_speedup"], 2.0
+            )
+            for key, value in (("system_ids", ["b"]), ("correctness", {})):
+                (stage / "qm9-xtb.json").write_text(
+                    json.dumps({"rows": [{**pool, key: value}]})
+                )
+                self.assertEqual(module.process_pool_comparisons(root), [])
 
     def test_governor_is_verified_for_every_assigned_cpu(self) -> None:
         module = self.load("resolve_cpu_policy")
