@@ -32,7 +32,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+# Paper and ordinary benchmark callers share this adapter surface. Physics and
+# canonical conformance helpers come from the same exact clean xTBloom source
+# selected by PAPER_REPO_ROOT.
+REPOSITORY_ROOT = Path(
+    os.environ.get("PAPER_REPO_ROOT", Path(__file__).resolve().parents[1])
+).resolve()
+sys.path.insert(0, str(REPOSITORY_ROOT / "benchmarks"))
 CONFORMANCE_TOOLS = REPOSITORY_ROOT / "tools" / "conformance"
 sys.path.insert(0, str(CONFORMANCE_TOOLS))
 
@@ -338,9 +344,6 @@ class XTBloomAdapter:
         request_charges: bool = False,
         allow_system_failures: bool = False,
     ) -> None:
-        self.cell = cell
-        self.library_path = library_path
-        self.library = public_api._configure_library(library_path)
         if cell.case_ids is None and len(case_sequence) != cell.batch_size:
             raise BenchmarkError("case sequence length must equal the requested batch")
         if cell.case_ids is not None and (
@@ -349,9 +352,90 @@ class XTBloomAdapter:
             or tuple(case["id"] for case in case_sequence) != cell.case_ids
         ):
             raise BenchmarkError("finite case sequence does not match its batch plan")
-        self.storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
+        storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
+        self._initialize(
+            library_path,
+            storage,
+            cell,
+            device_id,
+            cpu_threads,
+            collect_atomic_charges=request_charges,
+            max_scc_iterations=None,
+            electronic_temperature_hartree=None,
+            strict_fresh=strict_fresh,
+            allow_system_failures=allow_system_failures,
+        )
+
+    @classmethod
+    def from_storage(
+        cls,
+        library_path: Path,
+        storage: PublicBatchStorage,
+        cell: Cell,
+        device_id: int,
+        cpu_threads: int,
+        *,
+        collect_atomic_charges: bool = False,
+        max_scc_iterations: int | None = None,
+        electronic_temperature_hartree: float | None = None,
+    ) -> XTBloomAdapter:
+        """Construct the shared adapter from already assembled ragged storage.
+
+        The publication benchmark keeps using the manifest constructor above.
+        Dataset consumers can use this entry point without reproducing the
+        public-C-ABI setup, output ownership, or synchronization logic.
+        """
+        adapter = cls.__new__(cls)
+        adapter._initialize(
+            library_path,
+            storage,
+            cell,
+            device_id,
+            cpu_threads,
+            collect_atomic_charges=collect_atomic_charges,
+            max_scc_iterations=max_scc_iterations,
+            electronic_temperature_hartree=electronic_temperature_hartree,
+        )
+        return adapter
+
+    def _initialize(
+        self,
+        library_path: Path,
+        storage: PublicBatchStorage,
+        cell: Cell,
+        device_id: int,
+        cpu_threads: int,
+        *,
+        collect_atomic_charges: bool,
+        max_scc_iterations: int | None,
+        electronic_temperature_hartree: float | None,
+        strict_fresh: bool = False,
+        allow_system_failures: bool = False,
+    ) -> None:
+        """Bind one preassembled batch while preserving the legacy defaults."""
+        if max_scc_iterations is not None and max_scc_iterations <= 0:
+            raise BenchmarkError("max SCC iterations must be positive")
+        if electronic_temperature_hartree is not None and (
+            not math.isfinite(electronic_temperature_hartree)
+            or electronic_temperature_hartree < 0.0
+        ):
+            raise BenchmarkError(
+                "electronic temperature must be finite and nonnegative"
+            )
+        expected_systems = (
+            len(cell.case_ids) if cell.case_ids is not None else cell.batch_size
+        )
+        if (
+            len(storage.slices) != expected_systems
+            or expected_systems > cell.batch_size
+        ):
+            raise BenchmarkError("storage size must equal the requested batch")
+        self.cell = cell
+        self.library_path = library_path
+        self.library = public_api._configure_library(library_path)
+        self.storage = storage
         self.allow_system_failures = allow_system_failures
-        self.systems = len(case_sequence)
+        self.systems = len(storage.slices)
         # Register rollback immediately: a failed constructor never reaches close().
         with ExitStack() as rollback:
             self.context = public_api._make_context(
@@ -370,12 +454,22 @@ class XTBloomAdapter:
             if self.cuda_control is not None:
                 configure_cuda_runtime(self.cuda_control)
             self._initialize_batch_and_results(
-                cell, strict_fresh=strict_fresh, request_charges=request_charges
+                cell,
+                strict_fresh=strict_fresh,
+                request_charges=collect_atomic_charges,
+                max_scc_iterations=max_scc_iterations,
+                electronic_temperature_hartree=electronic_temperature_hartree,
             )
             rollback.pop_all()
 
     def _initialize_batch_and_results(
-        self, cell: Cell, *, strict_fresh: bool, request_charges: bool
+        self,
+        cell: Cell,
+        *,
+        strict_fresh: bool,
+        request_charges: bool,
+        max_scc_iterations: int | None = None,
+        electronic_temperature_hartree: float | None = None,
     ) -> None:
         """Initialize borrowed views while constructor rollback still owns resources."""
         # Both backends consume the same explicit ABI-v2 one/two-channel
@@ -412,6 +506,10 @@ class XTBloomAdapter:
             self.options.electronic_temperature = (
                 300.0 * public_api.XTBLOOM_KELVIN_TO_HARTREE
             )
+        if max_scc_iterations is not None:
+            self.options.max_scc_iterations = max_scc_iterations
+        if electronic_temperature_hartree is not None:
+            self.options.electronic_temperature = electronic_temperature_hartree
         # These public defaults are recorded in every row and match normal API use.
         self.atoms = len(self.storage.atomic_numbers)
         self.energies = (ctypes.c_double * self.systems)()
@@ -484,21 +582,10 @@ class XTBloomAdapter:
             snapshot["device_memory_scope"] = "cudaMemGetInfo device-global sample"
         return snapshot
 
-    def results(self) -> dict[str, Any]:
-        """Download device outputs after timing and validate SCC publication."""
+    def raw_results(self) -> dict[str, Any]:
+        """Download every per-system output without aggregating peer failures."""
         self.synchronize()
         self.memory.download_outputs()
-        failures = [
-            "system "
-            f"{index}: status={self.statuses[index]}, "
-            f"converged={self.converged[index]}, "
-            f"iterations={self.iterations[index]}"
-            for index in range(self.systems)
-            if self.statuses[index] != public_api.XTBLOOM_STATUS_SUCCESS
-            or self.converged[index] != 1
-        ]
-        if failures and not self.allow_system_failures:
-            raise BenchmarkError("; ".join(failures))
         output: dict[str, Any] = {
             "energies_hartree": [float(value) for value in self.energies],
             "scc_iterations": [int(value) for value in self.iterations],
@@ -512,6 +599,36 @@ class XTBloomAdapter:
         if self.point_forces is not None:
             output["point_charge_forces_hartree_per_bohr"] = [
                 float(value) for value in self.point_forces
+            ]
+        return output
+
+    def results(self) -> dict[str, Any]:
+        """Preserve the benchmark's strict all-systems-success publication."""
+        raw = self.raw_results()
+        failures = [
+            "system "
+            f"{index}: status={raw['per_system_status'][index]}, "
+            f"converged={raw['scc_converged'][index]}, "
+            f"iterations={raw['scc_iterations'][index]}"
+            for index in range(self.systems)
+            if raw["per_system_status"][index] != public_api.XTBLOOM_STATUS_SUCCESS
+            or raw["scc_converged"][index] != 1
+        ]
+        if failures and not self.allow_system_failures:
+            raise BenchmarkError("; ".join(failures))
+        output: dict[str, Any] = {
+            "energies_hartree": raw["energies_hartree"],
+            "scc_iterations": raw["scc_iterations"],
+            "scc_converged": raw["scc_converged"],
+            "per_system_status": raw["per_system_status"],
+        }
+        if self.forces is not None:
+            output["forces_hartree_per_bohr"] = raw["forces_hartree_per_bohr"]
+        if self.charges is not None:
+            output["atomic_charges_e"] = raw["atomic_charges_e"]
+        if self.point_forces is not None:
+            output["point_charge_forces_hartree_per_bohr"] = raw[
+                "point_charge_forces_hartree_per_bohr"
             ]
         return output
 
@@ -3805,7 +3922,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--cpu-threads", type=int, default=1)
     parser.add_argument("--device-id", type=int, default=0)
-    parser.add_argument("--cuda-root", default="/group/software/cuda-12.9.1")
+    parser.add_argument(
+        "--cuda-root", default=os.environ.get("CUDA_HOME", "/usr/local/cuda")
+    )
     parser.add_argument(
         "--tblite-executable",
         type=Path,

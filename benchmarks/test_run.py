@@ -172,6 +172,124 @@ class HarnessTest(unittest.TestCase):
             )
         self.assertEqual(assemble.call_args.args[2], sequence)
 
+    def test_xtbloom_raw_results_preserve_peer_statuses_and_optional_charges(
+        self,
+    ) -> None:
+        """Expose dataset diagnostics without weakening strict matrix results."""
+        adapter = object.__new__(run.XTBloomAdapter)
+        adapter.systems = 2
+        adapter.allow_system_failures = False
+        adapter.energies = (ctypes.c_double * 2)(-1.0, float("nan"))
+        adapter.iterations = (ctypes.c_int32 * 2)(12, 500)
+        adapter.converged = (ctypes.c_uint8 * 2)(1, 0)
+        adapter.statuses = (ctypes.c_int32 * 2)(0, 7)
+        adapter.forces = (ctypes.c_double * 6)(*range(6))
+        adapter.charges = (ctypes.c_double * 2)(0.1, float("nan"))
+        adapter.point_forces = None
+        adapter.synchronize = mock.Mock()
+        adapter.memory = SimpleNamespace(download_outputs=mock.Mock())
+
+        raw = adapter.raw_results()
+
+        self.assertEqual(raw["per_system_status"], [0, 7])
+        self.assertEqual(raw["scc_converged"], [1, 0])
+        self.assertEqual(raw["atomic_charges_e"][0], 0.1)
+        with self.assertRaisesRegex(run.BenchmarkError, "system 1"):
+            adapter.results()
+
+    def test_xtbloom_from_storage_validates_before_loading_resources(self) -> None:
+        """Reject invalid SCC limits before opening the library or a context."""
+        storage = SimpleNamespace(slices=[SimpleNamespace()])
+        cell = run.Cell("xtbloom", "cpu", "host", "dataset", "force", 1)
+        with (
+            mock.patch.object(run.public_api, "_configure_library") as configure,
+            self.assertRaisesRegex(run.BenchmarkError, "max SCC iterations"),
+        ):
+            run.XTBloomAdapter.from_storage(
+                Path("lib.so"),
+                storage,
+                cell,
+                0,
+                1,
+                max_scc_iterations=0,
+            )
+        configure.assert_not_called()
+
+        with (
+            mock.patch.object(run.public_api, "_configure_library") as configure,
+            self.assertRaisesRegex(run.BenchmarkError, "electronic temperature"),
+        ):
+            run.XTBloomAdapter.from_storage(
+                Path("lib.so"),
+                storage,
+                cell,
+                0,
+                1,
+                electronic_temperature_hartree=float("nan"),
+            )
+        configure.assert_not_called()
+
+    def test_manifest_constructor_preserves_finite_batch_and_strict_options(
+        self,
+    ) -> None:
+        """The paper seam retains main's partial finite-batch and strict controls."""
+        sequence = ({"id": "a"}, {"id": "b"})
+        cell = run.Cell("xtbloom", "cpu", "host", "dataset", "force", 128, ("a", "b"))
+        storage = SimpleNamespace(slices=[SimpleNamespace(), SimpleNamespace()])
+        with (
+            mock.patch.object(run.public_api, "assemble_batch", return_value=storage),
+            mock.patch.object(run.XTBloomAdapter, "_initialize") as initialize,
+        ):
+            run.XTBloomAdapter(
+                Path("fake.so"),
+                Path("manifest.json"),
+                {},
+                sequence,
+                cell,
+                0,
+                1,
+                strict_fresh=True,
+                request_charges=True,
+                allow_system_failures=True,
+            )
+        self.assertTrue(initialize.call_args.kwargs["strict_fresh"])
+        self.assertTrue(initialize.call_args.kwargs["collect_atomic_charges"])
+        self.assertTrue(initialize.call_args.kwargs["allow_system_failures"])
+        self.assertIs(initialize.call_args.args[1], storage)
+
+    def test_shared_initializer_applies_strict_and_paper_controls(self) -> None:
+        """Preserve native options and charge allocation after composition."""
+        adapter = object.__new__(run.XTBloomAdapter)
+        adapter.systems = 2
+        adapter.storage = SimpleNamespace(
+            atomic_numbers=[1, 1, 1], point_charge_values=[]
+        )
+        adapter.memory = run.public_api.DescriptorMemory("host", 0)
+        adapter.library = SimpleNamespace(
+            xtbloom_compute_options_init=mock.Mock(return_value=0),
+            xtbloom_batch_result_init=mock.Mock(return_value=0),
+        )
+        cell = run.Cell("xtbloom", "cpu", "host", "dataset", "force", 2)
+        with mock.patch.object(run.public_api, "_make_batch"):
+            adapter._initialize_batch_and_results(
+                cell, strict_fresh=True, request_charges=True
+            )
+            self.assertEqual(adapter.options.max_scc_iterations, 500)
+            self.assertEqual(adapter.options.charge_tolerance, 1e-10)
+            self.assertEqual(adapter.options.energy_tolerance, 1e-12)
+            self.assertEqual(len(adapter.charges), 3)
+            self.assertEqual(len(adapter.energies), 2)
+            adapter._initialize_batch_and_results(
+                cell,
+                strict_fresh=False,
+                request_charges=False,
+                max_scc_iterations=345,
+                electronic_temperature_hartree=0.001,
+            )
+            self.assertEqual(adapter.options.max_scc_iterations, 345)
+            self.assertEqual(adapter.options.electronic_temperature, 0.001)
+            self.assertIsNone(adapter.charges)
+
     def test_public_timing_semantics_label_is_exact(self) -> None:
         """Use the agreed repeated-compute term and avoid a list-cache claim."""
         self.assertEqual(run.REPEATED_CALL_SEMANTICS, "same_geometry_repeated_compute")
@@ -1003,7 +1121,12 @@ class PairedRunnerTest(unittest.TestCase):
         self,
     ) -> None:
         """A constructor that never returns still releases every acquired owner."""
-        for failed_stage in ("after-context", "after-control"):
+        for failed_stage in (
+            "after-context",
+            "after-control",
+            "storage-after-context",
+            "storage-after-control",
+        ):
             with self.subTest(failed_stage=failed_stage):
                 releases = []
                 context = ctypes.c_void_p(123)
@@ -1031,7 +1154,9 @@ class PairedRunnerTest(unittest.TestCase):
                         run.public_api, "_configure_library", return_value=library
                     ),
                     mock.patch.object(
-                        run.public_api, "assemble_batch", return_value=SimpleNamespace()
+                        run.public_api,
+                        "assemble_batch",
+                        return_value=SimpleNamespace(slices=[SimpleNamespace()]),
                     ),
                     mock.patch.object(
                         run.public_api, "_make_context", return_value=context
@@ -1042,7 +1167,7 @@ class PairedRunnerTest(unittest.TestCase):
                         return_value=memory,
                         side_effect=(
                             run.BenchmarkError("post-context failure")
-                            if failed_stage == "after-context"
+                            if failed_stage.endswith("after-context")
                             else None
                         ),
                     ),
@@ -1057,19 +1182,31 @@ class PairedRunnerTest(unittest.TestCase):
                     ),
                     self.assertRaises(run.BenchmarkError),
                 ):
-                    run.XTBloomAdapter(
-                        Path("fake.so"),
-                        Path("manifest.json"),
-                        {},
-                        ({"id": "a"},),
-                        cell,
-                        0,
-                        1,
-                    )
+                    if failed_stage.startswith("storage-"):
+                        run.XTBloomAdapter.from_storage(
+                            Path("fake.so"),
+                            SimpleNamespace(slices=[SimpleNamespace()]),
+                            cell,
+                            0,
+                            1,
+                            collect_atomic_charges=True,
+                            max_scc_iterations=345,
+                            electronic_temperature_hartree=0.001,
+                        )
+                    else:
+                        run.XTBloomAdapter(
+                            Path("fake.so"),
+                            Path("manifest.json"),
+                            {},
+                            ({"id": "a"},),
+                            cell,
+                            0,
+                            1,
+                        )
                 self.assertEqual(
                     releases,
                     ["context"]
-                    if failed_stage == "after-context"
+                    if failed_stage.endswith("after-context")
                     else ["control", "memory", "context"],
                 )
 
