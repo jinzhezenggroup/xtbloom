@@ -21,6 +21,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+#include "runtime/cuda_scc_benchmark_mode.hpp"
+#endif
+
 #include "backends/cuda/gfn1_classical_corrections.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_electric_field.cuh"
@@ -2066,17 +2070,6 @@ __device__ bool fixed_topology_value_differs(const T* actual, const T* expected,
   return actual != nullptr && index < elements && actual[index] != expected[index];
 }
 
-__device__ bool fixed_spin_channel_differs(const std::int32_t* actual, const std::int32_t* expected,
-                                           const std::int32_t* expected_unpaired,
-                                           std::int64_t index, std::int64_t elements) noexcept {
-  if (actual == nullptr || index >= elements) return false;
-  std::int32_t channels = actual[index];
-  if (channels == 0) {
-    channels = expected_unpaired[index] == 0 ? 1 : 2;
-  }
-  return channels != expected[index];
-}
-
 __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBinding binding) {
   const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const std::int64_t stride = static_cast<std::int64_t>(gridDim.x) * blockDim.x;
@@ -2098,9 +2091,8 @@ __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBindi
         fixed_topology_value_differs(binding.unpaired_electrons,
                                      binding.expected_unpaired_electrons, element,
                                      binding.batch_elements) ||
-        fixed_spin_channel_differs(binding.spin_channels, binding.expected_spin_channels,
-                                   binding.expected_unpaired_electrons, element,
-                                   binding.batch_elements) ||
+        fixed_topology_value_differs(binding.spin_channels, binding.expected_spin_channels, element,
+                                     binding.batch_elements) ||
         fixed_topology_value_differs(binding.point_offsets, binding.expected_point_offsets, element,
                                      binding.point_offset_elements) ||
         fixed_topology_value_differs(binding.response_offsets, binding.expected_response_offsets,
@@ -2258,8 +2250,7 @@ bool validate_or_bind_fixed_topology_field(const char* name, const xtbloom_const
 }
 
 bool spin_channel_buffer_equals(const xtbloom_batch_t& batch,
-                                const std::vector<std::int32_t>& expected,
-                                const std::vector<std::int32_t>& unpaired_electrons) noexcept {
+                                const std::vector<std::int32_t>& expected) noexcept {
   /* ABI-v1 and an empty ABI-v2 suffix both mean one restricted channel. */
   const bool supplied =
       batch.struct_size >= XTBLOOM_BATCH_V2_SIZE &&
@@ -2268,19 +2259,7 @@ bool spin_channel_buffer_equals(const xtbloom_batch_t& batch,
     return std::all_of(expected.begin(), expected.end(),
                        [](std::int32_t channels) { return channels == 1; });
   }
-  if (expected.size() != unpaired_electrons.size()) return false;
-  const std::size_t bytes = expected.size() * sizeof(std::int32_t);
-  if (!valid_host_extent(batch.spin_channels, bytes, expected.empty())) return false;
-  const auto* source = static_cast<const std::byte*>(batch.spin_channels.data);
-  for (std::size_t system = 0; system < expected.size(); ++system) {
-    std::int32_t channels = 0;
-    std::memcpy(&channels, source + system * sizeof(channels), sizeof(channels));
-    if (channels == 0) {
-      channels = unpaired_electrons[system] == 0 ? 1 : 2;
-    }
-    if (channels != expected[system]) return false;
-  }
-  return true;
+  return buffer_equals(batch.spin_channels, expected);
 }
 
 bool finite_double_buffer(const xtbloom_const_buffer_t& buffer, std::int64_t elements,
@@ -2354,7 +2333,7 @@ TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
       !buffer_equals(batch.atomic_numbers, key.atomic_numbers) ||
       !double_buffer_equals(batch.molecular_charges, key.molecular_charges) ||
       !buffer_equals(batch.unpaired_electrons, key.unpaired_electrons) ||
-      !spin_channel_buffer_equals(batch, key.spin_channels, key.unpaired_electrons)) {
+      !spin_channel_buffer_equals(batch, key.spin_channels)) {
     /* Distinguish a short/wrong-space descriptor from a legitimate topology
      * change so invalid reuse attempts cannot enter candidate construction. */
     std::size_t atom_offset_bytes = 0u;
@@ -2618,12 +2597,9 @@ xtbloom_status_t make_topology_key(const xtbloom_batch_t& batch,
       error = "molecular_charges contains a nonfinite value";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
-    std::int32_t& channels = key.spin_channels[static_cast<std::size_t>(system)];
-    if (channels == 0) {
-      channels = key.unpaired_electrons[static_cast<std::size_t>(system)] == 0 ? 1 : 2;
-    }
+    const std::int32_t channels = key.spin_channels[static_cast<std::size_t>(system)];
     if (channels != 1 && channels != 2) {
-      error = "spin_channels values must be zero (auto), one, or two";
+      error = "spin_channels values must be one or two";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
@@ -4531,7 +4507,14 @@ struct Gfn2CudaExecutionCache::Impl {
   Impl(std::int32_t selected_device, void* selected_stream) noexcept
       : device_id(selected_device),
         stream(reinterpret_cast<cudaStream_t>(selected_stream)),
-        topology_staging(selected_device, selected_stream) {}
+        topology_staging(selected_device, selected_stream) {
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+    /* This owner also owns its topology/Graph/WARM identity. A later environment
+     * change must not switch a reused cache to another SCC execution family. */
+    benchmark_selection =
+        parse_cuda_scc_benchmark_mode(std::getenv("XTBLOOM_CUDA_SCC_BENCHMARK_MODE"));
+#endif
+  }
 
   ~Impl() {
     std::lock_guard<std::mutex> lock(mutex);
@@ -8534,6 +8517,24 @@ struct Gfn2CudaExecutionCache::Impl {
       std::vector<double>&& point_values, std::vector<double>&& point_gammas,
       std::vector<double>&& periodic_shifts, std::vector<double>&& periodic_response,
       std::unique_ptr<Prepared>& output, std::string& error, bool build_request_graph = false) {
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+    if (!benchmark_selection.valid) {
+      error = "XTBLOOM_CUDA_SCC_BENCHMARK_MODE must be auto, tail, or chain";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    if (benchmark_selection.mode != CudaSccBenchmarkMode::kAuto &&
+        (key.model != XTBLOOM_MODEL_GFN2_XTB || key.periodic_enabled ||
+         key.native_lattice_enabled ||
+         (!key.point_offsets.empty() && key.point_offsets.back() != 0) ||
+         external_energy_model != nullptr ||
+         std::any_of(key.spin_channels.begin(), key.spin_channels.end(),
+                     [](std::int32_t channels) { return channels != 1; }))) {
+      error =
+          "forced SCC benchmark graphs require molecular restricted GFN2 without "
+          "point charges, periodic response, native lattice, or an external energy model";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+#endif
     auto candidate = std::make_unique<Prepared>(stream);
     candidate->external_energy_model = external_energy_model;
     const std::uint64_t fingerprint = key.fingerprint();
@@ -8921,8 +8922,19 @@ struct Gfn2CudaExecutionCache::Impl {
 
     status = validate_candidate_setup(*candidate, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+    auto preference = Gfn2SccLoopGraphPreference::kAuto;
+    if (benchmark_selection.mode == CudaSccBenchmarkMode::kDeviceDispatchChain) {
+      preference = Gfn2SccLoopGraphPreference::kDeviceDispatchChain;
+    } else if (benchmark_selection.mode == CudaSccBenchmarkMode::kDeviceTailGraph) {
+      preference = Gfn2SccLoopGraphPreference::kDeviceTailGraph;
+    }
+    const Gfn2SccLoopGraphBuildResult loop_graph = candidate->scc_loop.build(
+        candidate->scc_binding, candidate->inference.epoch_consumer, preference);
+#else
     const Gfn2SccLoopGraphBuildResult loop_graph =
         candidate->scc_loop.build(candidate->scc_binding, candidate->inference.epoch_consumer);
+#endif
     if (!loop_graph.success()) {
       std::ostringstream message;
       message << "CUDA SCC conditional Graph setup rejected the production binding: status="
@@ -8935,6 +8947,23 @@ struct Gfn2CudaExecutionCache::Impl {
                  ? XTBLOOM_STATUS_INVALID_ARGUMENT
                  : XTBLOOM_STATUS_INTERNAL_ERROR;
     }
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+    const bool requested_family_ready =
+        preference == Gfn2SccLoopGraphPreference::kAuto ||
+        (preference == Gfn2SccLoopGraphPreference::kDeviceTailGraph &&
+         loop_graph.device_tail_graph_ready()) ||
+        (preference == Gfn2SccLoopGraphPreference::kDeviceDispatchChain &&
+         loop_graph.device_dispatch_chain_ready());
+    if (!requested_family_ready) {
+      std::ostringstream message;
+      message << "requested SCC benchmark graph family is unavailable: preference="
+              << static_cast<std::uint32_t>(preference)
+              << " fallback_reason=" << static_cast<std::uint32_t>(loop_graph.fallback_reason)
+              << " cuda=" << static_cast<int>(loop_graph.cuda_status);
+      error = message.str();
+      return XTBLOOM_STATUS_NOT_IMPLEMENTED;
+    }
+#endif
     /* The setup owner factors its deterministic topology-only seed at
      * generation 1 so setup and graph validation can exercise a usable
      * overlap cache.  The externally visible numerical runtime, however,
@@ -9423,14 +9452,9 @@ struct Gfn2CudaExecutionCache::Impl {
         batch.struct_size >= XTBLOOM_BATCH_V2_SIZE &&
         (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
     if (spin_supplied) {
-      if (batch.spin_channels.memory_space == XTBLOOM_MEMORY_HOST) {
-        if (!spin_channel_buffer_equals(batch, key.spin_channels, key.unpaired_electrons)) {
-          error = "spin_channels does not match the fixed CUDA plan topology";
-          return XTBLOOM_STATUS_INVALID_ARGUMENT;
-        }
-      } else if (!validate_or_bind_fixed_topology_field(
-                     "spin_channels", batch.spin_channels, key.spin_channels,
-                     state.expected_spin_channels, binding.spin_channels, error)) {
+      if (!validate_or_bind_fixed_topology_field("spin_channels", batch.spin_channels,
+                                                 key.spin_channels, state.expected_spin_channels,
+                                                 binding.spin_channels, error)) {
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     } else if (!std::all_of(key.spin_channels.begin(), key.spin_channels.end(),
@@ -11643,6 +11667,9 @@ struct Gfn2CudaExecutionCache::Impl {
   std::int32_t device_id = -1;
   cudaStream_t stream = nullptr;
   Gfn2CudaTopologyStaging topology_staging;
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+  CudaSccBenchmarkSelection benchmark_selection{};
+#endif
   cusolverDnHandle_t solver = nullptr;
   cusolverDnParams_t solver_parameters = nullptr;
   syevjInfo_t solver_jacobi = nullptr;
@@ -11666,6 +11693,27 @@ Gfn2CudaExecutionCache::Gfn2CudaExecutionCache(std::int32_t device_id, void* str
     : impl_(std::make_unique<Impl>(device_id, stream)) {}
 
 Gfn2CudaExecutionCache::~Gfn2CudaExecutionCache() = default;
+
+xtbloom_status_t Gfn2CudaExecutionCache::validate_scc_benchmark_cpu_bridge(
+    std::string& error) const {
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  if (!impl_->benchmark_selection.valid) {
+    error = "XTBLOOM_CUDA_SCC_BENCHMARK_MODE must be auto, tail, or chain";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (impl_->benchmark_selection.mode != CudaSccBenchmarkMode::kAuto) {
+    error = "forced SCC benchmark graphs do not support CPU compatibility bridges";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+#else
+  (void)error;
+#endif
+  return XTBLOOM_STATUS_SUCCESS;
+}
 
 bool Gfn2CudaExecutionCache::external_energy_device_model_enabled() const noexcept {
   return impl_ != nullptr && impl_->external_energy_model != nullptr;
@@ -11848,6 +11896,8 @@ xtbloom_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache
         native_lattice_active(batch) && options.model == XTBLOOM_MODEL_GFN2_XTB &&
         (options.flags & static_cast<std::uint32_t>(XTBLOOM_COMPUTE_STRAIN_DERIVATIVES)) != 0u;
     if (native_periodic_strain_request) {
+      status = cache.validate_scc_benchmark_cpu_bridge(error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
       return implementation.execute_native_periodic_cpu_bridge_locked(
           batch, options, result, require_prepared_topology, error);
     }
@@ -12068,6 +12118,21 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
   }
 
   auto& implementation = *cache->impl_;
+#ifdef XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+  /* Conditional request Graphs deliberately capture bounded SCC instead of a
+   * nested device-launched Graph. Do not accept this asynchronous route as if
+   * it had executed the requested benchmark family. */
+  if (!implementation.benchmark_selection.valid) {
+    error = "XTBLOOM_CUDA_SCC_BENCHMARK_MODE must be auto, tail, or chain";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (implementation.benchmark_selection.mode != CudaSccBenchmarkMode::kAuto) {
+    error =
+        "forced SCC benchmark graphs require synchronous compute; asynchronous "
+        "request Graphs capture bounded SCC";
+    return XTBLOOM_STATUS_NOT_SUPPORTED;
+  }
+#endif
   xtbloom_status_t final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   {
     std::lock_guard<std::mutex> lock(implementation.mutex);

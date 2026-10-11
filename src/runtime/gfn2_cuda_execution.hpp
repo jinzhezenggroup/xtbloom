@@ -376,6 +376,10 @@ class Gfn2CudaExecutionCache : public RequestCompletion {
                                                          std::string& error);
 
   [[nodiscard]] bool valid() const noexcept;
+  /* CPU compatibility routes must not publish a forced Graph benchmark as if
+   * it ran the selected family. This reads only the immutable owner snapshot;
+   * ordinary builds and auto selection preserve existing bridge behavior. */
+  [[nodiscard]] xtbloom_status_t validate_scc_benchmark_cpu_bridge(std::string& error) const;
   [[nodiscard]] bool external_energy_device_model_enabled() const noexcept;
   [[nodiscard]] xtbloom_status_t set_external_energy_device_model(
       const xtbloom_external_energy_device_model_t* model, std::string& error);
