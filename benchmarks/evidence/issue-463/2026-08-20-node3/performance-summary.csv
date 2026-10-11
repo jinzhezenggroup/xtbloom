@@ -1,0 +1,9 @@
+group,natoms,ao_count,batch_size,start_mode,warmups,samples,baseline_median_ms,candidate_median_ms,improvement_percent,baseline_iterations,candidate_iterations,baseline_correctness,candidate_correctness,baseline_fresh_reference,candidate_fresh_reference
+large,362,722,1,fresh,10,30,1198.275745,1165.991005,2.694266,17,17,pass,pass,not_requested,not_requested
+large,362,722,1,warm,10,30,289.659649,258.415301,10.786572,2,2,pass,pass,pass,pass
+controls,62,122,8,fresh,10,30,138.039930,137.258987,0.565737,18,18,pass,pass,not_requested,not_requested
+controls,62,122,32,fresh,10,30,193.713561,193.629490,0.043399,18,18,pass,pass,not_requested,not_requested
+controls,62,122,128,fresh,10,30,439.221895,438.269364,0.216868,18,18,pass,pass,not_requested,not_requested
+controls,62,122,8,warm,10,30,32.868754,32.165012,2.141065,2,2,pass,pass,pass,pass
+controls,62,122,32,warm,10,30,60.318193,59.610005,1.174087,2,2,pass,pass,pass,pass
+controls,62,122,128,warm,10,30,179.651723,178.513611,0.633510,2,2,pass,pass,pass,pass

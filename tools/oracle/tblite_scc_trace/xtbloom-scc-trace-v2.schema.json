@@ -1,0 +1,362 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jinzhezenggroup/xtbloom/schemas/xtbloom-scc-trace-v2.schema.json",
+  "title": "xtbloom-scc-trace-v2",
+  "description": "Unrestricted GFN2 SCC trace interchange format. Population arrays use charge/magnetization order, orbital arrays use alpha/beta order, and both assembled and solver Hamiltonians are recorded.",
+  "type": "object",
+  "required": [
+    "format",
+    "provenance",
+    "input",
+    "basis",
+    "statics",
+    "residual_layout",
+    "iterations",
+    "terminal"
+  ],
+  "properties": {
+    "format": {"const": "xtbloom-scc-trace-v2"},
+    "provenance": {
+      "type": "object",
+      "required": ["tblite_revision", "oracle_patch_sha256"],
+      "properties": {
+        "tblite_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "Pinned full upstream tblite commit SHA."
+        },
+        "oracle_patch_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the observer patch used to record the trace."
+        },
+        "oracle_command": {
+          "type": "string",
+          "description": "Exact oracle command used to generate the trace, when recorded."
+        }
+      },
+      "additionalProperties": true
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "atomic_numbers",
+        "positions",
+        "molecular_charge",
+        "unpaired_electrons",
+        "spin_channels",
+        "temperature"
+      ],
+      "properties": {
+        "atomic_numbers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "integer", "minimum": 1, "maximum": 118},
+          "description": "Nuclear atomic numbers, one per atom."
+        },
+        "positions": {
+          "type": "array",
+          "items": {"type": "number"},
+          "description": "Flat atom-major Cartesian x,y,z coordinates in bohr; length 3 * n_atoms."
+        },
+        "molecular_charge": {
+          "type": "number",
+          "description": "Total molecular charge in units of the positive elementary charge."
+        },
+        "unpaired_electrons": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Positive number of unpaired electrons selecting unrestricted execution."
+        },
+        "spin_channels": {
+          "type": "integer",
+          "const": 2,
+          "description": "Two population channels: charge then magnetization."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Configured target electronic temperature in kelvin."
+        },
+        "point_charges": {
+          "type": "object",
+          "required": ["positions", "charges", "hardnesses"],
+          "properties": {
+            "positions": {
+              "type": "array",
+              "minItems": 3,
+              "items": {"type": "number"},
+              "description": "Flat point-major Cartesian x,y,z coordinates in bohr; exactly three per point."
+            },
+            "charges": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "number"},
+              "description": "External charges in units of the positive elementary charge."
+            },
+            "hardnesses": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "number", "exclusiveMinimum": 0},
+              "description": "Positive point-site gamma hardnesses in Hartree."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "basis": {
+      "type": "object",
+      "required": ["n_atoms", "n_shells", "nao", "atom_to_shell_count"],
+      "properties": {
+        "n_atoms": {"type": "integer", "minimum": 1},
+        "n_shells": {"type": "integer", "minimum": 1},
+        "nao": {"type": "integer", "minimum": 1},
+        "atom_to_shell_count": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1},
+          "description": "Number of contiguous tblite shells contributed by each atom; length n_atoms and sum n_shells."
+        },
+        "shell_offsets": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0},
+          "description": "Optional zero-based prefix offsets into shell-indexed arrays, one per atom."
+        }
+      },
+      "additionalProperties": false
+    },
+    "statics": {
+      "type": "object",
+      "required": ["overlap", "core_hamiltonian"],
+      "properties": {
+        "overlap": {"$ref": "#/definitions/static_matrix"},
+        "core_hamiltonian": {"$ref": "#/definitions/static_matrix"}
+      },
+      "additionalProperties": false
+    },
+    "residual_layout": {
+      "type": "object",
+      "required": ["shell_charges", "atomic_dipoles", "atomic_quadrupoles"],
+      "properties": {
+        "shell_charges": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Exactly 2 * n_shells channel-major shell-population elements."
+        },
+        "atomic_dipoles": {
+          "type": "integer",
+          "minimum": 3,
+          "description": "Exactly 2 * 3 * n_atoms channel-major atomic-dipole elements."
+        },
+        "atomic_quadrupoles": {
+          "type": "integer",
+          "minimum": 6,
+          "description": "Exactly 2 * 6 * n_atoms channel-major atomic-quadrupole elements."
+        }
+      },
+      "additionalProperties": false
+    },
+    "iterations": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/completed_iteration"},
+      "description": "Attempts that reached after_iteration. May be empty for setup or first-solve failure."
+    },
+    "failed_attempt": {
+      "$ref": "#/definitions/pre_solve_attempt"
+    },
+    "terminal": {
+      "type": "object",
+      "required": ["status", "converged", "iterations"],
+      "properties": {
+        "status": {
+          "type": "integer",
+          "enum": [1, 2, 3],
+          "description": "finished status: 1 converged, 2 max iterations, 3 failed."
+        },
+        "converged": {
+          "type": "boolean",
+          "description": "True exactly when status is 1."
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Attempt count reported by finished; completed count plus one exactly when failed_attempt exists."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": 1}}},
+          "then": {"properties": {"converged": {"const": true}}},
+          "else": {"properties": {"converged": {"const": false}}}
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "static_matrix": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {"type": "number"}
+        }
+      },
+      "description": "Spin-independent matrix in logical [shared=1][row][column] order."
+    },
+    "channel_matrix": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {"type": "number"}
+        }
+      },
+      "description": "Two-channel matrix in logical [channel][row][column] order."
+    },
+    "channel_spectrum": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "array",
+        "items": {"type": "number"}
+      },
+      "description": "Two-channel vector; field semantics select charge/magnetization or alpha/beta order."
+    },
+    "channel_dipoles": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"type": "number"}
+        }
+      },
+      "description": "Atomic dipoles in [charge,magnetization][atom][x,y,z]."
+    },
+    "channel_quadrupoles": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {"type": "number"}
+        }
+      },
+      "description": "Atomic quadrupoles in [charge,magnetization][atom][xx,xy,yy,xz,yz,zz]."
+    },
+    "pre_solve_attempt": {
+      "type": "object",
+      "required": [
+        "index",
+        "assembled_hamiltonian",
+        "solver_hamiltonian",
+        "mixed_qsh",
+        "mixed_qat",
+        "mixed_dipoles",
+        "mixed_quadrupoles"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1},
+        "assembled_hamiltonian": {"$ref": "#/definitions/channel_matrix"},
+        "solver_hamiltonian": {"$ref": "#/definitions/channel_matrix"},
+        "mixed_qsh": {"$ref": "#/definitions/channel_spectrum"},
+        "mixed_qat": {"$ref": "#/definitions/channel_spectrum"},
+        "mixed_dipoles": {"$ref": "#/definitions/channel_dipoles"},
+        "mixed_quadrupoles": {"$ref": "#/definitions/channel_quadrupoles"}
+      },
+      "additionalProperties": false,
+      "description": "before_solve payload retained when the eigensolver fails before after_iteration."
+    },
+    "convergence": {
+      "type": "object",
+      "required": ["energy", "population", "temperature", "overall"],
+      "properties": {
+        "energy": {"type": "boolean"},
+        "population": {"type": "boolean"},
+        "temperature": {"type": "boolean"},
+        "overall": {"type": "boolean"}
+      },
+      "additionalProperties": false,
+      "description": "after_iteration convergence flags; overall is their logical conjunction."
+    },
+    "completed_iteration": {
+      "type": "object",
+      "required": [
+        "index",
+        "assembled_hamiltonian",
+        "solver_hamiltonian",
+        "eigenvalues",
+        "occupations",
+        "density",
+        "mixed_qsh",
+        "raw_qsh",
+        "mixed_qat",
+        "raw_qat",
+        "mixed_dipoles",
+        "raw_dipoles",
+        "mixed_quadrupoles",
+        "raw_quadrupoles",
+        "residual",
+        "residual_rms",
+        "energy",
+        "energy_delta",
+        "convergence"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1},
+        "assembled_hamiltonian": {"$ref": "#/definitions/channel_matrix"},
+        "solver_hamiltonian": {"$ref": "#/definitions/channel_matrix"},
+        "eigenvalues": {"$ref": "#/definitions/channel_spectrum"},
+        "occupations": {"$ref": "#/definitions/channel_spectrum"},
+        "density": {"$ref": "#/definitions/channel_matrix"},
+        "mixed_qsh": {"$ref": "#/definitions/channel_spectrum"},
+        "raw_qsh": {"$ref": "#/definitions/channel_spectrum"},
+        "mixed_qat": {"$ref": "#/definitions/channel_spectrum"},
+        "raw_qat": {"$ref": "#/definitions/channel_spectrum"},
+        "mixed_dipoles": {"$ref": "#/definitions/channel_dipoles"},
+        "raw_dipoles": {"$ref": "#/definitions/channel_dipoles"},
+        "mixed_quadrupoles": {"$ref": "#/definitions/channel_quadrupoles"},
+        "raw_quadrupoles": {"$ref": "#/definitions/channel_quadrupoles"},
+        "residual": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "number"},
+          "description": "raw minus mixed, flattened channel-major as qsh(:,:), dpat(:,:,:), qpat(:,:,:)."
+        },
+        "residual_rms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Unweighted numerical sqrt(sum(residual_i^2)/N); no single physical unit."
+        },
+        "energy": {
+          "type": "number",
+          "description": "Electronic SCC energy sum(eelec), Hartree."
+        },
+        "energy_delta": {
+          "type": "number",
+          "description": "sum(eelec) - elast, Hartree."
+        },
+        "convergence": {"$ref": "#/definitions/convergence"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -85,10 +85,23 @@ per system rather than module-global state.
 
 Restricted calculations use the captured Hamiltonian directly. In tblite's
 unrestricted solver the assembled matrix is multiplied by two before
-diagonalization, so future unrestricted traces must distinguish assembled and
+diagonalization, so version-2 unrestricted traces distinguish assembled and
 solver Hamiltonians. The source comment claiming five quadrupole components is
 stale; `qpat` is allocated with six components in packed order
 `xx,xy,yy,xz,yz,zz`.
+
+The unrestricted observer bundle is separate from the v1 patch:
+
+- patch: `tblite-e9abc395-scc-observer-v2.patch`;
+- patch SHA-256:
+  `e8291e9ff6a5624a48c760bb246c8a12f41c710c02f71c81da9edd2ea9561c21`;
+- metadata: `metadata-v2.json`, which also pins the v2 recorder and main-source
+  hashes.
+
+The v2 recorder installs tblite's production `spin_polarization` container in
+addition to creating a two-spin wavefunction. This distinction is essential:
+`nspin=2` selects alpha/beta orbital storage, while the container supplies the
+magnetization potential and `1/2 m^T W m` energy used by unrestricted GFN2.
 
 ## Safe application and validation
 
@@ -172,9 +185,29 @@ Version 1 is deliberately restricted-only: `input.spin_channels` is one.
 tblite's restricted shared-orbital open-shell calculations. Matrices use
 logical `[spin=1][row][column]` order. The exception is occupations: tblite
 allocates `focc[nao,max(2,nspin)]`, so restricted traces retain both alpha and
-beta channels as `[2][nao]`. Issue #51 will extend the contract for unrestricted
-charge/magnetization arrays and distinct assembled/solver Hamiltonians while
-keeping restricted v1 documents valid.
+beta channels as `[2][nao]`. Issue #51 adds the separate v2 contract below for
+unrestricted charge/magnetization arrays and distinct assembled/solver
+Hamiltonians while keeping restricted v1 documents valid.
+
+## Unrestricted SCC trace format (`xtbloom-scc-trace-v2`)
+
+Version 2 is a separate schema and corpus contract. It keeps the v1 scalar and
+terminal meanings, but represents population and orbital channels explicitly:
+
+- q/d/Q arrays are `[charge, magnetization]`, matching tblite's SCC mixer;
+- eigenvalues, occupations, density, and Hamiltonians are `[alpha, beta]`;
+- `assembled_hamiltonian` is the matrix after the charge/magnetization
+  potentials are assembled;
+- `solver_hamiltonian` is the exact alpha/beta matrix passed to the
+  eigensolver and must equal `2 * assembled_hamiltonian` elementwise for this
+  pinned tblite unrestricted implementation.
+
+Residual flattening is field-major with charge/magnetization channels inside
+each field: `qsh(charge, magnetization)`, then `d(charge, magnetization)`, then
+`Q(charge, magnetization)`. Its dimension is
+`spin_channels * (n_shells + 9*n_atoms)`. The production replay harness uses
+the same mixed charge/magnetization state while its eigensolver and density
+outputs remain alpha/beta resolved.
 
 ### Shapes, ordering, and units
 
@@ -354,13 +387,54 @@ point-charge water cases `water_one_pc_gamma999` and
 per-shell `point_charge_shell_potential` (V^PC) and `point_charge_energy`
 (q_s V^PC) in every completed iteration (issue #46); plain cases omit them.
 
+## Pinned unrestricted corpus generation (issue #51)
+
+`generate_unrestricted_scc_corpus.py` owns the v2 OH-radical spec, recorder,
+schema, and `manifest-v2.json`. It reuses the same pinned tblite revision,
+reviewed dependency commits, offline Meson build, deterministic environment,
+compiler, and LP64 BLAS/LAPACK provenance as the restricted generator without
+rewriting `manifest.json` or any v1 golden.
+
+Generate the unrestricted corpus with the pinned local toolchain:
+
+```bash
+export FC=/group/software/deepmd-kit-3.1.1/bin/x86_64-conda-linux-gnu-gfortran
+export CC=/group/software/deepmd-kit-3.1.1/bin/x86_64-conda-linux-gnu-gcc
+export PATH=/home/jzzeng/miniconda3/pkgs/ninja-1.13.2-h171cf75_0/bin:$PATH
+export PYTHONPATH=/home/jzzeng/miniconda3/pkgs/meson-1.11.2-pyhcf101f3_0/site-packages
+export LIBRARY_PATH=/group/software/deepmd-kit-3.1.1/lib
+export LD_LIBRARY_PATH=/group/software/deepmd-kit-3.1.1/lib
+
+/home/jzzeng/miniconda3/bin/python \
+  tools/oracle/tblite_scc_trace/generate_unrestricted_scc_corpus.py \
+  --source-root /home/jzzeng/codes/tblite \
+  --corpus-dir data/conformance/scc-traces \
+  --meson-command '/home/jzzeng/miniconda3/bin/python -m mesonbuild.mesonmain' \
+  --lapack mkl-rt --wrap-mode nodownload
+```
+
+The offline integrity gate is:
+
+```bash
+python3 tools/oracle/tblite_scc_trace/generate_unrestricted_scc_corpus.py \
+  --source-root /nonexistent \
+  --corpus-dir data/conformance/scc-traces --check
+```
+
+The committed `oh_radical` trace converges in 10 iterations. Its first raw
+magnetization is independently checked against the pinned oxygen spin constants
+so a recorder that creates two orbital channels but omits spin polarization is
+rejected. The existing restricted goldens and manifest retain hard-coded
+SHA-256 identity checks.
+
 `xtbloom_scc_cpu_trace.py` drives the production CPU GFN2 SCC driver through the
-same corpus and compares captured trace documents against the goldens with the
-comparator.  It is the executable evidence harness for issues #49/#50 with
-three modes:
+versioned v1/v2 corpora and compares captured trace documents against the
+goldens with the matching profile. It is the executable evidence harness for
+issues #49/#50/#51 with four modes:
 
 - `--capture`: one case at a time, comparing each complete closed-loop
-  trajectory against the pinned golden with `cpu_closed_loop_v1`.  The capture
+  trajectory against the pinned golden with `cpu_closed_loop_v1` or
+  `cpu_closed_loop_v2`. The capture
   driver includes the self-consistent D4 two-body atom potential (which is
   nonzero even at the zero-charge first mixed state) and starts every system
   from tblite's zero-charge perturbative q/d/Q seed;
@@ -370,7 +444,8 @@ three modes:
   per-system failure lane (NaN in one lane's H0) must neither corrupt nor
   suppress the successful members;
 - `--replay`: every golden iteration is replayed from its injected mixed
-  q/d/Q state and compared with the `cpu_replay_v1` single-iteration profile.
+  q/d/Q state and compared with the matching `cpu_replay_v1` or
+  `cpu_replay_v2` single-iteration profile.
   A divergence is therefore assigned to the exact iteration where it first
   appears instead of inheriting Broyden drift; an injected perturbation in a
   later iteration is reported only at that iteration. If the eigensolver fails
@@ -387,5 +462,7 @@ The native gates behind these modes are registered as CTest tests
 (`xtbloom.gfn2.scc_trace_cpu_closed_loop`, `xtbloom.gfn2.scc_trace_ragged_batch`,
 `xtbloom.gfn2.scc_trace_cpu_replay`, `xtbloom.gfn2.scc_trace_mixer_replay`, and
 `xtbloom.gfn2.scc_trace_ragged_batch_native`) and are passing acceptance gates
-for the restricted CPU closed-loop, ragged-batch, replay, and mixer-history
-acceptance items of issue #42.
+for restricted and unrestricted sequential, replay, mixer-history, and mixed
+restricted/unrestricted ragged execution. The mixed test includes a poisoned
+unrestricted peer and proves failure isolation plus early-lane freezing across
+different wavefunction layouts.

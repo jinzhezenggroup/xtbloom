@@ -11,6 +11,10 @@
 
 namespace xtbloom::detail::gfn2 {
 
+class PeriodicShortRangePlan;
+struct PeriodicShortRangeGeometry;
+struct PeriodicShortRangeWorkspace;
+
 /*
  * Geometry-independent data for the GFN2 screened nuclear repulsion term.
  * Plan construction may allocate. Evaluation only reads these arrays and does
@@ -38,6 +42,17 @@ xtbloom_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total
  */
 xtbloom_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* positions,
                                    double* energies, double* forces, std::string& error);
+
+/*
+ * Evaluate the complete 25-bohr periodic image sum. Per-atom energies,
+ * Cartesian gradients dE/dR, and row-major strain derivatives dE/d epsilon
+ * are overwritten transactionally. Self images contribute energy and strain
+ * but have no Cartesian derivative with respect to their central atom.
+ */
+xtbloom_status_t evaluate_periodic_repulsion_cpu(
+    const RepulsionPlan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, double* per_atom_energies, double* gradients,
+    double* strain_derivatives, const PeriodicShortRangeWorkspace& workspace, std::string& error);
 
 }  // namespace xtbloom::detail::gfn2
 

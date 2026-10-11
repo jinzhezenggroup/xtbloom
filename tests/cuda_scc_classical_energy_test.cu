@@ -16,6 +16,9 @@
 namespace {
 
 using xtbloom::detail::cuda::evaluate_gfn2_scc_classical_energy_cuda;
+using xtbloom::detail::cuda::Gfn2ElectricFieldDeviceBatch;
+using xtbloom::detail::cuda::Gfn2ElectricFieldDeviceMultipoles;
+using xtbloom::detail::cuda::Gfn2ElectricFieldDevicePotentialView;
 using xtbloom::detail::cuda::Gfn2SccClassicalEnergyComponent;
 using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceActivity;
 using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceBatch;
@@ -26,6 +29,7 @@ using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceWorkspace;
 using xtbloom::detail::cuda::kGfn2SccClassicalAllComponents;
 using xtbloom::detail::cuda::kGfn2SccClassicalDiagnosticComponents;
 using xtbloom::detail::cuda::kGfn2SccClassicalInputComponents;
+using xtbloom::detail::cuda::kGfn2SccClassicalStorageComponents;
 using xtbloom::detail::cuda::reset_gfn2_scc_classical_energy_device_errors_cuda;
 
 #define CHECK(condition)                                                                   \
@@ -37,6 +41,7 @@ using xtbloom::detail::cuda::reset_gfn2_scc_classical_energy_device_errors_cuda;
   } while (false)
 
 constexpr std::uint64_t kPlanToken = 0x434c415353454e45ULL;
+constexpr double kSentinel = -813.625;
 
 constexpr std::uint32_t bit(Gfn2SccClassicalEnergyComponent component) {
   return static_cast<std::uint32_t>(component);
@@ -153,8 +158,7 @@ struct DeviceCase {
 
   explicit DeviceCase(const HostCase& host)
       : active(host.active.size()),
-        scratch(host.active.size() *
-                static_cast<std::size_t>(kGfn2SccClassicalDiagnosticComponents)),
+        scratch(host.active.size() * static_cast<std::size_t>(kGfn2SccClassicalStorageComponents)),
         sequence_active(1u),
         system_errors(host.active.size()),
         device_error(1u) {
@@ -173,6 +177,7 @@ struct DeviceCase {
   void bind(std::uint32_t enabled_components, bool use_activity) {
     const std::int64_t count = static_cast<std::int64_t>(active.size());
     batch = {count, enabled_components, kPlanToken};
+    batch.model = xtbloom::detail::XtbModelFlavor::kGfn2;
     input = {
         enabled_components & bit(Gfn2SccClassicalEnergyComponent::kES2) ? inputs[0].get() : nullptr,
         enabled_components & bit(Gfn2SccClassicalEnergyComponent::kES2) ? count : 0,
@@ -197,8 +202,8 @@ struct DeviceCase {
     diagnostics = {outputs[0].get(), count, outputs[1].get(), count, outputs[2].get(), count,
                    outputs[3].get(), count, outputs[4].get(), count, outputs[5].get(), count,
                    outputs[6].get(), count, kPlanToken};
-    workspace = {scratch.get(), static_cast<std::int64_t>(scratch.size()), sequence_active.get(), 1,
-                 kPlanToken};
+    workspace = {scratch.get(), count * kGfn2SccClassicalDiagnosticComponents,
+                 sequence_active.get(), 1, kPlanToken};
   }
 
   cudaError_t fill_outputs(double value, cudaStream_t stream = nullptr) {
@@ -396,6 +401,140 @@ int test_total_addition_overflow_and_sticky_sequence() {
   return 0;
 }
 
+int test_electric_field_energy_formula_and_peer_isolation() {
+  HostCase host = make_case(2u);
+  DeviceCase device(host);
+  const std::vector<std::int64_t> offsets{0, 2, 3};
+  const std::vector<double> atomic_potential{-0.75, 0.5, -1.25};
+  const std::vector<double> dipole_potential{0.2, -0.3, 0.4, 0.2, -0.3, 0.4, -0.1, 0.25, -0.5};
+  const std::vector<double> charges{0.6, -0.2, 0.4};
+  const std::vector<double> dipoles{0.5, -0.1, 0.25, -0.2, 0.4, 0.3, 0.75, -0.5, 0.1};
+  DeviceBuffer<std::int64_t> d_offsets(offsets.size());
+  DeviceBuffer<double> d_atomic_potential(atomic_potential.size());
+  DeviceBuffer<double> d_dipole_potential(dipole_potential.size());
+  DeviceBuffer<double> d_charges(charges.size());
+  DeviceBuffer<double> d_dipoles(dipoles.size());
+  DeviceBuffer<double> d_field_energy(host.active.size());
+  CHECK(d_offsets.upload(offsets) == cudaSuccess);
+  CHECK(d_atomic_potential.upload(atomic_potential) == cudaSuccess);
+  CHECK(d_dipole_potential.upload(dipole_potential) == cudaSuccess);
+  CHECK(d_charges.upload(charges) == cudaSuccess);
+  CHECK(d_dipoles.upload(dipoles) == cudaSuccess);
+  device.batch.electric_field = Gfn2ElectricFieldDeviceBatch{2, 3, 3, d_offsets.get(), kPlanToken};
+  device.input.electric_field_multipoles =
+      Gfn2ElectricFieldDeviceMultipoles{d_charges.get(), 3, d_dipoles.get(), 9, kPlanToken};
+  device.input.electric_field_potentials = Gfn2ElectricFieldDevicePotentialView{
+      d_atomic_potential.get(), 3, d_dipole_potential.get(), 9, kPlanToken};
+  device.diagnostics.electric_field = d_field_energy.get();
+  device.diagnostics.electric_field_elements = 2;
+  device.workspace.component_elements =
+      2 * xtbloom::detail::cuda::kGfn2SccClassicalStorageComponents;
+
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(d_field_energy.upload(std::vector<double>(2, kSentinel)) == cudaSuccess);
+  CHECK(launch(device) == 0);
+  std::vector<double> field_energy;
+  CHECK(d_field_energy.download(field_energy) == cudaSuccess);
+  std::array<std::vector<double>, kGfn2SccClassicalDiagnosticComponents> output;
+  CHECK(download_outputs(device, output) == 0);
+  const auto expected_field = [&](std::int64_t begin, std::int64_t end) {
+    double energy = 0.0;
+    for (std::int64_t atom = begin; atom < end; ++atom) {
+      energy += atomic_potential[static_cast<std::size_t>(atom)] *
+                charges[static_cast<std::size_t>(atom)];
+      for (std::int64_t axis = 0; axis < 3; ++axis) {
+        const std::size_t index = static_cast<std::size_t>(atom * 3 + axis);
+        energy += dipole_potential[index] * dipoles[index];
+      }
+    }
+    return energy;
+  };
+  for (std::size_t system = 0; system < 2u; ++system) {
+    const double expected = expected_field(offsets[system], offsets[system + 1u]);
+    CHECK(near(field_energy[system], expected));
+    CHECK(near(output[6][system], host.total[system] + expected));
+  }
+
+  std::vector<double> bad_dipoles = dipoles;
+  bad_dipoles[6] = std::numeric_limits<double>::quiet_NaN();
+  CHECK(d_dipoles.upload(bad_dipoles) == cudaSuccess);
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(d_field_energy.upload(std::vector<double>(2, kSentinel)) == cudaSuccess);
+  CHECK(launch(device) == 0);
+  std::vector<std::uint32_t> errors;
+  CHECK(device.system_errors.download(errors) == cudaSuccess);
+  CHECK(d_field_energy.download(field_energy) == cudaSuccess);
+  CHECK(download_outputs(device, output) == 0);
+  CHECK(errors[0] == 0u);
+  CHECK(errors[1] ==
+        static_cast<std::uint32_t>(Gfn2SccClassicalEnergyDeviceError::kNonfiniteElectricField));
+  CHECK(field_energy[1] == kSentinel && output[6][1] == kSentinel);
+  CHECK(near(field_energy[0], expected_field(0, 2)));
+
+  /* GFN1 retains -E.r in the atom-charge channel but has no atomic dipole
+   * state. Its field descriptor must therefore be exactly scalar. */
+  constexpr std::uint32_t scalar_components =
+      bit(Gfn2SccClassicalEnergyComponent::kES2) | bit(Gfn2SccClassicalEnergyComponent::kES3);
+  device.bind(scalar_components, true);
+  device.batch.model = xtbloom::detail::XtbModelFlavor::kGfn1;
+  device.diagnostics.aes2 = nullptr;
+  device.diagnostics.aes2_elements = 0;
+  device.batch.electric_field = Gfn2ElectricFieldDeviceBatch{2, 3, 3, d_offsets.get(), kPlanToken};
+  device.input.electric_field_multipoles =
+      Gfn2ElectricFieldDeviceMultipoles{d_charges.get(), 3, nullptr, 0, kPlanToken};
+  device.input.electric_field_potentials =
+      Gfn2ElectricFieldDevicePotentialView{d_atomic_potential.get(), 3, nullptr, 0, kPlanToken};
+  device.diagnostics.electric_field = d_field_energy.get();
+  device.diagnostics.electric_field_elements = 2;
+  device.workspace.component_elements =
+      2 * xtbloom::detail::cuda::kGfn2SccClassicalStorageComponents;
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(d_field_energy.upload(std::vector<double>(2, kSentinel)) == cudaSuccess);
+  CHECK(launch(device) == 0);
+  CHECK(d_field_energy.download(field_energy) == cudaSuccess);
+  CHECK(download_outputs(device, output) == 0);
+  for (std::size_t system = 0; system < 2u; ++system) {
+    double atomic_field = 0.0;
+    for (std::int64_t atom = offsets[system]; atom < offsets[system + 1u]; ++atom) {
+      atomic_field += atomic_potential[static_cast<std::size_t>(atom)] *
+                      charges[static_cast<std::size_t>(atom)];
+    }
+    CHECK(near(field_energy[system], atomic_field));
+    CHECK(near(output[6][system],
+               host.components[0][system] + host.components[1][system] + atomic_field));
+  }
+
+  /* A nonzero GFN1 dipole projection is a synchronous descriptor failure and
+   * cannot alter public diagnostics or device error controls. */
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(d_field_energy.upload(std::vector<double>(2, kSentinel)) == cudaSuccess);
+  constexpr std::uint32_t control_sentinel = 0x6ac51e2du;
+  CHECK(device.system_errors.upload(std::vector<std::uint32_t>(2, control_sentinel)) ==
+        cudaSuccess);
+  CHECK(device.device_error.upload(std::vector<std::uint32_t>(1, control_sentinel)) == cudaSuccess);
+  auto hostile_input = device.input;
+  hostile_input.electric_field_potentials.dipole = d_dipole_potential.get();
+  hostile_input.electric_field_potentials.dipole_elements = 9;
+  CHECK(evaluate_gfn2_scc_classical_energy_cuda(
+            device.batch, hostile_input, device.activity, device.diagnostics, device.workspace,
+            device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
+  CHECK(d_field_energy.download(field_energy) == cudaSuccess);
+  CHECK(download_outputs(device, output) == 0);
+  CHECK(std::all_of(field_energy.begin(), field_energy.end(),
+                    [](double value) { return value == kSentinel; }));
+  for (const auto& values : output) {
+    CHECK(
+        std::all_of(values.begin(), values.end(), [](double value) { return value == kSentinel; }));
+  }
+  CHECK(device.system_errors.download(errors) == cudaSuccess);
+  std::vector<std::uint32_t> device_errors;
+  CHECK(device.device_error.download(device_errors) == cudaSuccess);
+  CHECK(std::all_of(errors.begin(), errors.end(),
+                    [](std::uint32_t value) { return value == control_sentinel; }));
+  CHECK(device_errors == std::vector<std::uint32_t>{control_sentinel});
+  return 0;
+}
+
 int test_hostile_metadata_aliases_and_reset_validation() {
   const HostCase host = make_case(2u);
   DeviceCase device(host);
@@ -522,10 +661,11 @@ int test_cuda_graph_replay() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 6> tests{
+  const std::array<int (*)(), 7> tests{
       {test_batch_parity_and_custom_stream, test_component_contract_and_disabled_publication,
        test_nonfinite_peer_isolation_and_inactive_skip,
        test_total_addition_overflow_and_sticky_sequence,
+       test_electric_field_energy_formula_and_peer_isolation,
        test_hostile_metadata_aliases_and_reset_validation, test_cuda_graph_replay}};
   for (const auto test : tests) {
     const int status = test();

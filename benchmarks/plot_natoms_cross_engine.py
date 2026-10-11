@@ -5,11 +5,13 @@
 #   "matplotlib==3.10.9",
 # ]
 # ///
-"""Render the xtbloom cross-engine scaling figure from benchmark artifacts.
+"""Render the xtbloom cross-engine scaling figure from benchmark evidence.
 
-The script merges every ``--output-json`` artifact produced by
-``natoms_cross_engine.py`` (CPU and CUDA runs, one file per engine set),
-keeps only correctness-qualified ``available`` rows, and draws:
+The maintained public figure uses ``--publication-manifest`` so each engine or
+backend can advance to newer clean evidence independently. Direct
+``--artifact`` inputs remain available for issue-local plots whose JSON files
+share one clean run identity. Both modes keep only correctness-qualified
+``available`` rows and draw:
 
 1. ``batch=1``: cold GFN2-xTB energy+force public-call latency vs molecule
    size;
@@ -20,9 +22,9 @@ keeps only correctness-qualified ``available`` rows, and draws:
 
 The figure uses the archived median and min/max range from every eligible row.
 Reference engines without a matching point are omitted from that panel; no
-invented numbers are inserted.  Detailed hardware, revision, and protocol
-metadata stay in the evidence README so the plotting area remains readable at
-README and journal-column widths.
+invented numbers are inserted. Detailed provenance stays in the generated
+latest-results table and issue evidence. The selected CUDA device is repeated
+inside the figure so screenshots retain their hardware context.
 """
 
 from __future__ import annotations
@@ -36,6 +38,11 @@ import sys
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
+
+try:
+    from .build_natoms_cross_engine_table import PublicationError, load_publication
+except ImportError:  # pragma: no cover - direct script execution
+    from build_natoms_cross_engine_table import PublicationError, load_publication
 
 
 class PlotError(RuntimeError):
@@ -339,9 +346,18 @@ def _timing_range_ms(row: dict[str, Any]) -> tuple[float, float] | None:
     measured.
     """
     median = _median_ms(row)
-    samples = (row.get("timing") or {}).get("samples_ms")
-    if median is None or not isinstance(samples, list):
+    timing = row.get("timing") or {}
+    samples = timing.get("samples_ms")
+    if median is None:
         return None
+    if not isinstance(samples, list):
+        minimum = timing.get("min_ms")
+        maximum = timing.get("max_ms")
+        if not isinstance(minimum, int | float) or not isinstance(maximum, int | float):
+            return None
+        if not math.isfinite(float(minimum)) or not math.isfinite(float(maximum)):
+            return None
+        return max(0.0, median - float(minimum)), max(0.0, float(maximum) - median)
     finite = [
         float(value)
         for value in samples
@@ -452,7 +468,14 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
     )
     energy_gate = _scientific_notation(float(output_energy_atol))[1:-1]
     force_gate = _scientific_notation(float(output_force_atol))[1:-1]
+    selected_cuda = (metadata.get("hardware") or {}).get("selected_cuda_device") or {}
+    cuda_device = selected_cuda.get("device") or {}
+    cuda_name = cuda_device.get("name")
+    cuda_driver = cuda_device.get("driver")
+    if not cuda_name or not cuda_driver:
+        raise PlotError("plot metadata does not identify the CUDA device")
     return (
+        f"CUDA: {cuda_name} (driver {cuda_driver}) · "
         f"CPU budget: {cpu_threads} threads · median n = {repetitions}; "
         "whiskers show observed min\N{EN DASH}max\n"
         "Filled points are eligible; dependent rows pass the uniform benchmark "
@@ -792,7 +815,9 @@ def _add_svg_accessibility(path: Path, title: str, description: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Configure the figure CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifact", action="append", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--artifact", action="append", type=Path)
+    source.add_argument("--publication-manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--engines",
@@ -812,16 +837,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Merge artifacts and write the three-panel figure."""
     args = build_parser().parse_args(argv)
-    if not args.artifact:
-        print(  # noqa: T201 - CLI diagnostics
-            "ERROR: at least one --artifact JSON is required", file=sys.stderr
-        )
-        return 2
     try:
-        rows, metadata = load_rows(args.artifact)
+        if args.publication_manifest is not None:
+            rows, metadata = load_publication(args.publication_manifest)
+        else:
+            rows, metadata = load_rows(args.artifact or [])
         _validate_panel_coverage(rows)
         protocol_note = _protocol_note(metadata)
-    except PlotError as exc:
+    except (PlotError, PublicationError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 2
     try:

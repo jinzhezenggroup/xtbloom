@@ -136,21 +136,26 @@ struct Fixture {
   }
 
   Gfn2SccClassicalEnergyDeviceDiagnostics classical() noexcept {
-    return {ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            kToken};
+    Gfn2SccClassicalEnergyDeviceDiagnostics result{};
+    const auto take = [&]() { return ptr<double>(kBatch); };
+    result.es2 = take();
+    result.es2_elements = kBatch;
+    result.es3 = take();
+    result.es3_elements = kBatch;
+    result.aes2 = take();
+    result.aes2_elements = kBatch;
+    result.d4_two_body = take();
+    result.d4_two_body_elements = kBatch;
+    result.explicit_point_charge = take();
+    result.explicit_point_charge_elements = kBatch;
+    result.periodic_embedding = take();
+    result.periodic_embedding_elements = kBatch;
+    result.classical_total = take();
+    result.classical_total_elements = kBatch;
+    result.plan_token = kToken;
+    result.electric_field = take();
+    result.electric_field_elements = kBatch;
+    return result;
   }
 
   Gfn2SccFreeEnergyDeviceDiagnostics free_energy() noexcept {
@@ -179,6 +184,8 @@ struct Fixture {
     result.free_energy = take();
     result.free_energy_elements = kBatch;
     result.plan_token = kToken;
+    result.electric_field = take();
+    result.electric_field_elements = kBatch;
     return result;
   }
 
@@ -252,6 +259,10 @@ struct Fixture {
     workspace.spin_output.shell_potential_elements = kShells;
     workspace.mixed_topology.atomic_charges = ptr<double>(kAtoms);
     workspace.mixed_topology.atom_elements = kAtoms;
+    workspace.physical_topology.atomic_charges = ptr<double>(kAtoms);
+    workspace.physical_topology.atom_elements = kAtoms;
+    workspace.physical_topology.atomic_dipoles = ptr<double>(kDipoles);
+    workspace.physical_topology.dipole_elements = kDipoles;
 
     auto& produced = workspace.components;
     produced.es2_shell_potential = ptr<double>(kShells);
@@ -282,6 +293,13 @@ struct Fixture {
     produced.periodic_embedding_energy_elements = kBatch;
     produced.core_energy = ptr<double>(kBatch);
     produced.core_energy_elements = kBatch;
+
+    plan.electric_field_batch = {kBatch, kAtoms, kBatch + 1, ptr<std::int64_t>(kBatch + 1), kToken};
+    plan.classical_energy_batch.electric_field = plan.electric_field_batch;
+    input.electric_field = {ptr<double>(3 * kBatch), 3 * kBatch, ptr<double>(3 * kAtoms),
+                            3 * kAtoms, kToken};
+    input.electric_field_potentials = {ptr<double>(kAtoms), kAtoms, ptr<double>(kDipoles), kDipoles,
+                                       kToken};
 
     workspace.complete_potentials = {ptr<double>(kShells),
                                      kShells,
@@ -499,7 +517,12 @@ int test_zero_copy_projection_rebuilds_all_dataflow_edges() {
   CHECK(input.mulliken.density == workspace.staged_density.density);
   CHECK(input.electronic_energy.entropies == workspace.staged_occupations.entropies);
   CHECK(input.classical_energy.d4_two_body == workspace.components.d4_two_body_energy);
+  CHECK(input.classical_energy.electric_field_multipoles.atomic_charges ==
+        workspace.physical_topology.atomic_charges);
+  CHECK(input.classical_energy.electric_field_potentials.atomic ==
+        input.electric_field_potentials.atomic);
   CHECK(input.free_energy.periodic_embedding == workspace.components.periodic_embedding_energy);
+  CHECK(input.free_energy.electric_field == workspace.staged_classical_energy.electric_field);
   CHECK(input.free_energy.spin == workspace.staged_spin_energies);
   CHECK(input.raw_multipoles.shell_charges == workspace.staged_raw_population.qsh);
   CHECK(input.raw_spin.shell_populations == workspace.staged_raw_population.qsh);
@@ -507,12 +530,15 @@ int test_zero_copy_projection_rebuilds_all_dataflow_edges() {
 
   CHECK(state.published.shell_charges == state.raw_population.qsh);
   CHECK(state.free_energy.es2 == state.classical_energy.es2);
+  CHECK(state.free_energy.electric_field == state.classical_energy.electric_field);
   CHECK(state.free_energy.spin == state.spin_energies);
   CHECK(state.publication.energy.spin_energies == state.spin_energies);
   CHECK(state.publication.wavefunction.population.qat == state.raw_population.qat);
   CHECK(state.publication.scc.iterations == state.scc.iterations);
   CHECK(workspace.staged_free_energy.entropy == workspace.staged_occupations.entropies);
   CHECK(workspace.staged_free_energy.es3 == workspace.staged_classical_energy.es3);
+  CHECK(workspace.staged_free_energy.electric_field ==
+        workspace.staged_classical_energy.electric_field);
   CHECK(workspace.staged_free_energy.spin == workspace.staged_spin_energies);
   CHECK(workspace.staged_publication.energy.spin_energies == workspace.staged_spin_energies);
   CHECK(workspace.spin_output.spin_energies == workspace.staged_spin_energies);

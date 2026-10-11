@@ -23,9 +23,43 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "(emcmake cmake ...).")
 endif()
 
+option(XTBLOOM_WEB_ENABLE_SIMD
+  "Enable WebAssembly SIMD128 for the browser-only engine and provider" ON)
+set(_xtbloom_web_optimization_flag "-O3")
+set(_xtbloom_web_simd_flag "")
+if(XTBLOOM_WEB_ENABLE_SIMD)
+  # The public library is assembled from several parent-scope OBJECT targets.
+  # Apply the target feature to every CPU object producer as well as the final
+  # runtime target so the physics kernels, not only the adapter, can be
+  # auto-vectorized to f64x2 SIMD lanes.
+  set(_xtbloom_web_simd_targets
+    xtbloom
+    xtbloom_cpu_dispatch_objects
+    xtbloom_gfn2_mulliken_baseline_objects
+    xtbloom_model_common_cpu_objects
+    xtbloom_gfn1_cpu_objects
+    xtbloom_gfn2_cpu_objects)
+  foreach(_xtbloom_web_simd_target IN LISTS _xtbloom_web_simd_targets)
+    if(NOT TARGET ${_xtbloom_web_simd_target})
+      message(FATAL_ERROR
+        "missing Web SIMD compile target: ${_xtbloom_web_simd_target}")
+    endif()
+    target_compile_options(${_xtbloom_web_simd_target} PRIVATE -msimd128)
+  endforeach()
+  set(_xtbloom_web_simd_flag "-msimd128")
+  message(STATUS "xTBloom WebAssembly SIMD128: enabled")
+else()
+  message(STATUS "xTBloom WebAssembly SIMD128: disabled")
+endif()
+
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
+set(_xtbloom_web_engine_dir "${CMAKE_CURRENT_BINARY_DIR}/engine")
+set(_xtbloom_web_engine_js "${_xtbloom_web_engine_dir}/xtbloom_web.js")
+set(_xtbloom_web_engine_wasm "${_xtbloom_web_engine_dir}/xtbloom_web.wasm")
+set(_xtbloom_web_engine_data "${_xtbloom_web_engine_dir}/xtbloom_web.data")
+set(_xtbloom_web_package "${_xtbloom_web_site}/xtbloom_web.side.wasm")
 
 # Eigen is needed only when the browser target is enabled. Keep its 7.6 MB
 # header tree out of the repository and source distribution: FetchContent
@@ -96,7 +130,7 @@ set(_xtbloom_web_3dmol
     "${CMAKE_CURRENT_SOURCE_DIR}/node_modules/3dmol/build/3Dmol-min.js")
 add_custom_command(
   OUTPUT "${_xtbloom_web_3dmol}"
-  COMMAND npm ci --ignore-scripts --no-audit --no-fund
+  COMMAND npm ci --omit=dev --ignore-scripts --no-audit --no-fund
   WORKING_DIRECTORY "${_xtbloom_web_src}"
   DEPENDS
     "${_xtbloom_web_src}/package.json"
@@ -119,7 +153,9 @@ add_custom_command(
           -fvisibility=hidden -fvisibility-inlines-hidden
           -fno-exceptions -fno-rtti
           "-I${_xtbloom_web_eigen_root}"
-          -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}" -O2
+          -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}"
+          "${_xtbloom_web_optimization_flag}"
+          ${_xtbloom_web_simd_flag}
           "-sEXPORTED_FUNCTIONS=[\"_openblas_get_config\",\"_openblas_set_num_threads_local\",\"_LAPACKE_dpotrf_work\",\"_LAPACKE_dpocon_work\",\"_LAPACKE_dsyevd_work\",\"_cblas_dgemm\",\"_cblas_dtrsm\"]"
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
@@ -148,6 +184,7 @@ add_custom_command(
           -std=c++17
           "-I${_xtbloom_web_eigen_root}"
           "${_xtbloom_web_arch_flag}" -O2
+          ${_xtbloom_web_simd_flag}
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
     "${_xtbloom_web_src}/tests/linalg_eigen_test.cpp"
@@ -170,7 +207,9 @@ add_custom_target(
 add_custom_command(
   OUTPUT "${_xtbloom_web_obj}"
   COMMAND ${CMAKE_C_COMPILER}
-          "${_xtbloom_web_arch_flag}" -fPIC -O2
+          "${_xtbloom_web_arch_flag}" -fPIC
+          "${_xtbloom_web_optimization_flag}"
+          ${_xtbloom_web_simd_flag}
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
           -c "${_xtbloom_web_src}/xtbloom_web.c"
@@ -188,17 +227,25 @@ add_custom_command(
 # ---------------------------------------------------------------------------
 add_custom_command(
   OUTPUT
-    "${_xtbloom_web_site}/xtbloom_web.js"
-    "${_xtbloom_web_site}/xtbloom_web.wasm"
-    "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_engine_js}"
+    "${_xtbloom_web_engine_wasm}"
+    "${_xtbloom_web_engine_data}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_xtbloom_web_engine_dir}"
   COMMAND ${CMAKE_COMMAND} -E env "EMCC_FORCE_STDLIBS=1"
           ${CMAKE_CXX_COMPILER}
           "${_xtbloom_web_obj}"
           $<TARGET_FILE:xtbloom>
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
-          -o "${_xtbloom_web_site}/xtbloom_web.js"
-          "${_xtbloom_web_arch_flag}" -O2 -sMAIN_MODULE=2
+          -o "${_xtbloom_web_engine_js}"
+          "${_xtbloom_web_arch_flag}" "${_xtbloom_web_optimization_flag}"
+          -sMAIN_MODULE=2
+          # Emscripten 6.0.6 at -O3 otherwise strips the __stack_pointer
+          # export required by dlopen side modules. EXPORT_ALL retains the
+          # dynamic-link exports without the dead-code retention of
+          # MAIN_MODULE=1.
+          -sEXPORT_ALL=1
+          ${_xtbloom_web_simd_flag}
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
           -sFORCE_FILESYSTEM
@@ -214,6 +261,38 @@ add_custom_command(
     "${_xtbloom_web_side}"
     "${_xtbloom_web_obj}"
   COMMENT "Linking ${_xtbloom_web_arch} main module (xtbloom_web.js)"
+  VERBATIM)
+
+# Emscripten names preload packages after the JavaScript output and therefore
+# writes xtbloom_web.data. The browser loader supplies those exact bytes through
+# getPreloadedPackage, so the network URL does not need that suffix. Keep the
+# generated trio private to the build tree, then stage the package under a .wasm
+# path so static hosts apply their WebAssembly compression policy.
+add_custom_command(
+  OUTPUT
+    "${_xtbloom_web_site}/xtbloom_web.js"
+    "${_xtbloom_web_site}/xtbloom_web.wasm"
+    "${_xtbloom_web_package}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_xtbloom_web_site}"
+  COMMAND ${CMAKE_COMMAND} -E rm -f
+          "${_xtbloom_web_site}/xtbloom_web.data"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_engine_js}"
+          "${_xtbloom_web_site}/xtbloom_web.js"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_engine_wasm}"
+          "${_xtbloom_web_site}/xtbloom_web.wasm"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_engine_data}"
+          "${_xtbloom_web_package}"
+  COMMAND ${CMAKE_COMMAND} -E compare_files
+          "${_xtbloom_web_engine_data}"
+          "${_xtbloom_web_package}"
+  DEPENDS
+    "${_xtbloom_web_engine_js}"
+    "${_xtbloom_web_engine_wasm}"
+    "${_xtbloom_web_engine_data}"
+  COMMENT "Staging compressible ${_xtbloom_web_arch} engine resources"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
@@ -279,7 +358,8 @@ add_custom_command(
 # The browser revalidates this small manifest on each page load. An unchanged
 # content version keeps the application graph and engine resources cacheable
 # across refreshes; a changed version gives the complete JS/wasm/data generation
-# new URLs before the app/helper/preset module graph is linked.
+# new URLs before the core app/helper/preset graph and optional SMILES
+# Worker/helper graph are linked.
 set(_xtbloom_web_engine_manifest
     "${_xtbloom_web_site}/engine-manifest.json")
 add_custom_command(
@@ -293,9 +373,11 @@ add_custom_command(
     "${_xtbloom_web_site}/c60_case.js"
     "${_xtbloom_web_site}/worker.js"
     "${_xtbloom_web_site}/app_helpers.js"
+    "${_xtbloom_web_site}/smiles_worker.js"
+    "${_xtbloom_web_site}/smiles_helpers.js"
     "${_xtbloom_web_site}/xtbloom_web.js"
     "${_xtbloom_web_site}/xtbloom_web.wasm"
-    "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_package}"
     "${_xtbloom_web_src}/write_engine_manifest.cmake"
   COMMENT "Generating versioned web-engine asset manifest"
   VERBATIM)
@@ -345,6 +427,9 @@ set(_xtbloom_web_legal_sources
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING.LESSER"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/mctc-lib-LICENSE"
     "${CMAKE_SOURCE_DIR}/data/parameters/manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_d3_manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_legacy_sto_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/sto_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/spin_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
@@ -381,6 +466,9 @@ set(_xtbloom_web_legal_outputs
     "${_xtbloom_web_site}/LICENSES/parameters/dftd4-COPYING.LESSER"
     "${_xtbloom_web_site}/LICENSES/parameters/mctc-lib-LICENSE"
     "${_xtbloom_web_site}/provenance/parameters/manifest.json"
+    "${_xtbloom_web_site}/provenance/parameters/gfn1_manifest.json"
+    "${_xtbloom_web_site}/provenance/parameters/gfn1_d3_manifest.json"
+    "${_xtbloom_web_site}/provenance/parameters/gfn1_legacy_sto_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/sto_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/spin_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/d4_manifest.json"
@@ -423,6 +511,9 @@ add_custom_command(
           "${_xtbloom_web_site}/LICENSES/parameters/d4.NOTICE"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_SOURCE_DIR}/data/parameters/manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_d3_manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_legacy_sto_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/sto_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/spin_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
@@ -446,7 +537,7 @@ add_custom_target(
   DEPENDS
     "${_xtbloom_web_site}/xtbloom_web.js"
     "${_xtbloom_web_site}/xtbloom_web.wasm"
-    "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_package}"
     "${_xtbloom_web_engine_manifest}"
     "${_xtbloom_web_site}/index.html"
     "${_xtbloom_web_site}/style.css"

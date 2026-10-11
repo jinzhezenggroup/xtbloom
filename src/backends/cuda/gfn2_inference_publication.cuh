@@ -8,12 +8,13 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2InferencePublicationAbiVersion = 1u;
+inline constexpr std::uint32_t kGfn2InferencePublicationAbiVersion = 2u;
 
 /* Plan-wide structural/upstream failures. Any nonzero value publishes nothing. */
 enum class Gfn2InferencePublicationPlanError : std::uint32_t {
@@ -66,6 +67,7 @@ struct Gfn2InferencePublicationDevicePlan {
  * A nonzero plan scalar is whole-batch, while system arrays remain peer-local.
  */
 struct Gfn2InferencePublicationDeviceInput {
+  Gfn2DeviceAdmission admission{};
   const std::uint8_t* eligible_mask = nullptr;
   std::int64_t eligible_elements = 0;
 
@@ -90,6 +92,19 @@ struct Gfn2InferencePublicationDeviceInput {
   std::int64_t execution_system_error_elements = 0;
   const std::uint32_t* execution_plan_error = nullptr;
   std::uint64_t plan_token = 0u;
+
+  /*
+   * Molecular-dipole inputs are stationary, charge-channel multipoles in the
+   * same global atom order as plan.atom_offsets. They are required only when
+   * XTBLOOM_COMPUTE_DIPOLE_MOMENTS is requested. positions and
+   * atomic_dipoles contain three doubles per atom; atomic_charges is shared
+   * with the optional public atomic-charge output above and must therefore be
+   * bound when either property is requested.
+   */
+  const double* positions = nullptr;
+  std::int64_t position_elements = 0;
+  const double* atomic_dipoles = nullptr;
+  std::int64_t atomic_dipole_elements = 0;
 };
 
 /* Stable internal results later bridged to host or CUDA C-API buffers by #114. */
@@ -108,6 +123,10 @@ struct Gfn2InferencePublicationDeviceResults {
   xtbloom_status_t* system_statuses = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
+
+  /* Three molecular Cartesian components per system, in atomic units. */
+  double* dipole_moments = nullptr;
+  std::int64_t dipole_moment_elements = 0;
 };
 
 struct Gfn2InferencePublicationDeviceWorkspace {

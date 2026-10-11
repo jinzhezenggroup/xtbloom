@@ -1,0 +1,61 @@
+{
+  "case_id": "water_one_pc_close_hardness",
+  "external_point_charges": {
+    "charges_e": [
+      -0.69645733
+    ],
+    "gammas_hartree": [
+      0.451896
+    ],
+    "gamma_mode": "element_hardness",
+    "positions_bohr": [
+      [
+        -2.50237178376284,
+        2.43247309226225,
+        -0.01392519847964
+      ]
+    ],
+    "source_atomic_numbers": [
+      8
+    ]
+  },
+  "method": "GFN2-xTB",
+  "qm": {
+    "atomic_numbers": [
+      8,
+      1,
+      1
+    ],
+    "molecular_charge": 0,
+    "positions_bohr": [
+      [
+        -2.75237178376284,
+        2.43247309226225,
+        -0.01392519847964
+      ],
+      [
+        -0.93157260886974,
+        2.7962140445859,
+        -0.01863384029005
+      ],
+      [
+        -3.43820531288547,
+        3.3058360842106,
+        1.42134539425148
+      ]
+    ],
+    "symbols": [
+      "O",
+      "H",
+      "H"
+    ],
+    "unpaired_electrons": 0
+  },
+  "schema_version": 1,
+  "units": {
+    "point_charge_gammas": "hartree",
+    "point_charge_positions": "bohr",
+    "point_charges": "elementary_charge",
+    "qm_positions": "bohr"
+  }
+}

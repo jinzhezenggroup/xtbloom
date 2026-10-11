@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "model": "Stewart STO-nG expansion tables",
   "source": {
     "repository": "https://github.com/tblite/tblite",
@@ -8,5 +8,13 @@
     "sha256": "8a3df2db076469b0e22c02af9dfadf9880932fc241b82d5802ebb268d002773c",
     "license": "LGPL-3.0-or-later"
   },
-  "consumer": "data/parameters/tblite_sto.hpp"
+  "extraction": {
+    "method": "literal transcription of tblite slater.f90 alpha and coefficient parameter arrays into constexpr C++ arrays; preserve source order and IEEE binary64 decimal values",
+    "validation": "tools/licensing/check_licenses.py hashes the complete consumer header and verifies this manifest"
+  },
+  "consumer": {
+    "path": "data/parameters/tblite_sto.hpp",
+    "bytes": 8920,
+    "sha256": "338e16ddbf4be2d115959f3c779c295c106a0426768c55e1b9f0b7a250481c26"
+  }
 }

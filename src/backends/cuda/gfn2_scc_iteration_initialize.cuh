@@ -52,6 +52,7 @@ enum class Gfn2SccIterationInitializationField : std::uint32_t {
   kWorkspace = 9u,
   kReportStorage = 10u,
   kReadyPublication = 11u,
+  kAdmission = 12u,
 };
 
 struct Gfn2SccIterationInitializationDiagnostic {
@@ -262,6 +263,13 @@ class Gfn2SccIterationInitializer {
   [[nodiscard]] Gfn2SccIterationInitializationDiagnostic upload_async(
       void* device_arena, std::size_t device_arena_bytes,
       Gfn2SccIterationInitializationReady& ready, cudaStream_t stream = nullptr) const noexcept;
+
+  /* Graph-safe conditional restore for a request whose device-side semantic
+   * validation precedes SCC initialization on the same stream. */
+  [[nodiscard]] Gfn2SccIterationInitializationDiagnostic upload_if_admitted_async(
+      void* device_arena, std::size_t device_arena_bytes,
+      Gfn2SccIterationInitializationReady& ready, const std::uint32_t* request_error,
+      cudaStream_t stream = nullptr) const noexcept;
 
  private:
   struct Impl;

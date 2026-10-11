@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "profiler": "NVIDIA Nsight Systems 2025.1.3.140-251335620677v0",
+  "workload": {
+    "natoms_per_system": 272,
+    "batch_size": 1,
+    "backend": "cuda",
+    "memory_mode": "host",
+    "property": "force",
+    "start_mode": "fresh",
+    "warmups": 1,
+    "repetitions": 1,
+    "note": "profiler-perturbed structural comparison; not a latency claim"
+  },
+  "classification": "D4 kernels are rows whose demangled Name contains Gfn2D4",
+  "execution_count_note": "The public harness issued one warmup and one measured FRESH xtbloom_compute call, with no unchanged-geometry reuse or CUDA Graph replay in the profiled host-memory path. During lazy runtime construction inside the first warmup, the baseline ran an internal energy/force validation smoke with dense D4 SCC/force components enabled. The candidate masks refresh-owned D4 SCC potential/energy, ATM energy, and classical-force components in that smoke until the first committed pair-list/CN refresh. Several baseline dense-D4 consumer rows therefore contain one setup-smoke launch plus the two public-call launches, while candidate pair-list consumers contain the two public-call launches.",
+  "summary": {
+    "baseline": {
+      "total_kernel_time_ns": 271549083,
+      "total_kernel_instances": 1078,
+      "unique_kernel_names": 203,
+      "d4_kernel_time_ns": 29409549,
+      "d4_kernel_instances": 94,
+      "d4_unique_kernel_names": 24,
+      "d4_share_of_kernel_time_percent": 10.830288460226544,
+      "cuda_launch_kernel_calls": 1372,
+      "cuda_event_synchronize_calls": 10,
+      "cuda_stream_synchronize_calls": 5,
+      "cuda_device_synchronize_calls": 20,
+      "gpu_memory_operations": [
+        {
+          "Time (%)": "91.5",
+          "Total Time (ns)": "4054734",
+          "Count": "56",
+          "Avg (ns)": "72406.0",
+          "Med (ns)": "352.0",
+          "Min (ns)": "256",
+          "Max (ns)": "2135222",
+          "StdDev (ns)": "360435.1",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Time (%)": "4.2",
+          "Total Time (ns)": "184480",
+          "Count": "5",
+          "Avg (ns)": "36896.0",
+          "Med (ns)": "45152.0",
+          "Min (ns)": "928",
+          "Max (ns)": "50112",
+          "StdDev (ns)": "20275.1",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        },
+        {
+          "Time (%)": "4.1",
+          "Total Time (ns)": "180448",
+          "Count": "239",
+          "Avg (ns)": "755.0",
+          "Med (ns)": "288.0",
+          "Min (ns)": "224",
+          "Max (ns)": "36960",
+          "StdDev (ns)": "3048.2",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Time (%)": "0.3",
+          "Total Time (ns)": "12576",
+          "Count": "26",
+          "Avg (ns)": "483.7",
+          "Med (ns)": "352.0",
+          "Min (ns)": "320",
+          "Max (ns)": "1504",
+          "StdDev (ns)": "245.6",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        }
+      ],
+      "top_d4_kernels": [
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::atm_gradient_split_kernel",
+          "total_time_ns": 11960421,
+          "instances": 3
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::atm_energy_split_kernel",
+          "total_time_ns": 4150059,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::two_body_gradient_kernel",
+          "total_time_ns": 3337135,
+          "instances": 3
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::coordination_vjp_kernel",
+          "total_time_ns": 2361172,
+          "instances": 3
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::two_body_cn_adjoint_kernel",
+          "total_time_ns": 1862264,
+          "instances": 3
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::scc_potential_kernel",
+          "total_time_ns": 1859990,
+          "instances": 3
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::build_d4_coordination_kernel",
+          "total_time_ns": 1622807,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::build_d4_geometry_pairs_kernel",
+          "total_time_ns": 684957,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::prepare_weights_kernel",
+          "total_time_ns": 438332,
+          "instances": 8
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::cache_preflight_kernel",
+          "total_time_ns": 311646,
+          "instances": 8
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::scc_topology_preflight_kernel",
+          "total_time_ns": 208383,
+          "instances": 3
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::scc_prepare_weights_kernel",
+          "total_time_ns": 187040,
+          "instances": 3
+        }
+      ]
+    },
+    "candidate": {
+      "total_kernel_time_ns": 268352904,
+      "total_kernel_instances": 1041,
+      "unique_kernel_names": 196,
+      "d4_kernel_time_ns": 25419888,
+      "d4_kernel_instances": 64,
+      "d4_unique_kernel_names": 18,
+      "d4_share_of_kernel_time_percent": 9.472559313164727,
+      "cuda_launch_kernel_calls": 1333,
+      "cuda_event_synchronize_calls": 10,
+      "cuda_stream_synchronize_calls": 5,
+      "cuda_device_synchronize_calls": 20,
+      "gpu_memory_operations": [
+        {
+          "Time (%)": "91.8",
+          "Total Time (ns)": "4105197",
+          "Count": "56",
+          "Avg (ns)": "73307.1",
+          "Med (ns)": "352.0",
+          "Min (ns)": "256",
+          "Max (ns)": "2204406",
+          "StdDev (ns)": "366058.0",
+          "Operation": "[CUDA memcpy Host-to-Device]"
+        },
+        {
+          "Time (%)": "4.1",
+          "Total Time (ns)": "183295",
+          "Count": "5",
+          "Avg (ns)": "36659.0",
+          "Med (ns)": "43296.0",
+          "Min (ns)": "960",
+          "Max (ns)": "52159",
+          "StdDev (ns)": "20342.7",
+          "Operation": "[CUDA memcpy Device-to-Device]"
+        },
+        {
+          "Time (%)": "3.8",
+          "Total Time (ns)": "170240",
+          "Count": "236",
+          "Avg (ns)": "721.4",
+          "Med (ns)": "288.0",
+          "Min (ns)": "224",
+          "Max (ns)": "34080",
+          "StdDev (ns)": "2927.8",
+          "Operation": "[CUDA memset]"
+        },
+        {
+          "Time (%)": "0.3",
+          "Total Time (ns)": "12896",
+          "Count": "26",
+          "Avg (ns)": "496.0",
+          "Med (ns)": "352.0",
+          "Min (ns)": "320",
+          "Max (ns)": "1600",
+          "StdDev (ns)": "327.9",
+          "Operation": "[CUDA memcpy Device-to-Host]"
+        }
+      ],
+      "top_d4_kernels": [
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::pairlist_atm_gradient_kernel",
+          "total_time_ns": 6896706,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::pairlist_atm_energy_kernel",
+          "total_time_ns": 4363853,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::pairlist_two_body_gradient_kernel",
+          "total_time_ns": 3173714,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::pairlist_d4_coordination_vjp_kernel",
+          "total_time_ns": 2360789,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::pairlist_two_body_potential_kernel",
+          "total_time_ns": 2157078,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::pairlist_two_body_cn_adjoint_kernel",
+          "total_time_ns": 2143063,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::build_d4_pairlist_coordination_kernel",
+          "total_time_ns": 2099542,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::d4_pairlist_role_preflight_kernel",
+          "total_time_ns": 1489592,
+          "instances": 10
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::pairlist_prepare_weights_kernel",
+          "total_time_ns": 532127,
+          "instances": 8
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::scc_topology_preflight_kernel",
+          "total_time_ns": 137536,
+          "instances": 2
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::topology_preflight_kernel",
+          "total_time_ns": 30112,
+          "instances": 8
+        },
+        {
+          "name": "xtbloom::detail::cuda::<unnamed>::add_output_preflight_kernel",
+          "total_time_ns": 6304,
+          "instances": 4
+        }
+      ]
+    },
+    "change": {
+      "scope": "whole-process structural totals including a baseline-only lazy-runtime D4 validation smoke; not normalized steady-state per-public-call results",
+      "total_kernel_time_percent": -1.1770170477799036,
+      "total_kernel_instances_percent": -3.4322820037105752,
+      "d4_kernel_time_percent": -13.56586937120321,
+      "d4_kernel_instances_percent": -31.914893617021278,
+      "cuda_launch_kernel_calls": -39
+    }
+  },
+  "nsight_compute": {
+    "version": "2025.2.1.0 build 35987062",
+    "status": "unavailable",
+    "reason": "ERR_NVGPUCTRPERM: the user cannot access GPU performance counters on device 0",
+    "query_stdout": "Device NVIDIA GeForce RTX 5090 (GB202)\n==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0. For instructions on enabling permissions and to get more information see https://developer.nvidia.com/ERR_NVGPUCTRPERM"
+  }
+}

@@ -7,6 +7,7 @@
 #include <new>
 #include <utility>
 
+#include "runtime/gfn1_cpu_execution.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
 #if defined(XTBLOOM_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
@@ -92,6 +93,14 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
+  CpuIsa resolved_cpu_isa = CpuIsa::kBaseline;
+  if (selected == XTBLOOM_BACKEND_CPU) {
+    const xtbloom_status_t isa_status = resolve_cpu_isa_from_environment(resolved_cpu_isa, error);
+    if (isa_status != XTBLOOM_STATUS_SUCCESS) {
+      return isa_status;
+    }
+  }
+
   CpuPrecisionPolicy cpu_precision = CpuPrecisionPolicy::kFloat64;
   if (selected == XTBLOOM_BACKEND_CPU) {
     const xtbloom_status_t status = read_cpu_precision_policy(cpu_precision, error);
@@ -109,19 +118,9 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
   created->backend = selected;
   created->device_id = resolved_device;
   created->cpu_threads = options.cpu_threads;
-  created->cpu_precision = cpu_precision;
+  created->cpu_isa = resolved_cpu_isa;
   created->stream = options.stream;
-  if (selected == XTBLOOM_BACKEND_CPU) {
-    try {
-      /* Eager construction removes the first-compute shared_ptr data race. */
-      created->gfn2_cpu_execution_cache =
-          std::make_shared<Gfn2CpuExecutionCache>(options.cpu_threads, cpu_precision);
-    } catch (const std::bad_alloc&) {
-      delete created;
-      error = "failed to allocate CPU GFN2 execution cache";
-      return XTBLOOM_STATUS_ALLOCATION_FAILED;
-    }
-  }
+  created->cpu_precision = cpu_precision;
 #if defined(XTBLOOM_HAS_CUDA)
   if (selected == XTBLOOM_BACKEND_CUDA) {
     try {
@@ -137,6 +136,58 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
   }
 #endif
   context = created;
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t ensure_gfn1_cpu_execution_cache(Context& context, std::string& error) {
+  if (context.gfn1_cpu_execution_cache != nullptr) {
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  try {
+    /* The caller holds cpu_transaction_mutex, so first use cannot race another
+     * model call. Lazy construction avoids reserving an unused second worker
+     * pool on every CPU context. */
+    context.gfn1_cpu_execution_cache = std::make_shared<Gfn1CpuExecutionCache>(context.cpu_threads);
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the CPU GFN1 execution cache";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t ensure_gfn2_cpu_execution_cache(Context& context, std::string& error) {
+  if (context.gfn2_cpu_execution_cache != nullptr) {
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  try {
+    /* Keep the established GFN2 pool context-owned, but construct it only when
+     * GFN2 is selected so publishing GFN1 does not double every CPU context's
+     * resident thread count. */
+    context.gfn2_cpu_execution_cache = std::make_shared<Gfn2CpuExecutionCache>(
+        context.cpu_threads, context.cpu_isa, context.cpu_precision);
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the CPU GFN2 execution cache";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t set_external_energy_callback(Context& context,
+                                              gfn2::ExternalEnergyCallback callback, void* opaque,
+                                              std::string& error) {
+  /* The callback remains the compatibility route for CPU and host-staged
+   * evaluation. A separately installed native device model takes precedence
+   * on CUDA contexts and bypasses this callback inside the SCC graph. */
+  const xtbloom_status_t status = ensure_gfn2_cpu_execution_cache(context, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  context.gfn2_cpu_execution_cache->set_external_energy_callback(callback, opaque);
+  error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
 

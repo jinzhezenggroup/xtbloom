@@ -115,7 +115,10 @@ Importing the Python package does not create a backend. CUDA compilation, `nvidi
 
 ## Supported Scope
 
-xTBloom implements GFN2-xTB on CPU and CUDA. GFN1-xTB and ROCm values are reserved but unimplemented. Lattice/PBC inputs, solvation, native optimization, molecular dynamics, and Hessians are not supported.
+xTBloom implements GFN1-xTB on CPU and GFN2-xTB on CPU and CUDA. ROCm,
+lattice/PBC inputs, solvation, native optimization, molecular dynamics, and
+native/analytic Hessians are not supported. Python `Calculator.hessian()` and
+`BatchCalculator.hessian()` provide numerical QM-coordinate Hessians.
 
 Authoritative online sources:
 

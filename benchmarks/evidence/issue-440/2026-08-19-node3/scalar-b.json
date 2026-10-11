@@ -1,0 +1,77 @@
+{
+  "label": "scalar-b",
+  "source_revision": "3b9fac09ecb0b2da1596022ddda786fa9acfb885",
+  "site": "/tmp/xtbloom-441-build/scalar/web/site",
+  "runtime": {
+    "node": "v24.19.0",
+    "v8": "13.6.233.17-node.51",
+    "platform": "linux",
+    "os_release": "6.8.0-110-generic",
+    "arch": "x64",
+    "cpu": "AMD EPYC 7K62 48-Core Processor",
+    "logical_cpus": 48
+  },
+  "warmup_samples": 1,
+  "retained_samples": 10,
+  "timed_scope": "synchronous xtbloom_web_compute ccall plus JSON parsing",
+  "artifacts": {
+    "main_wasm": {
+      "bytes": 1630032,
+      "sha256": "86f0c7c7d46c95bf10713281ae1ee8543a8656e7fdf8f41785d245baba7a462d"
+    },
+    "side_wasm": {
+      "bytes": 153860,
+      "sha256": "89732c8351bd226011351c3327b475222d6ce10de0ab28f8a32ce9323dffb0a8"
+    }
+  },
+  "workloads": {
+    "water": {
+      "median_ms": 3.329452,
+      "range_ms": [
+        0.994821,
+        16.097391
+      ],
+      "samples_ms": [
+        5.933889,
+        5.585323,
+        1.073581,
+        1.048314,
+        7.145645,
+        1.002516,
+        10.516846,
+        1.005701,
+        0.994821,
+        16.097391
+      ],
+      "result": {
+        "energy_Eh": -5.06262145,
+        "scc_iterations": 9,
+        "scc_converged": 1
+      }
+    },
+    "c60": {
+      "median_ms": 1028.950546,
+      "range_ms": [
+        1024.822594,
+        1044.837401
+      ],
+      "samples_ms": [
+        1044.837401,
+        1035.710312,
+        1031.082741,
+        1029.881166,
+        1027.076598,
+        1044.448336,
+        1024.822594,
+        1028.019926,
+        1025.214136,
+        1025.532536
+      ],
+      "result": {
+        "energy_Eh": -128.249019,
+        "scc_iterations": 13,
+        "scc_converged": 1
+      }
+    }
+  }
+}

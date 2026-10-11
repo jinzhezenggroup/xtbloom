@@ -1,0 +1,45 @@
+Issue: #350
+Date: 2026-08-12 Asia/Shanghai
+Host: node3
+OS: Ubuntu 22.04, Linux 6.8.0-110-generic x86_64
+CPU: AMD EPYC 7K62 48-Core Processor, 48 cores, one thread per core
+GPU: NVIDIA GeForce RTX 5090, 32607 MiB, compute capability 12.0 (sm_120)
+Driver: 580.95.05
+CUDA compiler/toolkit: 12.9.86, compiler build 36037853
+Nsight Systems: 2025.1.3.140-251335620677v0
+Compute Sanitizer: 2025.2.1.0 build 35969825
+CMake: 4.2.1
+Host compiler: GCC 11.4.0
+Build type: Release
+Shared library: ON
+CUDA architecture: 120
+CUDA compiler: /group/software/cuda-12.9.1/bin/nvcc
+CUDA runtime cohort: /group/software/cuda-12.9.1/targets/x86_64-linux/lib
+CPU public-validation LP64 provider: /home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib
+Thread environment: OMP_NUM_THREADS=1, OPENBLAS_NUM_THREADS=1, MKL_NUM_THREADS=1, OMP_DYNAMIC=FALSE, MKL_DYNAMIC=FALSE, MKL_INTERFACE_LAYER=LP64, MKL_THREADING_LAYER=SEQUENTIAL
+
+Baseline revision: 10ffdcd37d148a81cf983236f31d5a61e7606156
+Baseline source state: clean
+Baseline CMake cache SHA-256: ed4c49f41c3e75f31bf43e9d9362febf8fc179a15548f2c9f5278e7635b19a50
+Baseline libxtbloom SHA-256: 2d780516d4c07e7a04d484374b6d6f00fa771d4ac6108f1613c84942ec0e6b58
+
+Candidate revision: 7442018c0f063970f29e689d481769827110851a
+Candidate source state: clean
+Candidate CMake cache SHA-256: 501e9c41a84ab9c1329f6123cdecb20d8f9edbbcd17035c9063de1ba0306c3fc
+Candidate libxtbloom SHA-256: 2d0aa18b7cac9f3cf4a430f28563e55d17f2e77ee9176cda8a26494a6a24e716
+Candidate eigensolver test SHA-256: edc4196bead5209017d306090d576e0a280f93b466010bbdf4c4f53f2071a5e0
+Candidate production test SHA-256: cffefc42570096488d9b21b1d98031ac9d92ff3e9f86d1ec15d0519376166ea1
+
+Omitted baseline primary raw JSON: 922926 bytes, SHA-256 f1b1435a4048cdb7431e8e35e7b4319c40a873e9ed27eaa44307e2beec082228
+Omitted candidate primary raw JSON: 922858 bytes, SHA-256 456aec8868a3cb85a54e7455a1423e3222760fa82c7fb315b4ed8ae81fbca9e6
+Omitted baseline controls raw JSON: 3585814 bytes, SHA-256 0654c3311219b74861ce6dded38bd46d2dd3f3930cb4947b5e9402426b44aeaf
+Omitted candidate controls raw JSON: 3586254 bytes, SHA-256 dd575258efb8980c153cdd4c31980f66d6925b9acf5764a3cbac5d195c8f140a
+Omitted baseline profile harness JSON: 189465 bytes, SHA-256 fa031eb22266968a6506623a150ad582a245e65e0320e4a9707a1891a76152f3
+Omitted candidate profile harness JSON: 189690 bytes, SHA-256 34b7e393be36215107d90b0f3224f2cd6ccf56843a707d07b317aa35933e4c0e
+Omitted baseline raw nsys capture: 521394 bytes, SHA-256 f11174be6cb1a1535426468f68539bb682b70ffa0889a2154fdee54bb806c92f
+Omitted candidate raw nsys capture: 521953 bytes, SHA-256 23525841feb109de889c0969fc5748a897f1b38711f6dae446eb3a16b1129427
+Omitted eigensolver full-synccheck raw text log: 112120 bytes, SHA-256 c394810d09d050940a3563f3ec50736701b01cb465feff654497d818be9b3cfe
+
+Raw native profiler captures and generated SQLite databases were moved to
+the desktop trash after the reviewed CSV summaries were extracted. They are
+not repository artifacts and can be recovered from trash until it is emptied.

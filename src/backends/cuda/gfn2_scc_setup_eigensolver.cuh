@@ -56,6 +56,7 @@ enum class Gfn2SccSetupEigensolverField : std::uint32_t {
   kIterationWorkspace = 10u,
   kProviderHostWorkspace = 11u,
   kOverlapFactorization = 12u,
+  kAdmission = 13u,
 };
 
 struct Gfn2SccSetupEigensolverDiagnostic {
@@ -224,20 +225,25 @@ class Gfn2SccSetupEigensolver {
    * stable epoch address into binding; CUDA Graph replay then reads its current
    * value without mutating host descriptors or rebuilding the executable.
    * Healthy peers publish that epoch while failed peers preserve their prior
-   * factors and generations transactionally.
+   * factors and generations transactionally. geometry_epoch.value and
+   * request_error are one-element, aligned CUDA/managed pointers on the current
+   * device. They must not overlap each other, the overlap input, either arena,
+   * topology, cache, diagnostics, activity, or eigensolver workspace. All
+   * owner, pointer, and alias checks complete before the first enqueue.
    */
   [[nodiscard]] Gfn2SccSetupEigensolverDiagnostic refactor_overlap_from_device_epoch_async(
       void* setup_device_arena, std::size_t setup_device_arena_bytes,
       Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
       std::int64_t device_overlap_elements, const Gfn2GeometryEpochDevice& geometry_epoch,
-      cudaStream_t stream = nullptr) const noexcept;
+      const std::uint32_t* request_error, cudaStream_t stream = nullptr) const noexcept;
 
  private:
   [[nodiscard]] Gfn2SccSetupEigensolverDiagnostic refactor_overlap_impl(
       void* setup_device_arena, std::size_t setup_device_arena_bytes,
       Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
       std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
-      const Gfn2GeometryEpochDevice* geometry_epoch, cudaStream_t stream) const noexcept;
+      const Gfn2GeometryEpochDevice* geometry_epoch, const std::uint32_t* request_error,
+      cudaStream_t stream) const noexcept;
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -1,0 +1,105 @@
+{
+  "case_id": "gfn1_oh_radical",
+  "method": "GFN1-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "energy_hartree": -5.06866045687,
+    "forces_hartree_per_bohr": [
+      -0.0,
+      -0.0,
+      -6.8646107718e-06,
+      -0.0,
+      -0.0,
+      6.8646107717965e-06
+    ],
+    "gradient_hartree_per_bohr": [
+      0.0,
+      0.0,
+      6.8646107718e-06,
+      0.0,
+      0.0,
+      -6.8646107717965e-06
+    ],
+    "partial_charges_e": [
+      -0.37491426,
+      0.37491426
+    ]
+  },
+  "provenance": {
+    "accuracy": 0.0001,
+    "command": [
+      "{executable}",
+      "coord",
+      "--gfn",
+      "1",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "0",
+      "--uhf",
+      "1",
+      "-P",
+      "1"
+    ],
+    "command_template": [
+      "{executable}",
+      "coord",
+      "--gfn",
+      "1",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "{charge}",
+      "--uhf",
+      "{unpaired_electrons}",
+      "-P",
+      "1"
+    ],
+    "engine": "xtb",
+    "environment": {
+      "cleared_variable_prefixes": [
+        "XTB"
+      ],
+      "inherited_environment_boundary": "Non-XTB variables are inherited; executable, shared-library, parameter, input, and normalized-output hashes remain pinned.",
+      "set": {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OMP_STACKSIZE": "4G",
+        "OPENBLAS_NUM_THREADS": "1",
+        "XTBPATH": "<directory-containing-pinned-param_gfn1-xtb.txt>"
+      }
+    },
+    "executable_sha256": "271dd6cdd5da127a8e39919e7e32d924790fb346f0057b4183769ba8b3411887",
+    "executable_version": "-----------------------------------------------------------      \n     |                   =====================                   |     \n     |                           x T B                           |     \n     |                   =====================                   |     \n     |                         S. Grimme                         |     \n     |          Mulliken Center for Theoretical Chemistry        |     \n     |                    University of Bonn                     |     \n      -----------------------------------------------------------      \n\n   * xtb version 6.7.1 (edcfbbe) compiled by 'conda@5dfe00f5fb80' on 2026-06-10\n\nnormal termination of xtb",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/gfn1/inputs/gfn1_oh_radical.coord",
+    "runtime": {
+      "gfn1_parameter": {
+        "filename": "param_gfn1-xtb.txt",
+        "selection": "XTBPATH",
+        "sha256": "81a9d7afdee31f5d8fd67a4d8ec966179317c7b100261c9c82d724bafb460399"
+      },
+      "libxtb": {
+        "filename": "libxtb.so.6.7.1",
+        "sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853"
+      }
+    },
+    "source_output_sha256": "51d033722a089a3a97a70c4124093d6df853345d9a143f7037a836c4136d6554",
+    "source_revision": "edcfbbe39d411edc225e27315fbda3a204ddb023"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 1
+}

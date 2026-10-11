@@ -1,0 +1,6 @@
+profiler=NVIDIA Nsight Compute 2025.2.1.0 build 35987062
+command=/group/software/cuda-12.9.1/bin/ncu --csv --page raw --set basic --launch-count 1 --target-processes all build/issue128-cuda/xtbloom_cuda_public_api_test --request-profile
+exit_code=1
+status=UNAVAILABLE (ERR_NVGPUCTRPERM)
+diagnostic=The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0.
+policy=No privileged access requested and no retry; unavailable counters do not block issue #128 and are not reported as PASS.

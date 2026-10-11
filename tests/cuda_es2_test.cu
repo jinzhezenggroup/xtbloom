@@ -12,6 +12,8 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_es2.cuh"
+#include "model/gfn1/basis.hpp"
+#include "model/gfn1/es2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/es2.hpp"
 
@@ -24,6 +26,7 @@
 
 namespace {
 
+using xtbloom::detail::XtbModelFlavor;
 using xtbloom::detail::cuda::Gfn2ES2DeviceBatch;
 using xtbloom::detail::cuda::Gfn2ES2DeviceCache;
 using xtbloom::detail::cuda::Gfn2ES2DeviceError;
@@ -127,18 +130,8 @@ struct HostEvaluation {
   ES2GeometryCache cache;
 };
 
-bool make_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
-                          const std::vector<std::int32_t>& atomic_numbers,
-                          const std::vector<double>& positions, const std::vector<double>& charges,
-                          HostEvaluation& host, std::string& error) {
-  const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
-  if (xtbloom::detail::gfn2::make_basis_plan(
-          batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), host.basis, error) != XTBLOOM_STATUS_SUCCESS ||
-      xtbloom::detail::gfn2::make_es2_plan(host.basis, atomic_numbers.data(), host.plan, error) !=
-          XTBLOOM_STATUS_SUCCESS) {
-    return false;
-  }
+bool initialize_host_evaluation(const std::vector<double>& positions,
+                                const std::vector<double>& charges, HostEvaluation& host) {
   if (positions.size() != static_cast<std::size_t>(host.plan.total_atoms() * 3) ||
       charges.size() != static_cast<std::size_t>(host.plan.total_shells())) {
     return false;
@@ -158,6 +151,38 @@ bool make_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
                     host.batch_scratch.data(),    host.plan.batch_size(),
                     host.gradient_scratch.data(), host.plan.total_atoms() * 3};
   return true;
+}
+
+bool make_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
+                          const std::vector<std::int32_t>& atomic_numbers,
+                          const std::vector<double>& positions, const std::vector<double>& charges,
+                          HostEvaluation& host, std::string& error) {
+  const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
+  if (xtbloom::detail::gfn2::make_basis_plan(
+          batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
+          atomic_numbers.data(), host.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_es2_plan(host.basis, atomic_numbers.data(), host.plan, error) !=
+          XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
+  return initialize_host_evaluation(positions, charges, host);
+}
+
+bool make_gfn1_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
+                               const std::vector<std::int32_t>& atomic_numbers,
+                               const std::vector<double>& positions,
+                               const std::vector<double>& charges, HostEvaluation& host,
+                               std::string& error) {
+  xtbloom::detail::gfn1::BasisPlan basis;
+  const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
+  if (xtbloom::detail::gfn1::make_basis_plan(
+          batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
+          atomic_numbers.data(), basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn1::make_es2_plan(basis, atomic_numbers.data(), host.plan, error) !=
+          XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
+  return initialize_host_evaluation(positions, charges, host);
 }
 
 bool evaluate_cpu(HostEvaluation& host, std::uint64_t generation, std::string& error) {
@@ -265,6 +290,10 @@ struct UploadedES2 {
              matrix_offsets.get(),
              shell_to_atom.get(),
              shell_hardness.get()};
+    batch.model =
+        host.plan.hardness_average() == xtbloom::detail::gfn2::ES2HardnessAverage::kHarmonic
+            ? XtbModelFlavor::kGfn1
+            : XtbModelFlavor::kGfn2;
     cache = {matrix.get(), host.plan.total_matrix_elements(), kGeneration, token};
     workspace = {matrix_scratch.get(),   host.plan.total_matrix_elements(),
                  shell_scratch.get(),    host.plan.total_shells(),
@@ -428,6 +457,75 @@ int test_finite_difference_and_generation() {
   return 0;
 }
 
+int test_gfn1_harmonic_lih_cpu_parity_and_finite_difference() {
+  HostEvaluation host;
+  std::string error;
+  /* LiH is the smallest released GFN1 case whose unequal shell hardnesses
+   * distinguish harmonic averaging from GFN2's arithmetic convention. */
+  CHECK(make_gfn1_host_evaluation({0, 2}, {3, 1}, {-1.5, 0.0, 0.0, 1.5, 0.0, 0.0},
+                                  {0.42, -0.17, -0.21, -0.04}, host, error));
+  CHECK(host.plan.hardness_average() == xtbloom::detail::gfn2::ES2HardnessAverage::kHarmonic);
+  CHECK(evaluate_cpu(host, kGeneration, error));
+  CHECK(host.plan.total_shells() == 4);
+  const auto& hardness = host.plan.shell_hardness();
+  const double arithmetic_average = 0.5 * (hardness[0] + hardness[3]);
+  const double arithmetic_cross_kernel = 1.0 / std::hypot(3.0, 1.0 / arithmetic_average);
+  CHECK(std::abs(host.matrix[3] - arithmetic_cross_kernel) > 1.0e-3);
+
+  UploadedES2 device;
+  CHECK(device.initialize(host));
+  CHECK(device.batch.model == XtbModelFlavor::kGfn1);
+  CHECK(evaluate_gpu_sequence(device));
+  std::uint32_t device_error = 1u;
+  CHECK(device.synchronize_error(device_error));
+  CHECK(device_error == static_cast<std::uint32_t>(Gfn2ES2DeviceError::kSuccess));
+
+  std::vector<double> matrix(host.matrix.size());
+  std::vector<double> potential(host.potential.size());
+  std::vector<double> energy(host.energies.size());
+  std::vector<double> gradient(host.gradients.size());
+  CHECK(device.matrix.copy_to(matrix.data(), matrix.size(), device.stream));
+  CHECK(device.potential.copy_to(potential.data(), potential.size(), device.stream));
+  CHECK(device.energies.copy_to(energy.data(), energy.size(), device.stream));
+  CHECK(device.gradients.copy_to(gradient.data(), gradient.size(), device.stream));
+  CHECK(cudaStreamSynchronize(device.stream) == cudaSuccess);
+  for (std::size_t index = 0; index < matrix.size(); ++index) {
+    CHECK(near(matrix[index], host.matrix[index], 8.0e-14));
+  }
+  for (std::size_t index = 0; index < potential.size(); ++index) {
+    CHECK(near(potential[index], host.potential[index], 3.0e-13));
+  }
+  CHECK(near(energy[0], host.energies[0], 5.0e-13));
+  for (std::size_t index = 0; index < gradient.size(); ++index) {
+    CHECK(near(gradient[index], host.gradients[index], 8.0e-13));
+  }
+
+  constexpr double step = 2.0e-5;
+  std::vector<double> plus = host.positions;
+  std::vector<double> minus = host.positions;
+  plus[3] += step;
+  minus[3] -= step;
+  std::vector<double> plus_energy(1u);
+  std::vector<double> minus_energy(1u);
+  CHECK(gpu_energy_at(device, plus, kGeneration + 1u, plus_energy));
+  CHECK(gpu_energy_at(device, minus, kGeneration + 2u, minus_energy));
+  CHECK(near((plus_energy[0] - minus_energy[0]) / (2.0 * step), gradient[3], 2.0e-8));
+
+  /* An unknown internal model selector must fail before enqueueing and leave
+   * the caller-owned cache bytes untouched. */
+  const std::vector<double> sentinel(matrix.size(), 73.0);
+  CHECK(device.matrix.copy_from(sentinel.data(), sentinel.size(), device.stream));
+  Gfn2ES2DeviceBatch invalid_model = device.batch;
+  invalid_model.model = static_cast<XtbModelFlavor>(0xffu);
+  CHECK(xtbloom::detail::cuda::update_gfn2_es2_geometry_cache_cuda(
+            invalid_model, device.positions.get(), device.cache, device.workspace,
+            device.error.get(), device.stream) == cudaErrorInvalidValue);
+  CHECK(device.matrix.copy_to(matrix.data(), matrix.size(), device.stream));
+  CHECK(cudaStreamSynchronize(device.stream) == cudaSuccess);
+  CHECK(matrix == sentinel);
+  return 0;
+}
+
 int test_late_failure_atomicity_sticky_and_aliases() {
   HostEvaluation host;
   std::string error;
@@ -437,6 +535,7 @@ int test_late_failure_atomicity_sticky_and_aliases() {
   CHECK(evaluate_cpu(host, kGeneration, error));
   UploadedES2 device;
   CHECK(device.initialize(host));
+  CHECK(device.batch.model == XtbModelFlavor::kGfn2);
   CHECK(reset_error(device));
   CHECK(update_cache(device));
   std::uint32_t device_error = 1u;
@@ -722,6 +821,7 @@ int test_extreme_arithmetic_and_large_stride() {
   CHECK(make_host_evaluation({0, 1}, {8}, {0.0, 0.0, 0.0}, {0.1, -0.2}, host, error));
   UploadedES2 device;
   CHECK(device.initialize(host));
+  CHECK(device.batch.model == XtbModelFlavor::kGfn2);
   std::vector<double> maximum_hardness(host.plan.total_shells(),
                                        std::numeric_limits<double>::max());
   CHECK(device.shell_hardness.copy_from(maximum_hardness.data(), maximum_hardness.size(),
@@ -906,6 +1006,9 @@ int main() {
     return line;
   }
   if (const int line = test_finite_difference_and_generation(); line != 0) {
+    return line;
+  }
+  if (const int line = test_gfn1_harmonic_lih_cpu_parity_and_finite_difference(); line != 0) {
     return line;
   }
   if (const int line = test_late_failure_atomicity_sticky_and_aliases(); line != 0) {

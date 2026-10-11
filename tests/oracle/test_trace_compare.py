@@ -1,4 +1,4 @@
-"""Offline tests for the ``xtbloom-scc-trace-v1`` comparison foundation."""
+"""Offline tests for the versioned xTBloom SCC trace comparator."""
 
 from __future__ import annotations
 
@@ -25,6 +25,9 @@ SPEC.loader.exec_module(COMPARE)
 
 REVISION = "e9abc395b122018ed688aecb1c3a65cecaf97beb"
 PATCH_SHA256 = "d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954"
+OH_GOLDEN_PATH = (
+    REPOSITORY_ROOT / "data" / "conformance" / "scc-traces" / "oh_radical.json"
+)
 
 
 def _iteration(index: int, converged: bool) -> dict:
@@ -114,6 +117,26 @@ def _trace(iterations: int = 1) -> dict:
             "iterations": len(all_iterations),
         },
     }
+
+
+def _v2_trace() -> dict:
+    """Load the committed canonical unrestricted fixture."""
+    return json.loads(OH_GOLDEN_PATH.read_text(encoding="utf-8"))
+
+
+def _recompute_v2_residual(iteration: dict) -> None:
+    """Keep a mutated v2 fixture schema-valid for numerical comparison."""
+    channels = 2
+    mixed = COMPARE.TRACE._flatten_population(iteration, "mixed", channels)
+    raw = COMPARE.TRACE._flatten_population(iteration, "raw", channels)
+    residual = [
+        raw_value - mixed_value
+        for raw_value, mixed_value in zip(raw, mixed, strict=True)
+    ]
+    iteration["residual"] = residual
+    iteration["residual_rms"] = math.sqrt(
+        sum(value * value for value in residual) / len(residual)
+    )
 
 
 def _nonconverged_trace(status: int) -> dict:
@@ -287,6 +310,62 @@ class TraceCompareTest(unittest.TestCase):
         actual["iterations"][0]["energy"] += 1.0e-2
         self.assertFalse(
             COMPARE.compare_trace(actual, golden, profile="cpu_replay_v1").matches
+        )
+
+    def test_unrestricted_trace_uses_v2_profile(self) -> None:
+        """Compare a real spin-resolved fixture only with its v2 policy."""
+        golden = _v2_trace()
+        result = COMPARE.compare_trace(
+            deepcopy(golden), golden, profile="cpu_closed_loop_v2"
+        )
+        self.assertTrue(result.matches, msg=result.render())
+        self.assertEqual(result.trace_format, COMPARE.TRACE.FORMAT_V2)
+        self.assertEqual(result.profile, "cpu_closed_loop_v2")
+
+    def test_profile_version_must_match_trace_format(self) -> None:
+        """Reject both directions of the v1/v2 policy-format mismatch."""
+        with self.assertRaisesRegex(
+            COMPARE.TraceCompareError, "cpu_closed_loop_v2 requires.*v2"
+        ):
+            COMPARE.compare_trace(_trace(1), _trace(1), profile="cpu_closed_loop_v2")
+        golden = _v2_trace()
+        with self.assertRaisesRegex(
+            COMPARE.TraceCompareError, "cpu_closed_loop_v1 requires.*v1"
+        ):
+            COMPARE.compare_trace(golden, golden, profile="cpu_closed_loop_v1")
+
+    def test_v2_hamiltonian_channels_are_compared(self) -> None:
+        """Report coherent assembled/solver Hamiltonian perturbations."""
+        golden = _v2_trace()
+        actual = deepcopy(golden)
+        iteration = actual["iterations"][0]
+        iteration["assembled_hamiltonian"][1][0][0] += 1.0e-5
+        iteration["solver_hamiltonian"][1][0][0] += 2.0e-5
+        result = COMPARE.compare_trace(actual, golden, profile="cpu_closed_loop_v2")
+        self.assertFalse(result.matches)
+        self.assertEqual(
+            {mismatch.path for mismatch in result.mismatches},
+            {
+                "iterations[0].assembled_hamiltonian[1][0][0]",
+                "iterations[0].solver_hamiltonian[1][0][0]",
+            },
+        )
+
+    def test_v2_magnetization_population_channel_is_compared(self) -> None:
+        """Detect a schema-valid perturbation in the second q/d/Q channel."""
+        golden = _v2_trace()
+        actual = deepcopy(golden)
+        iteration = actual["iterations"][0]
+        iteration["raw_qsh"][1][0] += 1.0e-5
+        iteration["raw_qat"][1][0] += 1.0e-5
+        _recompute_v2_residual(iteration)
+        result = COMPARE.compare_trace(actual, golden, profile="cpu_closed_loop_v2")
+        self.assertFalse(result.matches)
+        paths = {mismatch.path for mismatch in result.mismatches}
+        self.assertIn("iterations[0].raw_qsh[1][0]", paths)
+        self.assertIn("iterations[0].raw_qat[1][0]", paths)
+        self.assertTrue(
+            any(path.startswith("iterations[0].residual[") for path in paths)
         )
 
     def test_capture_provenance_command_is_ignored(self) -> None:
@@ -468,6 +547,17 @@ class TraceCompareTest(unittest.TestCase):
             },
         )
 
+    def test_v2_iteration_requires_v2_profile(self) -> None:
+        """Apply the format-policy binding to standalone replay snapshots."""
+        golden = _v2_trace()
+        actual = deepcopy(golden["iterations"][0])
+        result = COMPARE.compare_iteration(actual, golden, 1, profile="cuda_replay_v2")
+        self.assertTrue(result.matches, msg=result.render())
+        with self.assertRaisesRegex(
+            COMPARE.TraceCompareError, "cuda_replay_v1 requires.*v1"
+        ):
+            COMPARE.compare_iteration(actual, golden, 1, profile="cuda_replay_v1")
+
     def test_rejects_malformed_actual_trace(self) -> None:
         """Reject malformed actual traces before numerical comparison."""
         with self.assertRaises(COMPARE.TRACE.TraceError):
@@ -545,6 +635,70 @@ class TraceCompareCliTest(unittest.TestCase):
 
             self.assertEqual(completed.returncode, COMPARE.EXIT_MATCH, completed.stderr)
             self.assertIn("cuda_replay_v1", completed.stdout)
+
+    def test_v2_trace_and_iteration_cli(self) -> None:
+        """Exercise the public CLI with the committed unrestricted contract."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            golden = _v2_trace()
+            golden_path = root / "golden-v2.json"
+            actual_path = root / "actual-v2.json"
+            iteration_path = root / "actual-v2-iteration.json"
+            golden_path.write_text(COMPARE.TRACE.dumps(golden), encoding="utf-8")
+            actual_path.write_text(COMPARE.TRACE.dumps(golden), encoding="utf-8")
+            iteration_path.write_text(
+                json.dumps(golden["iterations"][0]), encoding="utf-8"
+            )
+
+            trace_result = _run_cli(
+                "trace",
+                actual_path,
+                golden_path,
+                "--profile",
+                "cpu_closed_loop_v2",
+            )
+            iteration_result = _run_cli(
+                "iteration",
+                iteration_path,
+                golden_path,
+                "--iteration",
+                1,
+                "--profile",
+                "cuda_replay_v2",
+            )
+
+            self.assertEqual(
+                trace_result.returncode, COMPARE.EXIT_MATCH, trace_result.stderr
+            )
+            self.assertIn("cpu_closed_loop_v2", trace_result.stdout)
+            self.assertEqual(
+                iteration_result.returncode,
+                COMPARE.EXIT_MATCH,
+                iteration_result.stderr,
+            )
+            self.assertIn("cuda_replay_v2", iteration_result.stdout)
+
+    def test_profile_format_mismatch_is_cli_input_error(self) -> None:
+        """Return exit 2, without traceback, for a policy-contract mismatch."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            golden = _v2_trace()
+            golden_path = root / "golden-v2.json"
+            actual_path = root / "actual-v2.json"
+            golden_path.write_text(COMPARE.TRACE.dumps(golden), encoding="utf-8")
+            actual_path.write_text(COMPARE.TRACE.dumps(golden), encoding="utf-8")
+
+            completed = _run_cli(
+                "trace",
+                actual_path,
+                golden_path,
+                "--profile",
+                "cpu_closed_loop_v1",
+            )
+
+            self.assertEqual(completed.returncode, COMPARE.EXIT_INPUT_ERROR)
+            self.assertIn("requires xtbloom-scc-trace-v1", completed.stderr)
+            self.assertNotIn("Traceback", completed.stderr)
 
     def test_malformed_json_is_input_error_without_traceback(self) -> None:
         """Classify malformed JSON as a concise CLI input error."""

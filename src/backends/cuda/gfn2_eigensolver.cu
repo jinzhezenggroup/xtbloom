@@ -16,6 +16,9 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerSystem = 128;
+/* The spin preflight walks matrix entries with a block-wide strided loop. Keep
+ * this launch width explicit so tail-validation tests pin the same contract. */
+constexpr int kSpinPrepareThreads = 256;
 constexpr std::int64_t kMaximumInt64 = 9223372036854775807LL;
 constexpr double kOne = 1.0;
 
@@ -573,6 +576,47 @@ bool valid_spin_solve_ranges(const Gfn2EigensolverDeviceBatch& batch,
          pairwise_disjoint(reads) && pairwise_disjoint(writes) && disjoint_sets(reads, writes);
 }
 
+bool valid_spin_prepare_ranges(const Gfn2EigensolverDeviceBatch& batch,
+                               const Gfn2WavefunctionLayoutView& layout,
+                               const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians,
+                               const Gfn2EigensolverDeviceWorkspace& workspace,
+                               std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
+  std::array<AddressRange, 12> reads{};
+  std::array<AddressRange, 9> writes{};
+  return make_range(batch.orbital_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[0]) &&
+         make_range(batch.matrix_offsets, batch.batch_size + 1, sizeof(std::int64_t), &reads[1]) &&
+         make_range(batch.bucket_systems, batch.batch_size, sizeof(std::int32_t), &reads[2]) &&
+         make_range(batch.active, batch.batch_size, sizeof(std::uint8_t), &reads[3]) &&
+         make_range(layout.spin_channels, batch.batch_size, sizeof(std::int32_t), &reads[4]) &&
+         make_range(layout.spin_channel_offsets, batch.batch_size + 1, sizeof(std::int64_t),
+                    &reads[5]) &&
+         make_range(layout.spin_orbital_offsets, batch.batch_size + 1, sizeof(std::int64_t),
+                    &reads[6]) &&
+         make_range(layout.spin_matrix_offsets, batch.batch_size + 1, sizeof(std::int64_t),
+                    &reads[7]) &&
+         make_range(cache.cholesky_factors, batch.total_matrix_elements, sizeof(double),
+                    &reads[8]) &&
+         make_range(cache.geometry_generations, batch.batch_size, sizeof(std::uint64_t),
+                    &reads[9]) &&
+         make_range(cache.factor_statuses, batch.batch_size, sizeof(std::uint32_t), &reads[10]) &&
+         make_range(hamiltonians, layout.total_spin_matrix_elements, sizeof(double), &reads[11]) &&
+         make_range(workspace.matrix_scratch_a, layout.total_spin_matrix_elements, sizeof(double),
+                    &writes[0]) &&
+         make_range(workspace.matrix_scratch_b, layout.total_spin_matrix_elements, sizeof(double),
+                    &writes[1]) &&
+         make_range(workspace.factor_pointers, layout.total_spin_channels, sizeof(double*),
+                    &writes[2]) &&
+         make_range(workspace.matrix_pointers, layout.total_spin_channels, sizeof(double*),
+                    &writes[3]) &&
+         make_range(workspace.info_a, layout.total_spin_channels, sizeof(int), &writes[4]) &&
+         make_range(workspace.eligible, layout.total_spin_channels, sizeof(std::uint8_t),
+                    &writes[5]) &&
+         make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[6]) &&
+         make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &writes[7]) &&
+         make_range(device_error, 1, sizeof(std::uint32_t), &writes[8]) &&
+         pairwise_disjoint(reads) && pairwise_disjoint(writes) && disjoint_sets(reads, writes);
+}
+
 bool valid_compaction_workspace(const Gfn2EigensolverDeviceBatch& batch, std::int64_t bucket_count,
                                 const Gfn2EigensolverDeviceWorkspace& workspace) noexcept {
   return workspace.compact_system_elements >= batch.batch_size &&
@@ -691,10 +735,14 @@ __global__ void prepare_overlap_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
 
   __shared__ std::int64_t system;
   __shared__ std::int64_t input_begin;
+  __shared__ unsigned int validation_flags;
+  __shared__ int scan_enabled;
   __shared__ int valid;
   if (threadIdx.x == 0) {
     system = batch.bucket_systems[bucket_slot];
     input_begin = 0;
+    validation_flags = 0u;
+    scan_enabled = 0;
     valid = 0;
     workspace.eligible[bucket_slot] = 0u;
     workspace.factor_pointers[bucket_slot] = workspace.matrix_scratch_a + scratch_begin;
@@ -720,37 +768,74 @@ __global__ void prepare_overlap_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
           record_system_error(system_errors, system, device_error,
                               Gfn2EigensolverDeviceError::kInvalidOffsets);
         } else {
-          bool finite = true;
-          const bool symmetric = symmetric_input_is_valid(
-              overlap + matrix_begin, bucket.orbital_count, symmetry_tolerance, &finite);
-          if (!finite) {
-            record_system_error(system_errors, system, device_error,
-                                Gfn2EigensolverDeviceError::kNonfiniteOverlap);
-          } else if (!symmetric) {
-            record_system_error(system_errors, system, device_error,
-                                Gfn2EigensolverDeviceError::kNonsymmetricOverlap);
-          } else {
-            input_begin = matrix_begin;
-            valid = 1;
-            workspace.eligible[bucket_slot] = 1u;
-          }
+          input_begin = matrix_begin;
+          scan_enabled = 1;
         }
       }
     }
   }
   __syncthreads();
 
+  constexpr unsigned int kNonfinite = 1u;
+  constexpr unsigned int kNonsymmetric = 2u;
+  unsigned int local_flags = 0u;
   for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
     const std::int64_t row = index % bucket.orbital_count;
     const std::int64_t column = index / bucket.orbital_count;
     double value = row == column ? 1.0 : 0.0;
-    if (valid != 0) {
+    if (scan_enabled != 0) {
       const double first = overlap[input_begin + row * bucket.orbital_count + column];
       const double second = overlap[input_begin + column * bucket.orbital_count + row];
+      const bool first_finite = isfinite(first);
+      if (!first_finite) {
+        local_flags |= kNonfinite;
+      }
+      if (column < row) {
+        const bool second_finite = isfinite(second);
+        if (!second_finite) {
+          local_flags |= kNonfinite;
+        } else if (first_finite) {
+          const double scale = fmax(1.0, fmax(fabs(first), fabs(second)));
+          if (fabs(first - second) > symmetry_tolerance * scale) {
+            local_flags |= kNonsymmetric;
+          }
+        }
+      }
       value = row == column ? first : 0.5 * first + 0.5 * second;
     }
     workspace.matrix_scratch_a[scratch_begin + index] = value;
     workspace.matrix_scratch_b[scratch_begin + index] = value;
+  }
+  if (local_flags != 0u) {
+    atomicOr(&validation_flags, local_flags);
+  }
+  __syncthreads();
+
+  if (threadIdx.x == 0 && scan_enabled != 0) {
+    if ((validation_flags & kNonfinite) != 0u) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonfiniteOverlap);
+    } else if ((validation_flags & kNonsymmetric) != 0u) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonsymmetricOverlap);
+    } else {
+      valid = 1;
+      workspace.eligible[bucket_slot] = 1u;
+    }
+  }
+  __syncthreads();
+
+  /* cuSOLVER consumes every fixed bucket slot even when one peer is invalid.
+   * Replace a rejected speculative staging pass with a safe identity matrix;
+   * the valid common path keeps the single fused read/check/write pass above. */
+  if (scan_enabled != 0 && valid == 0) {
+    for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+      const std::int64_t row = index % bucket.orbital_count;
+      const std::int64_t column = index / bucket.orbital_count;
+      const double value = row == column ? 1.0 : 0.0;
+      workspace.matrix_scratch_a[scratch_begin + index] = value;
+      workspace.matrix_scratch_b[scratch_begin + index] = value;
+    }
   }
 }
 
@@ -1031,8 +1116,7 @@ __global__ void prepare_spin_solve_bucket_kernel(
   __shared__ std::int64_t factor_begin;
   __shared__ int valid;
   __shared__ int scan_enabled;
-  __shared__ int finite_ok;
-  __shared__ int symmetric_ok;
+  __shared__ unsigned int validation_flags;
   if (threadIdx.x == 0) {
     system = -1;
     physical_local = -1;
@@ -1041,8 +1125,7 @@ __global__ void prepare_spin_solve_bucket_kernel(
     factor_begin = 0;
     valid = 0;
     scan_enabled = 0;
-    finite_ok = 1;
-    symmetric_ok = 1;
+    validation_flags = 0u;
     workspace.eligible[solve_slot] = 0u;
     workspace.factor_pointers[solve_slot] = workspace.matrix_scratch_a + scratch_begin;
     workspace.matrix_pointers[solve_slot] = workspace.matrix_scratch_b + scratch_begin;
@@ -1073,72 +1156,80 @@ __global__ void prepare_spin_solve_bucket_kernel(
     }
   }
   __syncthreads();
-  /* The symmetric-input validation scans every matrix element; it was
-   * previously one serial 15K-element chain on lane 0. The scan's conclusions
-   * (any non-finite element, any out-of-tolerance symmetric pair) are
-   * monotone, so lanes can clear shared flags concurrently and lane 0 keeps
-   * the original error precedence afterwards. */
-  if (scan_enabled != 0) {
-    for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
-      const std::int64_t row = index % bucket.orbital_count;
-      const std::int64_t column = index / bucket.orbital_count;
-      const double value = hamiltonians[input_begin + index];
-      if (!isfinite(value)) {
-        atomicExch(&finite_ok, 0);
-      }
-      if (column < row) {
-        /* The flat scan is decoded in column-major order, while Hamiltonians
-         * use row-major storage. `index` therefore names (column, row), and
-         * this address names its (row, column) transpose. */
-        const double transpose = hamiltonians[input_begin + row * bucket.orbital_count + column];
-        if (!isfinite(transpose)) {
-          atomicExch(&finite_ok, 0);
-        } else if (isfinite(value)) {
-          const double scale = fmax(1.0, fmax(fabs(value), fabs(transpose)));
-          if (fabs(value - transpose) > symmetry_tolerance * scale) {
-            atomicExch(&symmetric_ok, 0);
-          }
+  constexpr unsigned int kNonfiniteHamiltonian = 1u;
+  constexpr unsigned int kNonsymmetricHamiltonian = 2u;
+  constexpr unsigned int kInvalidFactor = 4u;
+  unsigned int local_flags = 0u;
+  for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+    const std::int64_t row = index % bucket.orbital_count;
+    const std::int64_t column = index / bucket.orbital_count;
+    const double identity = row == column ? 1.0 : 0.0;
+    if (scan_enabled == 0) {
+      workspace.matrix_scratch_a[scratch_begin + index] = identity;
+      workspace.matrix_scratch_b[scratch_begin + index] = identity;
+      continue;
+    }
+
+    const double first = hamiltonians[input_begin + row * bucket.orbital_count + column];
+    const double second = hamiltonians[input_begin + column * bucket.orbital_count + row];
+    const bool first_finite = isfinite(first);
+    if (!first_finite) {
+      local_flags |= kNonfiniteHamiltonian;
+    }
+    if (column < row) {
+      const bool second_finite = isfinite(second);
+      if (!second_finite) {
+        local_flags |= kNonfiniteHamiltonian;
+      } else if (first_finite) {
+        const double scale = fmax(1.0, fmax(fabs(first), fabs(second)));
+        if (fabs(first - second) > symmetry_tolerance * scale) {
+          local_flags |= kNonsymmetricHamiltonian;
         }
       }
     }
+    if (row == column) {
+      const double factor = cache.cholesky_factors[factor_begin + index];
+      if (!isfinite(factor) || !(factor > 0.0)) {
+        local_flags |= kInvalidFactor;
+      }
+    }
+    workspace.matrix_scratch_b[scratch_begin + index] =
+        row == column ? first : 0.5 * first + 0.5 * second;
+  }
+  if (local_flags != 0u) {
+    atomicOr(&validation_flags, local_flags);
   }
   __syncthreads();
   if (threadIdx.x == 0 && scan_enabled != 0) {
-    bool factor_finite = true;
-    for (std::int64_t diagonal = 0; diagonal < bucket.orbital_count; ++diagonal) {
-      const double value =
-          cache.cholesky_factors[factor_begin + diagonal * bucket.orbital_count + diagonal];
-      factor_finite = factor_finite && isfinite(value) && value > 0.0;
-    }
-    if (finite_ok == 0) {
+    if ((validation_flags & kNonfiniteHamiltonian) != 0u) {
       record_system_error(system_errors, system, device_error,
                           Gfn2EigensolverDeviceError::kNonfiniteHamiltonian);
-    } else if (symmetric_ok == 0) {
+    } else if ((validation_flags & kNonsymmetricHamiltonian) != 0u) {
       record_system_error(system_errors, system, device_error,
                           Gfn2EigensolverDeviceError::kNonsymmetricHamiltonian);
-    } else if (!factor_finite) {
+    } else if ((validation_flags & kInvalidFactor) != 0u) {
       record_system_error(system_errors, system, device_error,
                           Gfn2EigensolverDeviceError::kStaleOverlapCache);
     } else {
       valid = 1;
       workspace.eligible[solve_slot] = 1u;
+      /* TRSM treats A as const. Borrow the immutable geometry cache directly
+       * so every SCC iteration avoids another complete N-by-N factor copy. */
+      workspace.factor_pointers[solve_slot] = cache.cholesky_factors + factor_begin;
     }
   }
   __syncthreads();
 
-  for (std::int64_t column = 0; column < bucket.orbital_count; ++column) {
-    for (std::int64_t row = threadIdx.x; row < bucket.orbital_count; row += blockDim.x) {
-      const std::int64_t index = row + column * bucket.orbital_count;
-      double factor = row == column ? 1.0 : 0.0;
-      double hamiltonian = row == column ? 1.0 : 0.0;
-      if (valid != 0) {
-        factor = cache.cholesky_factors[factor_begin + index];
-        const double first = hamiltonians[input_begin + row * bucket.orbital_count + column];
-        const double second = hamiltonians[input_begin + column * bucket.orbital_count + row];
-        hamiltonian = row == column ? first : 0.5 * first + 0.5 * second;
-      }
-      workspace.matrix_scratch_a[scratch_begin + index] = factor;
-      workspace.matrix_scratch_b[scratch_begin + index] = hamiltonian;
+  /* Fixed-capacity provider submission still includes rejected peers. Replace
+   * speculative H staging with identity only after the complete block scan
+   * has chosen the canonical peer-local error. */
+  if (scan_enabled != 0 && valid == 0) {
+    for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+      const std::int64_t row = index % bucket.orbital_count;
+      const std::int64_t column = index / bucket.orbital_count;
+      const double identity = row == column ? 1.0 : 0.0;
+      workspace.matrix_scratch_a[scratch_begin + index] = identity;
+      workspace.matrix_scratch_b[scratch_begin + index] = identity;
     }
   }
 }
@@ -3446,6 +3537,82 @@ static Gfn2EigensolverLaunchResult solve_eigensystems_impl(
   return launch_success();
 }
 
+static Gfn2EigensolverLaunchResult validate_spin_solve_buckets(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* device_error,
+    cudaStream_t stream) noexcept {
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    validate_spin_bucket_layout_kernel<<<1, 1, 0, stream>>>(
+        batch, layout, buckets[bucket_index], workspace.sequence_active, device_error);
+    const Gfn2EigensolverLaunchResult result = check_kernel_launch();
+    if (!result.success()) {
+      return result;
+    }
+  }
+  return launch_success();
+}
+
+static Gfn2EigensolverLaunchResult prepare_spin_solve_bucket(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket& bucket, const Gfn2EigensolverOverlapCache& cache,
+    std::uint64_t scalar_generation, const std::uint64_t* device_generation,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  prepare_spin_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count),
+                                     kSpinPrepareThreads, 0, stream>>>(
+      batch, layout, bucket, cache, scalar_generation, device_generation, hamiltonians,
+      options.symmetry_tolerance, workspace, system_errors, device_error);
+  return check_kernel_launch();
+}
+
+Gfn2EigensolverLaunchResult prepare_gfn2_spin_solve_buckets_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverOverlapCache& cache, std::uint64_t geometry_generation,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  if (!valid_spin_bucket_plan(batch, layout, buckets, bucket_count) || !valid_options(options) ||
+      !valid_spin_workspace(batch, layout, workspace) || !valid_cache(batch, cache) ||
+      geometry_generation == 0u || !is_aligned(hamiltonians, alignof(double)) ||
+      !is_aligned(system_errors, alignof(std::uint32_t)) ||
+      !is_aligned(device_error, alignof(std::uint32_t)) ||
+      !valid_spin_prepare_ranges(batch, layout, cache, hamiltonians, workspace, system_errors,
+                                 device_error)) {
+    return invalid_argument();
+  }
+  Gfn2EigensolverLaunchResult result =
+      prepare_launch_sequence(batch, workspace, device_error, stream);
+  if (!result.success()) {
+    return result;
+  }
+  /* prepare_launch_sequence clears only the physical-system prefix used for
+   * bucket-map validation. The standalone spin preflight must also reset the
+   * unrestricted tail so provider stages cannot consume stale info values. */
+  const cudaError_t clear_status = cudaMemsetAsync(
+      workspace.info_a, 0,
+      static_cast<std::size_t>(layout.total_spin_channels) * sizeof(*workspace.info_a), stream);
+  if (clear_status != cudaSuccess) {
+    return cuda_failure(clear_status);
+  }
+  result = validate_spin_solve_buckets(batch, layout, buckets, bucket_count, workspace,
+                                       device_error, stream);
+  if (!result.success()) {
+    return result;
+  }
+  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
+    result = prepare_spin_solve_bucket(batch, layout, buckets[bucket_index], cache,
+                                       geometry_generation, nullptr, hamiltonians, options,
+                                       workspace, system_errors, device_error, stream);
+    if (!result.success()) {
+      return result;
+    }
+  }
+  return launch_success();
+}
+
 static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
     const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
@@ -3498,13 +3665,10 @@ static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
 
   /* Validate every bucket before launching any publication stage so a device-
    * resident topology mismatch is whole-call fail-closed. */
-  for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
-    validate_spin_bucket_layout_kernel<<<1, 1, 0, stream>>>(
-        batch, layout, buckets[bucket_index], workspace.sequence_active, device_error);
-    result = check_kernel_launch();
-    if (!result.success()) {
-      return result;
-    }
+  result = validate_spin_solve_buckets(batch, layout, buckets, bucket_count, workspace,
+                                       device_error, stream);
+  if (!result.success()) {
+    return result;
   }
 
   for (std::int64_t bucket_index = 0; bucket_index < bucket_count; ++bucket_index) {
@@ -3512,12 +3676,10 @@ static Gfn2EigensolverLaunchResult solve_spin_eigensystems_impl(
     const Gfn2EigensolverBucket submission{
         bucket.orbital_count, bucket.solve_count, bucket.solve_index_offset,
         bucket.spin_matrix_scratch_offset, bucket.spin_orbital_scratch_offset};
-    prepare_spin_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count), 256, 0,
-                                       stream>>>(batch, layout, bucket, cache, scalar_generation,
-                                                 dynamic_epoch ? geometry_epoch->value : nullptr,
-                                                 hamiltonians, options.symmetry_tolerance,
-                                                 workspace, system_errors, device_error);
-    result = check_kernel_launch();
+    result =
+        prepare_spin_solve_bucket(batch, layout, bucket, cache, scalar_generation,
+                                  dynamic_epoch ? geometry_epoch->value : nullptr, hamiltonians,
+                                  options, workspace, system_errors, device_error, stream);
     if (!result.success()) {
       return result;
     }

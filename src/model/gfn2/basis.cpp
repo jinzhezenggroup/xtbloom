@@ -13,15 +13,10 @@
 #include <utility>
 
 #include "data/parameters/gfn2.hpp"
-#include "data/parameters/tblite_sto.hpp"
+#include "model/common/sto.hpp"
 
 namespace xtbloom::detail::gfn2 {
 namespace {
-
-constexpr double kPi = 3.141592653589793238462643383279502884;
-constexpr double kTwoOverPi = 2.0 / kPi;
-constexpr std::array<double, 5> kDoubleFactorial{1.0, 1.0, 3.0, 15.0, 105.0};
-constexpr std::size_t kMaximumContractedPrimitives = 12;
 
 bool count_fits_vector(std::int64_t count, std::size_t element_size, bool add_sentinel = false) {
   if (count < 0) {
@@ -57,109 +52,13 @@ const parameters::gfn2::ShellParameters* element_shells(
   return parameters::gfn2::kShells.data() + begin;
 }
 
-bool base_sto_table(std::uint8_t n, std::uint8_t l, std::uint8_t ng, const double*& alpha,
-                    const double*& coeff) {
-  if (n == 6u && ng == 6u) {
-    if (l == 0u) {
-      alpha = parameters::tblite::kAlpha6s.data();
-      coeff = parameters::tblite::kCoeff6s.data();
-      return true;
-    }
-    if (l == 1u) {
-      alpha = parameters::tblite::kAlpha6p.data();
-      coeff = parameters::tblite::kCoeff6p.data();
-      return true;
-    }
-    return false;
-  }
-  if (n == 0u || n > 5u || l >= n || l > 4u) {
-    return false;
-  }
-
-  std::size_t type = 0;
-  if (l == 0u) {
-    type = static_cast<std::size_t>(n - 1u);
-  } else if (l == 1u) {
-    type = static_cast<std::size_t>(n + 3u);
-  } else if (l == 2u) {
-    type = static_cast<std::size_t>(n + 6u);
-  } else if (l == 3u) {
-    type = static_cast<std::size_t>(n + 8u);
-  } else {
-    type = static_cast<std::size_t>(n + 9u);
-  }
-  if (type >= parameters::tblite::kAlpha3.size()) {
-    return false;
-  }
-  if (ng == 3u) {
-    alpha = parameters::tblite::kAlpha3[type].data();
-    coeff = parameters::tblite::kCoeff3[type].data();
-    return true;
-  }
-  if (ng == 4u) {
-    alpha = parameters::tblite::kAlpha4[type].data();
-    coeff = parameters::tblite::kCoeff4[type].data();
-    return true;
-  }
-  return false;
-}
-
 bool validate_shell(const parameters::gfn2::ShellParameters& shell) {
   const double* alpha = nullptr;
   const double* coeff = nullptr;
   return shell.angular_momentum <= 4u && shell.gaussian_count >= 1u && shell.gaussian_count <= 6u &&
          shell.slater > 0.0 && std::isfinite(shell.slater) &&
-         base_sto_table(shell.principal_quantum_number, shell.angular_momentum,
-                        shell.gaussian_count, alpha, coeff);
-}
-
-void expand_shell(const parameters::gfn2::ShellParameters& shell, double* alpha, double* coeff) {
-  const double* base_alpha = nullptr;
-  const double* base_coeff = nullptr;
-  (void)base_sto_table(shell.principal_quantum_number, shell.angular_momentum, shell.gaussian_count,
-                       base_alpha, base_coeff);
-
-  const double zeta_squared = shell.slater * shell.slater;
-  const std::size_t l = shell.angular_momentum;
-  for (std::size_t primitive = 0; primitive < shell.gaussian_count; ++primitive) {
-    alpha[primitive] = base_alpha[primitive] * zeta_squared;
-    const double normalization =
-        std::pow(kTwoOverPi * alpha[primitive], 0.75) *
-        std::pow(std::sqrt(4.0 * alpha[primitive]), static_cast<double>(l)) /
-        std::sqrt(kDoubleFactorial[l]);
-    coeff[primitive] = base_coeff[primitive] * normalization;
-  }
-}
-
-void orthogonalize_to_first(const double* first_alpha, const double* first_coeff,
-                            std::size_t first_count, double* alpha, double* coeff,
-                            std::size_t base_count) {
-  double overlap = 0.0;
-  for (std::size_t first = 0; first < first_count; ++first) {
-    for (std::size_t second = 0; second < base_count; ++second) {
-      const double exponent_sum = first_alpha[first] + alpha[second];
-      const double primitive_overlap = std::pow(std::sqrt(kPi / exponent_sum), 3.0);
-      overlap += first_coeff[first] * coeff[second] * primitive_overlap;
-    }
-  }
-  for (std::size_t primitive = 0; primitive < first_count; ++primitive) {
-    alpha[base_count + primitive] = first_alpha[primitive];
-    coeff[base_count + primitive] = -overlap * first_coeff[primitive];
-  }
-
-  const std::size_t count = base_count + first_count;
-  double norm_squared = 0.0;
-  for (std::size_t first = 0; first < count; ++first) {
-    for (std::size_t second = 0; second < count; ++second) {
-      const double exponent_sum = alpha[first] + alpha[second];
-      const double primitive_overlap = std::pow(std::sqrt(kPi / exponent_sum), 3.0);
-      norm_squared += coeff[first] * coeff[second] * primitive_overlap;
-    }
-  }
-  const double inverse_norm = 1.0 / std::sqrt(norm_squared);
-  for (std::size_t primitive = 0; primitive < count; ++primitive) {
-    coeff[primitive] *= inverse_norm;
-  }
+         common::sto_table(shell.principal_quantum_number, shell.angular_momentum,
+                           shell.gaussian_count, alpha, coeff);
 }
 
 }  // namespace
@@ -237,7 +136,7 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
         } else {
           first_count[angular_momentum] = shell.gaussian_count;
         }
-        if (primitives > static_cast<std::int64_t>(kMaximumContractedPrimitives) ||
+        if (primitives > static_cast<std::int64_t>(common::kMaximumContractedPrimitives) ||
             !checked_add(1, created.total_shells) ||
             !checked_add(spherical, created.total_orbitals) ||
             !checked_add(cartesian, created.total_cartesian_orbitals) ||
@@ -271,6 +170,7 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
     created.shell_to_atom.resize(shell_count);
     created.principal_quantum_numbers.resize(shell_count);
     created.angular_momenta.resize(shell_count);
+    created.shell_is_valence.resize(shell_count);
     created.slater_exponents.resize(shell_count);
     created.primitive_exponents.resize(primitive_count);
     created.primitive_coefficients.resize(primitive_count);
@@ -297,11 +197,16 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
         created.shell_to_atom[current_shell] = atom;
         created.principal_quantum_numbers[current_shell] = shell.principal_quantum_number;
         created.angular_momenta[current_shell] = shell.angular_momentum;
+        created.shell_is_valence[current_shell] = 1u;
         created.slater_exponents[current_shell] = shell.slater;
 
         double* alpha = created.primitive_exponents.data() + current_primitive;
         double* coeff = created.primitive_coefficients.data() + current_primitive;
-        expand_shell(shell, alpha, coeff);
+        if (!common::expand_sto_shell(shell.principal_quantum_number, shell.angular_momentum,
+                                      shell.gaussian_count, shell.slater, alpha, coeff)) {
+          error = "GFN2 basis references an unavailable pinned STO table row";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
         std::size_t actual_count = shell.gaussian_count;
 
         const std::size_t l = shell.angular_momentum;
@@ -311,9 +216,9 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
               static_cast<std::size_t>(created.shell_primitive_offsets[first]);
           const std::size_t first_count = static_cast<std::size_t>(
               created.shell_primitive_offsets[first + 1] - created.shell_primitive_offsets[first]);
-          orthogonalize_to_first(created.primitive_exponents.data() + first_begin,
-                                 created.primitive_coefficients.data() + first_begin, first_count,
-                                 alpha, coeff, shell.gaussian_count);
+          common::orthogonalize_to_first(created.primitive_exponents.data() + first_begin,
+                                         created.primitive_coefficients.data() + first_begin,
+                                         first_count, alpha, coeff, shell.gaussian_count);
           actual_count += first_count;
         } else {
           first_shell[l] = shell_index;

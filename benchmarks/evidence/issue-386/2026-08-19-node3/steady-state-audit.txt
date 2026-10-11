@@ -1,0 +1,42 @@
+source_revision=1c9c5b7264e522cde4b875d73d254470ad1e5116
+binary_sha256=dac01fc33bc6c7e14680a728cc7e2348acb1eed8beda396f7c0e99984dfdaab7
+test_mode=--gfn1-profile
+profile_iterations=10
+correctness_qualification=CPU parity, input identity, result flags, canaries, and guards passed
+
+cudaEventSynchronize=10
+cudaGraphLaunch_v10000=10
+cudaLaunchKernel=90
+cudaMemcpyAsync=20
+cudaMemsetAsync=30
+cudaEventRecord=10
+cudaStreamIsCapturing_v10000=10
+cudaStreamGetDevice_v12080=10
+cuProfilerStart=1
+
+cudaMalloc=0
+cudaFree=0
+cudaHostAlloc=0
+cudaMallocHost=0
+cudaFreeHost=0
+cudaEventCreate=0
+cudaEventDestroy=0
+cudaStreamCreate=0
+cudaStreamDestroy=0
+cudaGraphCreate=0
+cudaGraphDestroy=0
+cudaGraphInstantiate=0
+cudaGraphExecDestroy=0
+cudaEventQuery=0
+cudaStreamQuery=0
+cudaStreamSynchronize=0
+cudaDeviceSynchronize=0
+
+device_to_host_copies=20
+device_to_host_interpretation=two fixed diagnostic/completion copies per public request
+host_to_device_copies=0
+device_to_device_copies=0
+iteration_host_polling=0
+iteration_host_transfers=0
+
+conclusion=PASS: no steady-state allocation, resource churn, host query polling, stream synchronization, device-wide synchronization, or SCC-iteration host traffic

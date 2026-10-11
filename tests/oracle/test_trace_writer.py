@@ -26,6 +26,13 @@ SCHEMA_PATH = (
     / "tblite_scc_trace"
     / "xtbloom-scc-trace-v1.schema.json"
 )
+SCHEMA_V2_PATH = (
+    REPOSITORY_ROOT
+    / "tools"
+    / "oracle"
+    / "tblite_scc_trace"
+    / "xtbloom-scc-trace-v2.schema.json"
+)
 SPEC = importlib.util.spec_from_file_location("xtbloom_scc_trace", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 TRACE = importlib.util.module_from_spec(SPEC)
@@ -153,6 +160,49 @@ def _fixture() -> dict:
     }
 
 
+def _unrestricted_fixture() -> dict:
+    """Build a schema-valid v2 trace with distinct population/orbital channels."""
+    fixture = _fixture()
+    entry = fixture["iterations"][0]
+    assembled = [
+        [[-0.35, 0.15], [0.15, -0.10]],
+        [[-0.32, 0.12], [0.12, -0.08]],
+    ]
+    entry.pop("hamiltonian")
+    entry["assembled_hamiltonian"] = assembled
+    entry["solver_hamiltonian"] = [
+        [[2.0 * value for value in row] for row in channel] for channel in assembled
+    ]
+    entry["eigenvalues"] = [[-0.9, -0.3], [-0.8, -0.2]]
+    entry["density"] = [entry["density"][0], [[0.8, 0.04], [0.04, 0.1]]]
+    entry["mixed_qsh"] = [entry["mixed_qsh"][0], [0.03, 0.02, -0.01]]
+    entry["raw_qsh"] = [entry["raw_qsh"][0], [0.02, 0.04, -0.02]]
+    entry["mixed_qat"] = [entry["mixed_qat"][0], [0.03, 0.01]]
+    entry["raw_qat"] = [entry["raw_qat"][0], [0.02, 0.02]]
+    for field in ("mixed_dipoles", "raw_dipoles"):
+        entry[field] = [entry[field][0], copy.deepcopy(entry[field][0])]
+    for field in ("mixed_quadrupoles", "raw_quadrupoles"):
+        entry[field] = [entry[field][0], copy.deepcopy(entry[field][0])]
+    mixed = TRACE._flatten_population(entry, "mixed", 2)
+    raw = TRACE._flatten_population(entry, "raw", 2)
+    entry["residual"] = [
+        raw_value - mixed_value
+        for raw_value, mixed_value in zip(raw, mixed, strict=True)
+    ]
+    entry["residual_rms"] = math.sqrt(
+        sum(value * value / len(entry["residual"]) for value in entry["residual"])
+    )
+    fixture["format"] = TRACE.FORMAT_V2
+    fixture["input"]["unpaired_electrons"] = 1
+    fixture["input"]["spin_channels"] = 2
+    fixture["residual_layout"] = {
+        "shell_charges": 6,
+        "atomic_dipoles": 12,
+        "atomic_quadrupoles": 24,
+    }
+    return fixture
+
+
 def _setup_failure() -> dict:
     fixture = _fixture()
     fixture["iterations"] = []
@@ -167,6 +217,31 @@ def _setup_failure() -> dict:
 def _eigensolver_failure() -> dict:
     fixture = _fixture()
     fixture["failed_attempt"] = _pre_solve_attempt(fixture["iterations"][0], 1)
+    fixture["iterations"] = []
+    fixture["terminal"] = {
+        "status": TRACE.STATUS_FAILED,
+        "converged": False,
+        "iterations": 1,
+    }
+    return fixture
+
+
+def _unrestricted_eigensolver_failure() -> dict:
+    """Build a v2 failed-attempt fixture with only pre-solve state."""
+    fixture = _unrestricted_fixture()
+    iteration = fixture["iterations"][0]
+    fields = (
+        "assembled_hamiltonian",
+        "solver_hamiltonian",
+        "mixed_qsh",
+        "mixed_qat",
+        "mixed_dipoles",
+        "mixed_quadrupoles",
+    )
+    fixture["failed_attempt"] = {
+        "index": 1,
+        **{field: copy.deepcopy(iteration[field]) for field in fields},
+    }
     fixture["iterations"] = []
     fixture["terminal"] = {
         "status": TRACE.STATUS_FAILED,
@@ -214,6 +289,93 @@ class TraceWriterTest(unittest.TestCase):
         """Round-trip canonical trace bytes without changes."""
         text = TRACE.dumps(_fixture())
         self.assertEqual(TRACE.dumps(json.loads(text)), text)
+
+    def test_v2_roundtrip_preserves_two_distinct_representations(self) -> None:
+        """Keep charge/magnetization separate from alpha/beta orbital fields."""
+        fixture = _unrestricted_fixture()
+        text = TRACE.dumps(fixture)
+        loaded = json.loads(text)
+        self.assertEqual(loaded["input"]["spin_channels"], 2)
+        self.assertEqual(len(loaded["iterations"][0]["mixed_qsh"]), 2)
+        self.assertEqual(len(loaded["iterations"][0]["eigenvalues"]), 2)
+        self.assertEqual(TRACE.dumps(loaded), text)
+
+    @unittest.skipIf(jsonschema is None, "jsonschema is not installed")
+    def test_v2_writer_output_validates_against_v2_schema(self) -> None:
+        """Keep runtime and Draft 7 unrestricted contracts synchronized."""
+        schema = json.loads(SCHEMA_V2_PATH.read_text(encoding="utf-8"))
+        jsonschema.Draft7Validator.check_schema(schema)
+        jsonschema.Draft7Validator(schema).validate(
+            json.loads(TRACE.dumps(_unrestricted_fixture()))
+        )
+
+    def test_v2_rejects_mixed_channel_reduction_and_hamiltonian_scaling(self) -> None:
+        """Reject representation drift before comparison or replay."""
+        fixture = _unrestricted_fixture()
+        fixture["iterations"][0]["mixed_qat"][1][0] += 1.0
+        with self.assertRaisesRegex(TRACE.TraceError, "reduced mixed_qsh"):
+            TRACE.validate(fixture)
+        fixture = _unrestricted_fixture()
+        fixture["iterations"][0]["solver_hamiltonian"][1][0][0] += 1.0e-6
+        with self.assertRaisesRegex(TRACE.TraceError, "twice assembled_hamiltonian"):
+            TRACE.validate(fixture)
+
+    def test_v2_failed_attempt_preserves_only_spin_resolved_pre_solve_state(
+        self,
+    ) -> None:
+        """Keep both Hamiltonians and mixed q/d/Q, but no post-solve payload."""
+        fixture = _unrestricted_eigensolver_failure()
+        attempt = fixture["failed_attempt"]
+        self.assertEqual(len(attempt["assembled_hamiltonian"]), 2)
+        self.assertEqual(len(attempt["mixed_qsh"]), 2)
+        for field in ("density", "eigenvalues", "occupations", "raw_qsh", "residual"):
+            self.assertNotIn(field, attempt)
+        TRACE.validate(fixture)
+
+    def test_v2_rejects_legacy_or_missing_hamiltonian_fields(self) -> None:
+        """Require the explicit assembled/solver distinction in every v2 attempt."""
+        fixture = _unrestricted_fixture()
+        fixture["iterations"][0]["hamiltonian"] = copy.deepcopy(
+            fixture["iterations"][0]["assembled_hamiltonian"]
+        )
+        with self.assertRaisesRegex(TRACE.TraceError, "unsupported field"):
+            TRACE.validate(fixture)
+        for field in ("assembled_hamiltonian", "solver_hamiltonian"):
+            fixture = _unrestricted_fixture()
+            del fixture["iterations"][0][field]
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(TRACE.TraceError, "missing required field"),
+            ):
+                TRACE.validate(fixture)
+
+    def test_v2_rejects_orbital_and_population_channel_shape_drift(self) -> None:
+        """Enforce alpha/beta orbitals and charge/magnetization q/d/Q shapes."""
+        mutations = {
+            "eigenvalues": lambda entry: entry["eigenvalues"].pop(),
+            "occupations": lambda entry: entry["occupations"].pop(),
+            "density": lambda entry: entry["density"].pop(),
+            "qsh": lambda entry: entry["raw_qsh"].pop(),
+            "dipoles": lambda entry: entry["raw_dipoles"][1].pop(),
+            "quadrupoles": lambda entry: entry["raw_quadrupoles"][1][0].pop(),
+        }
+        for label, mutation in mutations.items():
+            with self.subTest(label=label):
+                fixture = _unrestricted_fixture()
+                mutation(fixture["iterations"][0])
+                with self.assertRaises(TRACE.TraceError):
+                    TRACE.validate(fixture)
+
+    def test_v2_residual_uses_both_population_channels(self) -> None:
+        """Reject second-channel corruption and a one-channel residual layout."""
+        fixture = _unrestricted_fixture()
+        fixture["iterations"][0]["residual"][-1] += 1.0e-6
+        with self.assertRaisesRegex(TRACE.TraceError, "raw q/d/Q minus mixed"):
+            TRACE.validate(fixture)
+        fixture = _unrestricted_fixture()
+        fixture["residual_layout"]["shell_charges"] = 3
+        with self.assertRaisesRegex(TRACE.TraceError, "must be 6"):
+            TRACE.validate(fixture)
 
     def test_unicode_and_extensible_provenance_roundtrip(self) -> None:
         """Preserve Unicode and extensible provenance through serialization."""

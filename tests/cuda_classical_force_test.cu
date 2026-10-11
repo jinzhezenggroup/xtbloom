@@ -481,8 +481,17 @@ struct DeviceFixture {
   DeviceBuffer<Gfn2D4DeviceElementData> d4_elements;
   DeviceBuffer<Gfn2D4DeviceReferenceData> d4_references;
   DeviceBuffer<double> d4_reference_c6;
-  DeviceBuffer<double> d4_pairs;
   DeviceBuffer<double> d4_coordination;
+  DeviceBuffer<Gfn2AtomPair> d4_pairlist_pairs;
+  DeviceBuffer<std::int64_t> d4_pairlist_pair_offsets;
+  DeviceBuffer<std::int64_t> d4_pairlist_pair_counts;
+  DeviceBuffer<std::int64_t> d4_pairlist_neighbor_offsets;
+  DeviceBuffer<std::int64_t> d4_pairlist_neighbor_counts;
+  DeviceBuffer<std::int64_t> d4_pairlist_neighbors;
+  DeviceBuffer<std::uint64_t> d4_pairlist_generations;
+  DeviceBuffer<std::uint8_t> d4_pairlist_eligible;
+  DeviceBuffer<std::uint64_t> d4_coordination_generations;
+  DeviceBuffer<std::uint8_t> d4_coordination_eligible;
   DeviceBuffer<double> d4_weights;
   DeviceBuffer<double> d4_weight_cn;
   DeviceBuffer<double> d4_weight_charge;
@@ -529,6 +538,54 @@ struct DeviceFixture {
     std::vector<std::uint8_t> requested_host(batch, 1u);
     std::vector<xtbloom_status_t> statuses_host(batch, XTBLOOM_STATUS_SUCCESS);
 
+    std::int64_t maximum_atoms_per_system = 0;
+    for (std::size_t system = 0; system < batch; ++system) {
+      maximum_atoms_per_system = std::max(
+          maximum_atoms_per_system, host.atom_offsets[system + 1u] - host.atom_offsets[system]);
+    }
+    /* The committed contract keeps nonzero fixed capacities even when a
+     * singleton system publishes no physical pairs or neighbors. */
+    const std::int64_t maximum_pairs_per_system =
+        std::max<std::int64_t>(1, maximum_atoms_per_system * (maximum_atoms_per_system - 1) / 2);
+    const std::int64_t maximum_neighbors_per_atom =
+        std::max<std::int64_t>(1, maximum_atoms_per_system - 1);
+    std::vector<Gfn2AtomPair> pairlist_pairs(batch *
+                                             static_cast<std::size_t>(maximum_pairs_per_system));
+    std::vector<std::int64_t> pairlist_pair_offsets(batch + 1u);
+    std::vector<std::int64_t> pairlist_pair_counts(batch);
+    std::vector<std::int64_t> pairlist_neighbor_offsets(atoms + 1u);
+    std::vector<std::int64_t> pairlist_neighbor_counts(atoms);
+    std::vector<std::int64_t> pairlist_neighbors(
+        atoms * static_cast<std::size_t>(maximum_neighbors_per_atom));
+    for (std::size_t system = 0; system < batch; ++system) {
+      const std::int64_t atom_begin = host.atom_offsets[system];
+      const std::int64_t atom_end = host.atom_offsets[system + 1u];
+      const std::int64_t pair_slot = static_cast<std::int64_t>(system) * maximum_pairs_per_system;
+      pairlist_pair_offsets[system] = pair_slot;
+      std::int64_t pair_count = 0;
+      for (std::int64_t second = atom_begin + 1; second < atom_end; ++second) {
+        for (std::int64_t first = atom_begin; first < second; ++first) {
+          pairlist_pairs[static_cast<std::size_t>(pair_slot + pair_count++)] = {first, second};
+        }
+      }
+      pairlist_pair_counts[system] = pair_count;
+      for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+        const std::int64_t neighbor_slot = atom * maximum_neighbors_per_atom;
+        pairlist_neighbor_offsets[static_cast<std::size_t>(atom)] = neighbor_slot;
+        std::int64_t neighbor_count = 0;
+        for (std::int64_t peer = atom_begin; peer < atom_end; ++peer) {
+          if (peer != atom) {
+            pairlist_neighbors[static_cast<std::size_t>(neighbor_slot + neighbor_count++)] = peer;
+          }
+        }
+        pairlist_neighbor_counts[static_cast<std::size_t>(atom)] = neighbor_count;
+      }
+    }
+    pairlist_pair_offsets[batch] = static_cast<std::int64_t>(batch) * maximum_pairs_per_system;
+    pairlist_neighbor_offsets[atoms] =
+        static_cast<std::int64_t>(atoms) * maximum_neighbors_per_atom;
+    const std::vector<std::uint8_t> eligible(batch, 1u);
+
     if (!allocate_and_copy(atom_offsets, host.atom_offsets, stream) ||
         !allocate_and_copy(pair_offsets, host.aes2_plan.pair_offsets(), stream) ||
         !allocate_and_copy(batch_shell_offsets, host.es2_plan.batch_shell_offsets(), stream) ||
@@ -555,8 +612,17 @@ struct DeviceFixture {
         !d4_reference_c6.allocate(xtbloom::parameters::d4::kReferenceC6.size()) ||
         !d4_reference_c6.copy_from(xtbloom::parameters::d4::kReferenceC6.data(),
                                    xtbloom::parameters::d4::kReferenceC6.size(), stream) ||
-        !allocate_and_copy(d4_pairs, host.d4_pairs, stream) ||
         !allocate_and_copy(d4_coordination, host.d4_coordination, stream) ||
+        !allocate_and_copy(d4_pairlist_pairs, pairlist_pairs, stream) ||
+        !allocate_and_copy(d4_pairlist_pair_offsets, pairlist_pair_offsets, stream) ||
+        !allocate_and_copy(d4_pairlist_pair_counts, pairlist_pair_counts, stream) ||
+        !allocate_and_copy(d4_pairlist_neighbor_offsets, pairlist_neighbor_offsets, stream) ||
+        !allocate_and_copy(d4_pairlist_neighbor_counts, pairlist_neighbor_counts, stream) ||
+        !allocate_and_copy(d4_pairlist_neighbors, pairlist_neighbors, stream) ||
+        !allocate_and_copy(d4_pairlist_generations, generations, stream) ||
+        !allocate_and_copy(d4_pairlist_eligible, eligible, stream) ||
+        !allocate_and_copy(d4_coordination_generations, generations, stream) ||
+        !allocate_and_copy(d4_coordination_eligible, eligible, stream) ||
         !allocate_and_copy(requested, requested_host, stream) ||
         !allocate_and_copy(statuses, statuses_host, stream) || !forces.allocate(coordinates) ||
         !forces.copy_from(host.force_seed.data(), coordinates, stream) ||
@@ -688,9 +754,52 @@ struct DeviceFixture {
         static_cast<std::int64_t>(references.size()),
         d4_reference_c6.get(),
         static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
-    Gfn2D4DeviceCache d4_cache{d4_pairs.get(),        static_cast<std::int64_t>(d4_pairs.size()),
-                               d4_coordination.get(), static_cast<std::int64_t>(atoms),
-                               kGeneration,           kPlanToken};
+    Gfn2PairListConsumerView d4_coordination_pairs{};
+    d4_coordination_pairs.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    d4_coordination_pairs.state = Gfn2PairListState::kCommitted;
+    d4_coordination_pairs.role = Gfn2PairListRole::kD4Coordination;
+    d4_coordination_pairs.pair_map_kind = Gfn2PairMapKind::kExplicit;
+    d4_coordination_pairs.plan_token = kPlanToken;
+    d4_coordination_pairs.cutoff_bohr = kGfn2D4CoordinationCutoffBohr;
+    d4_coordination_pairs.list_builder_cutoff_bohr = kGfn2D4TwoBodyCutoffBohr;
+    d4_coordination_pairs.batch_size = static_cast<std::int64_t>(batch);
+    d4_coordination_pairs.total_atoms = static_cast<std::int64_t>(atoms);
+    d4_coordination_pairs.max_pairs_per_system = maximum_pairs_per_system;
+    d4_coordination_pairs.max_neighbors_per_atom = maximum_neighbors_per_atom;
+    d4_coordination_pairs.pair_offset_count = static_cast<std::int64_t>(batch + 1u);
+    d4_coordination_pairs.neighbor_offset_count = static_cast<std::int64_t>(atoms + 1u);
+    d4_coordination_pairs.pair_count = static_cast<std::int64_t>(pairlist_pairs.size());
+    d4_coordination_pairs.neighbor_count = static_cast<std::int64_t>(pairlist_neighbors.size());
+    d4_coordination_pairs.pair_offsets = d4_pairlist_pair_offsets.get();
+    d4_coordination_pairs.pairs = d4_pairlist_pairs.get();
+    d4_coordination_pairs.pair_count_elements = static_cast<std::int64_t>(batch);
+    d4_coordination_pairs.neighbor_count_elements = static_cast<std::int64_t>(atoms);
+    d4_coordination_pairs.pair_counts = d4_pairlist_pair_counts.get();
+    d4_coordination_pairs.neighbor_counts = d4_pairlist_neighbor_counts.get();
+    d4_coordination_pairs.neighbor_offsets = d4_pairlist_neighbor_offsets.get();
+    d4_coordination_pairs.neighbors = d4_pairlist_neighbors.get();
+    d4_coordination_pairs.committed_generation_count = static_cast<std::int64_t>(batch);
+    d4_coordination_pairs.eligible_mask_count = static_cast<std::int64_t>(batch);
+    d4_coordination_pairs.committed_generations = d4_pairlist_generations.get();
+    d4_coordination_pairs.eligible_mask = d4_pairlist_eligible.get();
+    Gfn2PairListConsumerView d4_two_body_pairs = d4_coordination_pairs;
+    d4_two_body_pairs.role = Gfn2PairListRole::kD4TwoBody;
+    d4_two_body_pairs.cutoff_bohr = kGfn2D4TwoBodyCutoffBohr;
+    Gfn2PairListConsumerView d4_atm_pairs = d4_coordination_pairs;
+    d4_atm_pairs.role = Gfn2PairListRole::kD4Atm;
+    d4_atm_pairs.cutoff_bohr = kGfn2D4AtmCutoffBohr;
+    Gfn2D4PairListDeviceCache d4_cache{positions.get(),
+                                       static_cast<std::int64_t>(coordinates),
+                                       d4_coordination.get(),
+                                       static_cast<std::int64_t>(atoms),
+                                       d4_coordination_generations.get(),
+                                       static_cast<std::int64_t>(batch),
+                                       d4_coordination_eligible.get(),
+                                       static_cast<std::int64_t>(batch),
+                                       d4_coordination_pairs,
+                                       d4_two_body_pairs,
+                                       d4_atm_pairs,
+                                       kPlanToken};
     Gfn2D4DeviceWorkspace d4_workspace{d4_weights.get(),
                                        d4_weight_cn.get(),
                                        d4_weight_charge.get(),

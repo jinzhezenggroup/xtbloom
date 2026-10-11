@@ -10,16 +10,25 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/common/xtb_model.hpp"
+#include "backends/cuda/external_energy_device_evaluator.cuh"
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_density.cuh"
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_eigensolver.cuh"
+#include "backends/cuda/gfn2_electric_field.cuh"
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_es3.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_hamiltonian.cuh"
 #include "backends/cuda/gfn2_mulliken.cuh"
+#include "backends/cuda/gfn2_native_periodic_d4.cuh"
+#include "backends/cuda/gfn2_native_periodic_ewald.cuh"
+#include "backends/cuda/gfn2_native_periodic_integrals.cuh"
+#include "backends/cuda/gfn2_native_periodic_multipole.cuh"
+#include "backends/cuda/gfn2_native_periodic_short_range.cuh"
 #include "backends/cuda/gfn2_occupations.cuh"
 #include "backends/cuda/gfn2_periodic_embedding.cuh"
 #include "backends/cuda/gfn2_scc.cuh"
@@ -41,8 +50,12 @@ namespace xtbloom::detail::cuda {
  * v3 adds the sealed common topology projections (atom, shell ownership,
  * AO/matrix, packed all-pair, AO bucket, element identity) as the single
  * borrowing authority for every plan leaf; leaf identity is proven against
- * these projections in one place instead of re-deriving the master topology. */
-inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 3u;
+ * these projections in one place instead of re-deriving the master topology.
+ * ABI v4 replaces the dense D4 pair cache with Gfn2D4PairListDeviceCache. ABI
+ * v5 adds uniform electric-field execution. ABI v6 adds the topology-fixed
+ * density contraction tile count used by direct and Graph launches. ABI v7
+ * reuses that setup-selected schedule for Hamiltonian assembly. */
+inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 9u;
 
 /*
  * Which numerical-body stages one launch runs. The production device-tail loop
@@ -118,6 +131,7 @@ enum class Gfn2SccIterationBindingField : std::uint32_t {
   kStageReports = 23u,
   kWorkspace = 24u,
   kSpin = 25u,
+  kElectricField = 26u,
 };
 
 struct Gfn2SccIterationBindingDiagnostic {
@@ -248,6 +262,7 @@ struct Gfn2SccIterationDeviceScalarBridge {
 struct Gfn2SccIterationDevicePlan {
   std::uint32_t abi_version = kGfn2SccIterationAbiVersion;
   std::uint32_t enabled_components = 0u;
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
   std::uint64_t plan_token = 0u;
   std::uint64_t geometry_generation = 0u;
 
@@ -284,10 +299,24 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2AES2DeviceCache aes2_cache{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  /* D4 consumes the transactionally committed 50-bohr pair-list superset.
+   * Role-specific 30/50/25-bohr views share storage and keep their own
+   * inclusive physical predicates; no production dense five-value pair cache
+   * is retained. */
+  Gfn2D4PairListDeviceCache d4_pairlist_cache{};
   Gfn2ExternalPointChargeDeviceBatch explicit_point_charge_batch{};
   Gfn2ExternalPointChargeDeviceCache explicit_point_charge_cache{};
   Gfn2PeriodicEmbeddingDeviceBatch periodic_batch{};
+  /* Native XYZ periodic descriptors are retained alongside the legacy b+Aq
+   * embedding descriptor.  They are immutable plan projections; the SCC
+   * composer can therefore switch term consumers without rebuilding setup
+   * metadata or conflating the two periodic contracts. */
+  Gfn2NativePeriodicShortRangeDeviceBatch native_short_range_batch{};
+  Gfn2NativePeriodicIntegralDeviceBatch native_integrals{};
+  Gfn2NativePeriodicEwaldDeviceBatch native_ewald_batch{};
+  Gfn2NativePeriodicMultipoleDeviceBatch native_multipole_batch{};
+  Gfn2NativePeriodicD4DeviceBatch native_d4_batch{};
+  Gfn2ElectricFieldDeviceBatch electric_field_batch{};
   Gfn2SccBridgeDeviceBatch scalar_bridge_batch{};
   Gfn2HamiltonianDeviceBatch hamiltonian_batch{};
   Gfn2EigensolverDeviceBatch eigensolver_batch{};
@@ -302,6 +331,10 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2SccFreeEnergyDeviceBatch free_energy_batch{};
   Gfn2SccPublicationDevicePlan publication_plan{};
 
+  /* Optional native external energy evaluator.  A zero plan_token disables the
+   * device-side correction and preserves stock xTBloom SCC byte-for-byte. */
+  ExternalEnergyDeviceModel external_energy_model{};
+
   /* Immutable stage-to-diagnostic mapping; storage remains caller-owned. */
   Gfn2SccStageDeviceReport reports[kGfn2SccIterationStageReportCapacity]{};
   std::int64_t report_count = 0;
@@ -313,6 +346,11 @@ struct Gfn2SccIterationDevicePlan {
  * zero-copy edges once so the hot composer never rebuilds a descriptor.
  */
 struct Gfn2SccIterationDeviceInput {
+  Gfn2DeviceAdmission admission{};
+  /* Runtime-refreshed, address-stable field data. vectors/positions feed the
+   * numerical refresh leaf; potentials are its committed SCC outputs. */
+  Gfn2ElectricFieldDeviceInput electric_field{};
+  Gfn2ElectricFieldDevicePotentialView electric_field_potentials{};
   Gfn2SccIterationDeviceStateInput activity_state{};
   Gfn2SccPotentialDeviceMixedFields mixed_fields{};
   /* Mixed qsh drives the Hamiltonian spin potential; raw qsh drives energy. */
@@ -331,6 +369,7 @@ struct Gfn2SccIterationDeviceInput {
   Gfn2SccDeviceConstMultipoles raw_multipoles{};
   const double* complete_free_energies = nullptr;
   std::int64_t complete_free_energy_elements = 0;
+  ExternalEnergyDeviceInput external_energy{};
   std::uint64_t plan_token = 0u;
 };
 
@@ -399,6 +438,10 @@ struct Gfn2SccIterationDeviceWorkspace {
   Gfn2AES2DeviceWorkspace aes2_workspace{};
   Gfn2D4DeviceWorkspace d4_workspace{};
   Gfn2PeriodicEmbeddingDeviceWorkspace periodic_workspace{};
+  Gfn2NativePeriodicShortRangeDeviceWorkspace native_short_range_workspace{};
+  Gfn2NativePeriodicEwaldDeviceWorkspace native_ewald_workspace{};
+  Gfn2NativePeriodicMultipoleDeviceWorkspace native_multipole_workspace{};
+  Gfn2NativePeriodicD4DeviceWorkspace native_d4_workspace{};
   Gfn2SccPotentialDeviceWorkspace potential_workspace{};
   Gfn2HamiltonianDeviceWorkspace hamiltonian_workspace{};
   Gfn2EigensolverDeviceWorkspace eigensolver_workspace{};
@@ -416,6 +459,7 @@ struct Gfn2SccIterationDeviceWorkspace {
   std::uint32_t* mixer_device_error = nullptr;
   std::int64_t mixer_device_error_elements = 0;
   Gfn2SccPublicationDeviceWorkspace publication_workspace{};
+  ExternalEnergyDeviceOutput external_energy{};
 
   std::uint64_t plan_token = 0u;
 };

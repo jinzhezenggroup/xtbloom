@@ -22,6 +22,7 @@
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/coordination.hpp"
 #include "runtime/nvidia_host_api.h"
+#include "tests/support/cuda_d4_pairlist_fixture.cuh"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 #define CHECK(condition)                                                                          \
@@ -223,7 +224,6 @@ struct InputBacking {
       result.d4.reference_c6 = {
           xtbloom::parameters::d4::kReferenceC6.data(),
           static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
-      result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
     }
@@ -334,6 +334,7 @@ bool compare_doubles(const char* field, const std::vector<double>& actual, const
 struct ProductionFixture {
   HostSccCase host;
   InputBacking backing;
+  xtbloom::test::cuda::D4CommittedPairListFixture d4_pairlist;
   ProviderHandles handles;
   Gfn2SccSetupTopology topology_owner;
   Gfn2SccSetupInputs inputs_owner;
@@ -341,6 +342,7 @@ struct ProductionFixture {
   Gfn2SccIterationInitializer initializer;
   DeviceAllocation topology_arena;
   DeviceAllocation input_arena;
+  DeviceAllocation electric_field_arena;
   DeviceAllocation iteration_arena;
   DeviceAllocation eigensolver_setup_arena;
   PinnedAllocation provider_host_workspace;
@@ -439,6 +441,46 @@ struct ProductionFixture {
                    static_cast<unsigned>(input_diagnostic.field));
       return false;
     }
+    /* Failure injection must begin from the same valid fixed field binding as
+     * production. A zero vector preserves the fixture's field-free numerical
+     * baseline while keeping every later rejection attributable to the
+     * intended injected fault. */
+    const std::int64_t field_vectors = 3 * host.batch_size();
+    const std::int64_t coordinates = 3 * host.total_atoms();
+    const std::int64_t field_storage_elements =
+        field_vectors + coordinates + host.total_atoms() + coordinates;
+    if (!electric_field_arena.allocate(static_cast<std::size_t>(field_storage_elements) *
+                                       sizeof(double))) {
+      std::fprintf(stderr, "failure-matrix electric-field backing allocation failed\n");
+      return false;
+    }
+    auto* const field_storage = static_cast<double*>(electric_field_arena.get());
+    double* const field_positions = field_storage + field_vectors;
+    double* const field_atomic_potentials = field_positions + coordinates;
+    double* const field_dipole_potentials = field_atomic_potentials + host.total_atoms();
+    if (cudaMemsetAsync(field_storage, 0, electric_field_arena.bytes(), handles.stream()) !=
+            cudaSuccess ||
+        cudaMemcpyAsync(field_positions, host.positions().data(),
+                        static_cast<std::size_t>(coordinates) * sizeof(double),
+                        cudaMemcpyHostToDevice, handles.stream()) != cudaSuccess) {
+      std::fprintf(stderr, "failure-matrix electric-field backing upload failed\n");
+      return false;
+    }
+    plan_seed.electric_field_batch = {host.batch_size(), host.total_atoms(), host.batch_size() + 1,
+                                      device_topology.atom_offsets, kPlanToken};
+    plan_seed.classical_energy_batch.electric_field = plan_seed.electric_field_batch;
+    input_seed.electric_field = {field_storage, field_vectors, field_positions, coordinates,
+                                 kPlanToken};
+    input_seed.electric_field_potentials = {field_atomic_potentials, host.total_atoms(),
+                                            field_dipole_potentials, coordinates, kPlanToken};
+    if (host.d4_plan() != nullptr &&
+        !d4_pairlist.bind(
+            host.atom_offsets(), host.positions(), device_topology,
+            plan_seed.d4_pairlist_cache.positions, plan_seed.d4_pairlist_cache.coordination_numbers,
+            host.options().geometry_generation, plan_seed.d4_pairlist_cache, handles.stream())) {
+      std::fprintf(stderr, "failure-matrix D4 committed pair-list setup failed\n");
+      return false;
+    }
 
     auto eigensolver_diagnostic = Gfn2SccSetupEigensolver::create(
         topology_owner, host.overlap().data(), static_cast<std::int64_t>(host.overlap().size()),
@@ -472,6 +514,15 @@ struct ProductionFixture {
                    static_cast<unsigned>(bind_arena_diagnostic.error));
       return false;
     }
+    input_seed.classical_energy.electric_field_multipoles = {
+        workspace_seed.physical_topology.atomic_charges,
+        workspace_seed.physical_topology.atom_elements,
+        workspace_seed.physical_topology.atomic_dipoles,
+        workspace_seed.physical_topology.dipole_elements, kPlanToken};
+    input_seed.classical_energy.electric_field_potentials = input_seed.electric_field_potentials;
+    input_seed.free_energy.electric_field = workspace_seed.staged_classical_energy.electric_field;
+    input_seed.free_energy.electric_field_elements =
+        workspace_seed.staged_classical_energy.electric_field_elements;
 
     eigensolver_diagnostic = eigensolver_owner.bind_and_factor_overlap_async(
         device_topology, plan_seed, arena_requirements, iteration_arena.get(),
@@ -1206,7 +1257,7 @@ int test_potential_population_stage_injections() {
       kAES2Cache,
       kOverlapFactor,
       kMullikenReference,
-      kD4PairData,
+      kD4Coordination,
       kPeriodicShift,
       kPointChargeCache,
     } kind;
@@ -1230,9 +1281,9 @@ int test_potential_population_stage_injections() {
       {"Mulliken reference occupation", Gfn2SccStageId::kMulliken,
        static_cast<std::uint32_t>(Gfn2MullikenDeviceError::kNonfiniteReferenceOccupation), false,
        1u, XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kMullikenReference},
-      {"D4 pair data", Gfn2SccStageId::kD4Potential,
-       static_cast<std::uint32_t>(Gfn2D4DeviceError::kNonfiniteArithmetic), true, 0u,
-       XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kD4PairData},
+      {"D4 coordination", Gfn2SccStageId::kD4Potential,
+       static_cast<std::uint32_t>(Gfn2D4DeviceError::kInvalidCoordination), true, 0u,
+       XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kD4Coordination},
       {"periodic shift", Gfn2SccStageId::kPeriodicPotential,
        static_cast<std::uint32_t>(Gfn2PeriodicEmbeddingDeviceError::kNonfiniteShift), true, 0u,
        XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kPeriodicShift},
@@ -1293,8 +1344,8 @@ int test_potential_population_stage_injections() {
             const_cast<double*>(fixture.binding.plan.mulliken_batch.reference_shell_occupations), 1,
             fixture.handles.stream()));
         break;
-      case Injection::Kind::kD4PairData:
-        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.d4_cache.pair_data), 1,
+      case Injection::Kind::kD4Coordination:
+        CHECK(upload(&nan, fixture.binding.plan.d4_pairlist_cache.coordination_numbers, 1,
                      fixture.handles.stream()));
         break;
       case Injection::Kind::kPeriodicShift:

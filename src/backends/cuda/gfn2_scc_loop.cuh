@@ -204,6 +204,20 @@ class Gfn2SccLoopCudaGraphOwner {
 
   [[nodiscard]] Gfn2SccLoopLaunchResult launch(cudaStream_t stream = nullptr) const noexcept;
 
+  /* Insert the reusable SCC root graph at the current stream-capture
+   * dependency frontier. This is intentionally distinct from launch(): an
+   * outer conditional request graph must retain the production SCC graph as a
+   * child instead of recapturing the maximum-iteration bounded fallback. */
+  [[nodiscard]] Gfn2SccLoopLaunchResult append_root_child_to_capture(
+      cudaStream_t stream) const noexcept;
+
+  /* Append the root graph directly to a graph under construction. The caller
+   * supplies the dependency frontier and owns the parent graph. */
+  [[nodiscard]] Gfn2SccLoopLaunchResult append_root_child(cudaGraph_t graph,
+                                                          const cudaGraphNode_t* dependencies,
+                                                          std::size_t dependency_count,
+                                                          cudaGraphNode_t& child) const noexcept;
+
   void reset() noexcept;
   [[nodiscard]] bool ready() const noexcept;
   [[nodiscard]] bool device_tail_graph_ready() const noexcept;

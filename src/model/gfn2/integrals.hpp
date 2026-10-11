@@ -3,46 +3,24 @@
 
 #define XTBLOOM_MODEL_GFN2_INTEGRALS_HPP
 
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <vector>
-
+#include "model/common/integrals.hpp"
 #include "model/gfn2/basis.hpp"
-#include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail::gfn2 {
 
-/*
- * Geometry-independent layout for batched one-electron integral matrices.
- *
- * Every molecule owns a row-major, dense nao-by-nao matrix in the packed
- * output buffer. matrix_offsets is a zero-based half-open partition of that
- * buffer and is reused by overlap, dipole, and quadrupole evaluators.
- *
- * Plan construction may allocate. Evaluation requires a caller-owned scratch
- * buffer so successful steady-state calls do not allocate and the same layout
- * can be mapped to CUDA or a future ROCm backend.
- */
-struct IntegralPlan {
-  std::int64_t batch_size = 0;
-  std::int64_t total_matrix_elements = 0;
-  double integral_cutoff = 0.0;
-  std::size_t workspace_size_bytes = 0;
-  std::vector<std::int64_t> matrix_offsets;
-};
-
-/* tblite's GFN2 default at calculator accuracy 1.0. */
-inline constexpr double kDefaultIntegralCutoff = 25.0;
+using IntegralPlan = common::IntegralPlan;
+inline constexpr double kDefaultIntegralCutoff = common::kDefaultIntegralCutoff;
+using common::add_multipole_gradient_cpu;
+using common::add_overlap_gradient_cpu;
+using common::evaluate_multipole_cpu;
+using common::evaluate_overlap_cpu;
+using common::make_integral_plan;
 
 /*
- * Create packed matrix offsets for an existing GFN2 BasisPlan. The cutoff is
+ * Create packed matrix offsets for an existing basis plan. The cutoff is
  * the dimensionless Gaussian-product exponent threshold used by tblite; a
  * primitive pair is skipped when ai*aj*R^2/(ai+aj) exceeds this value.
  */
-xtbloom_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, std::string& error,
-                                    double integral_cutoff = kDefaultIntegralCutoff);
-
 /*
  * Evaluate all ragged-batch overlap matrices.
  *
@@ -50,10 +28,6 @@ xtbloom_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, 
  * plan.total_matrix_elements doubles and is overwritten. workspace must be
  * aligned for double and contain at least plan.workspace_size_bytes bytes.
  */
-xtbloom_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                      const double* positions, double* overlap, void* workspace,
-                                      std::size_t workspace_size, std::string& error);
-
 /*
  * Evaluate GFN2 one-electron dipole and traceless quadrupole integrals.
  *
@@ -75,11 +49,6 @@ xtbloom_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan
  * least plan.workspace_size_bytes bytes. Successful steady-state calls
  * perform no dynamic allocation.
  */
-xtbloom_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                        const double* positions, double* dipole, double* quadrupole,
-                                        void* workspace, std::size_t workspace_size,
-                                        std::string& error);
-
 /*
  * Apply the analytic reverse-mode derivative of evaluate_multipole_cpu.
  *
@@ -93,12 +62,6 @@ xtbloom_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPl
  * alignment and size requirements as evaluate_multipole_cpu. Successful
  * steady-state calls allocate no dynamic memory.
  */
-xtbloom_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                            const double* positions, const double* dE_ddipole,
-                                            const double* dE_dquadrupole, double* gradients,
-                                            void* workspace, std::size_t workspace_size,
-                                            std::string& error);
-
 /*
  * Apply the analytic overlap reverse-mode derivative
  *
@@ -109,11 +72,6 @@ xtbloom_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const Integr
  * respects both matrix triangles even when the caller's adjoint is not
  * symmetric, and does not materialize a four-index derivative tensor.
  */
-xtbloom_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
-                                          const double* positions, const double* dE_doverlap,
-                                          double* gradients, void* workspace,
-                                          std::size_t workspace_size, std::string& error);
-
 }  // namespace xtbloom::detail::gfn2
 
 #endif  // XTBLOOM_MODEL_GFN2_INTEGRALS_HPP

@@ -75,6 +75,48 @@
       "unpaired_electrons": 1
     },
     {
+      "atom_count": 1,
+      "description": "Neutral atomic zinc is a minimal closed-shell transition-metal probe that isolates the Z=30 GFN2 parameter and eigensolver path.",
+      "golden": "data/conformance/golden/zn_atom.json",
+      "golden_sha256": "e0e053015531013a8b610ff2cc1cea5a2e8ec27821b2e339669f292f8c188515",
+      "id": "zn_atom",
+      "input": "data/conformance/inputs/zn_atom.coord",
+      "input_sha256": "5dac03ceb64efdce82190b28a934653d3bcf347f0229f50a53d2be48dde36390",
+      "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "2a0b75ec59d92c177e9951c2ef9a5fceb6f26970d5f79b5b1472cfbaebcf414f",
+      "scientific_source": "Minimal isolated-atom probe designed for xTBloom and evaluated by the pinned live tblite oracle.",
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 1,
+      "description": "Atomic iodide is a minimal closed-shell heavy-halogen anion covering Z=53 and a negative molecular charge.",
+      "golden": "data/conformance/golden/i_anion.json",
+      "golden_sha256": "4cba21f1aa5f5024ae30296278b922070a07a60e33a14cfd5fa2de1706ad1057",
+      "id": "i_anion",
+      "input": "data/conformance/inputs/i_anion.coord",
+      "input_sha256": "e51170d42b7d862c77a5ab82870c4708f68612765b32d11918d0398334a2c4f4",
+      "molecular_charge": -1,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "8aa23263e8d27412ac5e0488303c308a99bbf30bd37947bfaa68658276406968",
+      "scientific_source": "Minimal isolated-ion probe designed for xTBloom and evaluated by the pinned live tblite oracle.",
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 1,
+      "description": "Neutral atomic radon is the closed-shell upper boundary probe for the released GFN2 element range, Z=86.",
+      "golden": "data/conformance/golden/rn_atom.json",
+      "golden_sha256": "08bac2be6103420b170259c71290a3a5619e1a6df7470f1adbe2a15e3fea0313",
+      "id": "rn_atom",
+      "input": "data/conformance/inputs/rn_atom.coord",
+      "input_sha256": "81c93e386816999701212f600f68913fa1124d17c2022e20e0f5e22e324d007e",
+      "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "6426627724f8c7695b322349abe0a4d83003392efa7c1382560ad10fb97b1d76",
+      "scientific_source": "Minimal isolated-atom boundary probe designed for xTBloom and evaluated by the pinned live tblite oracle.",
+      "unpaired_electrons": 0
+    },
+    {
       "atom_count": 3,
       "description": "One water plus one explicit gamma=999 point charge is the minimal external-charge SCC and force-sign case.",
       "golden": "data/conformance/golden/water_one_pc_gamma999.json",
@@ -88,6 +130,38 @@
       "reference_engine": "xtb",
       "reference_output_sha256": "4c500389315198225c695cbfc18025e49a9c726fc9e0eef1d717b9052c3c9649",
       "scientific_source": "Reduced one-water/one-PC case derived from the xTB 6.7.1 water-tetramer PCEM API regression geometry.",
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 3,
+      "description": "One water plus one oxygen-hardness point charge 0.25 bohr from oxygen probes the finite screened short-range interaction, analytic QM forces, and point-force sign.",
+      "golden": "data/conformance/golden/water_one_pc_close_hardness.json",
+      "golden_sha256": "80ad3e307ce38d85ae64c57f5526d41f197ae55693aec685abbf14014846291e",
+      "id": "water_one_pc_close_hardness",
+      "input": "data/conformance/inputs/water_one_pc_close_hardness.qmmm.json",
+      "input_schema": "qmmm-v1",
+      "input_sha256": "e72aa0bedce38df23cefa255727401bf04c4a4864f9013fc0302e107fd3904a8",
+      "molecular_charge": 0,
+      "point_charge_count": 1,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "936c46ff0ce9b369b8cfaf82d9077201e62a440e87399e12cf93d376d20a7763",
+      "scientific_source": "Short-range derivative of the reviewed one-water/one-PC geometry; the point site uses pinned oxygen GFN2 hardness and is displaced 0.25 bohr from the oxygen atom.",
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 3,
+      "description": "One water plus one oxygen-hardness point charge exactly coincident with oxygen proves that the screened external interaction remains finite at zero separation.",
+      "golden": "data/conformance/golden/water_one_pc_coincident_hardness.json",
+      "golden_sha256": "51b3338f71df8d697cf69ba20ee01a9b1da8dcdcfdd7e594dc1f0e28b584c0ab",
+      "id": "water_one_pc_coincident_hardness",
+      "input": "data/conformance/inputs/water_one_pc_coincident_hardness.qmmm.json",
+      "input_schema": "qmmm-v1",
+      "input_sha256": "535997c1f77219cd716f199d661ea099b9191ba206593fa8578d205108adc793",
+      "molecular_charge": 0,
+      "point_charge_count": 1,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "69e0b966e3a016ac56e69d4dbe0b3737382859003695a696efd9d2302f481fc8",
+      "scientific_source": "Coincident-site derivative of the reviewed one-water/one-PC geometry; the point site uses pinned oxygen GFN2 hardness at the exact oxygen coordinate.",
       "unpaired_electrons": 0
     },
     {
@@ -124,7 +198,7 @@
     },
     {
       "atom_count": 3,
-      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field gradient applies +E per atom instead of +q_i E and is retained only as diagnostic provenance, while xtbloom forces are gated by public energy finite differences.",
+      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field result applies a +E-per-atom force (equivalently a -E gradient contribution) instead of +q_i E and is retained only as diagnostic provenance, while xtbloom forces are gated by public energy finite differences.",
       "efield": [
         0.003,
         -0.004,
@@ -132,9 +206,6 @@
       ],
       "golden": "data/conformance/golden/water_efield.json",
       "golden_sha256": "d63a1dfc900190c9aeb7508c9a3cf9ab1be9e071578cc7df54abc314a58c7035",
-      "xtbloom_backends": [
-        "cpu"
-      ],
       "xtbloom_force_evidence": "public_energy_finite_difference",
       "xtbloom_oracle_properties": [
         "energy_hartree"
@@ -284,13 +355,13 @@
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "elementary_charge*bohr",
-      "justification": "Absolute atom-resolved dipole-moment component threshold for the SCC state stored in xtb primary goldens. The public C result ABI exposes no dipole output buffer yet, so this gates reference reproducibility rather than xtbloom agreement; it is conservatively aligned with the charge threshold."
+      "justification": "Absolute atom-resolved dipole-moment component threshold for the SCC state stored in xtb primary goldens. The public C result ABI exposes molecular dipoles but no atom-resolved dipole output, so this gates reference reproducibility rather than xtbloom agreement; it is conservatively aligned with the charge threshold."
     },
     "atomic_quadrupoles": {
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "elementary_charge*bohr^2",
-      "justification": "Absolute atom-resolved quadrupole-moment component threshold (xx, xy, yy, xz, yz, zz) for goldens that store the SCC state. As with dipoles, the public ABI cannot yet return quadrupoles, so this gate applies to reference-engine reproducibility and is aligned with the charge threshold."
+      "justification": "Absolute atom-resolved quadrupole-moment component threshold (xx, xy, yy, xz, yz, zz) for goldens that store the SCC state. Atom-resolved quadrupoles remain unexposed by the public ABI, so this gate applies to reference-engine reproducibility and is aligned with the charge threshold."
     },
     "point_charge_forces": {
       "atol": 5e-07,
@@ -304,7 +375,7 @@
     "atol": 1e-06,
     "rtol": 0.0,
     "unit": "hartree and hartree/bohr and elementary_charge",
-    "justification": "Both backends must match the same pinned golden within the primary energy, forces, and charges tolerances (5e-7 each in atomic units), so by the triangle inequality CPU-vs-CUDA deviation on identical inputs is bounded by twice the primary tolerance (1e-6). The per-backend invariance and batch-versus-sequential gates in tools/conformance/xtbloom_invariants.py further require each backend to reproduce its own exact symmetries, making the CPU/CUDA agreement threshold explicit and executable without a dedicated pair comparator."
+    "justification": "Both backends must match every property selected by each case's pinned-oracle property set within its primary tolerance (5e-7 in the corresponding atomic unit), so by the triangle inequality CPU-vs-CUDA deviation on identical gated properties is bounded by twice the primary tolerance (1e-6). The per-backend invariance and batch-versus-sequential gates in tools/conformance/xtbloom_invariants.py further require each backend to reproduce its own exact symmetries, making the CPU/CUDA agreement threshold explicit and executable without a dedicated pair comparator."
   },
   "units": {
     "coordinates": "bohr",

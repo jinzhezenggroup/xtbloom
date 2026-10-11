@@ -5,7 +5,8 @@
 - Include `<xtbloom/xtbloom.h>` from an installed package.
 - Link the exported CMake target `xtbloom::xtbloom`.
 - The public boundary is C-compatible even though the implementation is C++17.
-- Only GFN2-xTB is implemented. Treat GFN1-xTB and ROCm constants as reserved.
+- GFN1-xTB is implemented on CPU; GFN2-xTB is implemented on CPU and CUDA.
+  Treat ROCm as reserved, and never silently route GFN1-xTB to CUDA.
 - Prefer the symbols and size macros in the installed header over copied
   numeric values. Additive suffixes may appear without changing an older
   compatible prefix.
@@ -57,8 +58,9 @@ For `batch_size = B` and `total_atoms = N`:
 - `positions`: `3N` `double` entries.
 - `molecular_charges`: `B` `double` entries.
 - `unpaired_electrons`: `B` `int32_t` entries.
-- optional `spin_channels`: `B` `int32_t` entries, each one for restricted or
-  two for unrestricted; absence preserves the restricted default.
+- optional `spin_channels`: `B` `int32_t` entries: zero requests automatic
+  selection from the matching `unpaired_electrons` value, one is restricted,
+  and two is unrestricted. Absence preserves the historical restricted default.
 
 Optional point-charge, charge-response, and interaction fields have additional
 all-or-nothing and shape rules. Use the dedicated QM/MM skill for those fields.

@@ -102,10 +102,13 @@ bool byte_equal(const std::vector<T>& first, const std::vector<T>& second) {
 }
 
 struct TerminalHostData {
-  static constexpr std::array<std::int64_t, 3> atom_offsets{0, 3, 5};
-  static constexpr std::array<std::int32_t, 5> atomic_numbers{8, 1, 1, 6, 8};
-  static constexpr std::array<double, 15> positions{
-      0.0, 0.0, 0.0, 1.43, 1.11, 0.0, -1.43, 1.11, 0.0, 0.0, 0.0, 0.0, 2.20, 0.0, 0.0,
+  static constexpr std::array<std::int64_t, 3> atom_offsets{0, 3, 4};
+  /* The first peer is bent CH2 so the terminal path executes a real ATM
+   * triple; the second singleton has zero published pairs despite nonzero
+   * fixed backing capacity. */
+  static constexpr std::array<std::int32_t, 4> atomic_numbers{6, 1, 1, 1};
+  static constexpr std::array<double, 12> positions{
+      0.0, 0.0, 0.0, 1.43, 1.11, 0.0, -1.43, 1.11, 0.0, 0.0, 0.0, 0.0,
   };
 
   RepulsionPlan repulsion;
@@ -120,11 +123,12 @@ struct TerminalHostData {
 
   bool initialize() {
     std::string error;
-    if (make_repulsion_plan(2, 5, atom_offsets.data(), atomic_numbers.data(), repulsion, error) !=
-            XTBLOOM_STATUS_SUCCESS ||
+    const auto total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
+    if (make_repulsion_plan(2, total_atoms, atom_offsets.data(), atomic_numbers.data(), repulsion,
+                            error) != XTBLOOM_STATUS_SUCCESS ||
         add_repulsion_cpu(repulsion, positions.data(), expected_repulsion.data(), nullptr, error) !=
             XTBLOOM_STATUS_SUCCESS ||
-        make_d4_plan(2, 5, atom_offsets.data(), atomic_numbers.data(), d4, error) !=
+        make_d4_plan(2, total_atoms, atom_offsets.data(), atomic_numbers.data(), d4, error) !=
             XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
@@ -151,16 +155,21 @@ struct TerminalHostData {
 
 struct TerminalDeviceFixture {
   static constexpr std::int64_t kBatch = 2;
-  static constexpr std::int64_t kAtoms = 5;
+  static constexpr std::int64_t kAtoms = 4;
 
   DeviceBuffer<std::int64_t> atom_offsets;
   DeviceBuffer<std::int64_t> pair_offsets;
+  DeviceBuffer<std::int64_t> pairlist_offsets;
+  DeviceBuffer<Gfn2AtomPair> pairs;
+  DeviceBuffer<std::int64_t> pair_counts;
+  DeviceBuffer<std::int64_t> neighbor_offsets;
+  DeviceBuffer<std::int64_t> neighbor_counts;
+  DeviceBuffer<std::int64_t> neighbors;
   DeviceBuffer<std::int32_t> atomic_numbers;
   DeviceBuffer<double> positions;
   DeviceBuffer<Gfn2D4DeviceElementData> elements;
   DeviceBuffer<Gfn2D4DeviceReferenceData> references;
   DeviceBuffer<double> reference_c6;
-  DeviceBuffer<double> pair_data;
   DeviceBuffer<double> coordination;
   DeviceBuffer<double> weights;
   DeviceBuffer<double> weight_cn_derivatives;
@@ -171,6 +180,9 @@ struct TerminalDeviceFixture {
   DeviceBuffer<double> gradient_scratch;
   DeviceBuffer<std::uint64_t> epoch;
   DeviceBuffer<std::uint64_t> committed_generations;
+  DeviceBuffer<std::uint64_t> pair_generations;
+  DeviceBuffer<std::uint8_t> pair_eligible;
+  DeviceBuffer<std::uint8_t> coordination_eligible;
   DeviceBuffer<std::uint8_t> requested;
   DeviceBuffer<double> result_repulsion;
   DeviceBuffer<double> result_atm;
@@ -204,15 +216,26 @@ struct TerminalDeviceFixture {
           {reference.coordination_number, reference.charge, reference.gaussian_count});
     }
     const std::size_t weight_count = static_cast<std::size_t>(kAtoms * kGfn2D4MaximumReferences);
+    const std::array<Gfn2AtomPair, 6> host_pairs{{{0, 1}, {0, 2}, {1, 2}, {0, 0}, {0, 0}, {0, 0}}};
+    const std::array<std::int64_t, 2> host_pair_counts{3, 0};
+    const std::array<std::int64_t, 3> host_pairlist_offsets{0, 3, 6};
+    const std::array<std::int64_t, 5> host_neighbor_offsets{0, 2, 4, 6, 8};
+    const std::array<std::int64_t, 4> host_neighbor_counts{2, 2, 2, 0};
+    const std::array<std::int64_t, 8> host_neighbors{1, 2, 0, 2, 0, 1, 0, 0};
     const bool allocated =
         atom_offsets.allocate(TerminalHostData::atom_offsets.size()) == cudaSuccess &&
         pair_offsets.allocate(host.d4.pair_offsets().size()) == cudaSuccess &&
+        pairlist_offsets.allocate(kBatch + 1) == cudaSuccess &&
+        pairs.allocate(host_pairs.size()) == cudaSuccess &&
+        pair_counts.allocate(host_pair_counts.size()) == cudaSuccess &&
+        neighbor_offsets.allocate(host_neighbor_offsets.size()) == cudaSuccess &&
+        neighbor_counts.allocate(host_neighbor_counts.size()) == cudaSuccess &&
+        neighbors.allocate(host_neighbors.size()) == cudaSuccess &&
         atomic_numbers.allocate(TerminalHostData::atomic_numbers.size()) == cudaSuccess &&
         positions.allocate(TerminalHostData::positions.size()) == cudaSuccess &&
         elements.allocate(host_elements.size()) == cudaSuccess &&
         references.allocate(host_references.size()) == cudaSuccess &&
         reference_c6.allocate(xtbloom::parameters::d4::kReferenceC6.size()) == cudaSuccess &&
-        pair_data.allocate(host.pair_data.size()) == cudaSuccess &&
         coordination.allocate(host.coordination.size()) == cudaSuccess &&
         weights.allocate(weight_count) == cudaSuccess &&
         weight_cn_derivatives.allocate(weight_count) == cudaSuccess &&
@@ -222,6 +245,9 @@ struct TerminalDeviceFixture {
         batch_scratch.allocate(kBatch) == cudaSuccess &&
         gradient_scratch.allocate(3 * kAtoms) == cudaSuccess && epoch.allocate(1) == cudaSuccess &&
         committed_generations.allocate(kBatch) == cudaSuccess &&
+        pair_generations.allocate(kBatch) == cudaSuccess &&
+        pair_eligible.allocate(kBatch) == cudaSuccess &&
+        coordination_eligible.allocate(kBatch) == cudaSuccess &&
         requested.allocate(kBatch) == cudaSuccess &&
         result_repulsion.allocate(kBatch) == cudaSuccess &&
         result_atm.allocate(kBatch) == cudaSuccess &&
@@ -236,20 +262,29 @@ struct TerminalDeviceFixture {
 
     const std::array<std::uint64_t, 1> initial_epoch{7u};
     const std::array<std::uint64_t, 2> initial_generations{7u, 7u};
+    const std::array<std::uint8_t, 2> initial_eligible{1u, 1u};
     const std::array<std::uint8_t, 2> initial_requested{1u, 1u};
     if (atom_offsets.upload(TerminalHostData::atom_offsets, stream) != cudaSuccess ||
         pair_offsets.upload(host.d4.pair_offsets().data(), host.d4.pair_offsets().size(), stream) !=
             cudaSuccess ||
+        pairlist_offsets.upload(host_pairlist_offsets.data(), kBatch + 1, stream) != cudaSuccess ||
+        pairs.upload(host_pairs, stream) != cudaSuccess ||
+        pair_counts.upload(host_pair_counts, stream) != cudaSuccess ||
+        neighbor_offsets.upload(host_neighbor_offsets, stream) != cudaSuccess ||
+        neighbor_counts.upload(host_neighbor_counts, stream) != cudaSuccess ||
+        neighbors.upload(host_neighbors, stream) != cudaSuccess ||
         atomic_numbers.upload(TerminalHostData::atomic_numbers, stream) != cudaSuccess ||
         positions.upload(TerminalHostData::positions, stream) != cudaSuccess ||
         elements.upload(host_elements, stream) != cudaSuccess ||
         references.upload(host_references, stream) != cudaSuccess ||
         reference_c6.upload(xtbloom::parameters::d4::kReferenceC6.data(),
                             xtbloom::parameters::d4::kReferenceC6.size(), stream) != cudaSuccess ||
-        pair_data.upload(host.pair_data, stream) != cudaSuccess ||
         coordination.upload(host.coordination, stream) != cudaSuccess ||
         epoch.upload(initial_epoch, stream) != cudaSuccess ||
         committed_generations.upload(initial_generations, stream) != cudaSuccess ||
+        pair_generations.upload(initial_generations, stream) != cudaSuccess ||
+        pair_eligible.upload(initial_eligible, stream) != cudaSuccess ||
+        coordination_eligible.upload(initial_eligible, stream) != cudaSuccess ||
         requested.upload(initial_requested, stream) != cudaSuccess) {
       return false;
     }
@@ -272,12 +307,51 @@ struct TerminalDeviceFixture {
                           static_cast<std::int64_t>(host_references.size()),
                           reference_c6.get(),
                           static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
-    plan.d4_cache = {pair_data.get(),
-                     static_cast<std::int64_t>(host.pair_data.size()),
-                     coordination.get(),
-                     static_cast<std::int64_t>(host.coordination.size()),
-                     7u,
-                     token};
+    plan.d4_cache.positions = positions.get();
+    plan.d4_cache.position_elements = 3 * kAtoms;
+    plan.d4_cache.coordination_numbers = coordination.get();
+    plan.d4_cache.coordination_elements = kAtoms;
+    plan.d4_cache.coordination_generations = committed_generations.get();
+    plan.d4_cache.coordination_generation_elements = kBatch;
+    plan.d4_cache.coordination_eligible_mask = coordination_eligible.get();
+    plan.d4_cache.coordination_eligible_elements = kBatch;
+    const auto pair_view = [&](Gfn2PairListRole role, double cutoff) {
+      Gfn2PairListConsumerView view{};
+      view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+      view.state = Gfn2PairListState::kCommitted;
+      view.role = role;
+      view.pair_map_kind = Gfn2PairMapKind::kExplicit;
+      view.plan_token = token;
+      view.cutoff_bohr = cutoff;
+      view.list_builder_cutoff_bohr = kGfn2D4TwoBodyCutoffBohr;
+      view.batch_size = kBatch;
+      view.total_atoms = kAtoms;
+      view.max_pairs_per_system = 3;
+      view.max_neighbors_per_atom = 2;
+      view.pair_offset_count = kBatch + 1;
+      view.neighbor_offset_count = kAtoms + 1;
+      view.pair_count = static_cast<std::int64_t>(host_pairs.size());
+      view.neighbor_count = static_cast<std::int64_t>(host_neighbors.size());
+      view.pair_offsets = pairlist_offsets.get();
+      view.pairs = pairs.get();
+      view.pair_count_elements = kBatch;
+      view.neighbor_count_elements = kAtoms;
+      view.pair_counts = pair_counts.get();
+      view.neighbor_counts = neighbor_counts.get();
+      view.neighbor_offsets = neighbor_offsets.get();
+      view.neighbors = neighbors.get();
+      view.committed_generation_count = kBatch;
+      view.eligible_mask_count = kBatch;
+      view.committed_generations = pair_generations.get();
+      view.eligible_mask = pair_eligible.get();
+      return view;
+    };
+    plan.d4_cache.coordination_pairs =
+        pair_view(Gfn2PairListRole::kD4Coordination, kGfn2D4CoordinationCutoffBohr);
+    plan.d4_cache.two_body_pairs =
+        pair_view(Gfn2PairListRole::kD4TwoBody, kGfn2D4TwoBodyCutoffBohr);
+    plan.d4_cache.atm_pairs = pair_view(Gfn2PairListRole::kD4Atm, kGfn2D4AtmCutoffBohr);
+    plan.d4_cache.plan_token = token;
     plan.geometry_epoch = {epoch.get(), 1, token};
     plan.committed_generations = committed_generations.get();
     plan.generation_elements = kBatch;
@@ -362,6 +436,8 @@ struct TerminalDeviceFixture {
 int test_terminal_base_d4_and_rollbacks() {
   TerminalHostData host;
   CHECK(host.initialize());
+  CHECK(std::isfinite(host.expected_atm[0]) && host.expected_atm[0] != 0.0);
+  CHECK(host.expected_atm[1] == 0.0);
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   TerminalDeviceFixture fixture;
@@ -427,8 +503,29 @@ int test_terminal_base_d4_and_rollbacks() {
   CHECK(system_errors[1] ==
         static_cast<std::uint32_t>(Gfn2TerminalClassicalEnergySystemError::kStaleGeneration));
 
-  /* A D4-local cache failure rolls back only the affected peer. */
+  /* Pair-list provenance is independent of the terminal tuple generation.
+   * A stale committed role therefore fails only D4 for that peer and rolls
+   * back the complete terminal tuple through the existing publication gate. */
   const std::array<std::uint64_t, 2> fresh_generations{7u, 7u};
+  const std::array<std::uint64_t, 2> stale_pair_generations{7u, 6u};
+  CUDA_CHECK(fixture.committed_generations.upload(fresh_generations, stream));
+  CUDA_CHECK(fixture.pair_generations.upload(stale_pair_generations, stream));
+  CUDA_CHECK(fixture.reset_results(stream));
+  CUDA_CHECK(evaluate_gfn2_terminal_classical_energy_cuda(fixture.plan, fixture.activity,
+                                                          fixture.results, fixture.workspace,
+                                                          fixture.diagnostics, stream));
+  CUDA_CHECK(fixture.result_repulsion.download(repulsion.data(), repulsion.size(), stream));
+  CUDA_CHECK(fixture.result_atm.download(atm.data(), atm.size(), stream));
+  CUDA_CHECK(fixture.system_errors.download(system_errors.data(), system_errors.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(near(repulsion[0], host.expected_repulsion[0]));
+  CHECK(near(atm[0], host.expected_atm[0], 2.0e-11));
+  CHECK(repulsion[1] == kSentinel && atm[1] == kSentinel);
+  CHECK(system_errors[1] ==
+        static_cast<std::uint32_t>(Gfn2TerminalClassicalEnergySystemError::kD4AtmFailure));
+  CUDA_CHECK(fixture.pair_generations.upload(fresh_generations, stream));
+
+  /* A D4-local cache failure rolls back only the affected peer. */
   std::vector<double> invalid_coordination = host.coordination;
   invalid_coordination[3] = std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(fixture.committed_generations.upload(fresh_generations, stream));
@@ -465,6 +562,46 @@ int test_terminal_base_d4_and_rollbacks() {
   CHECK(plan_error ==
         static_cast<std::uint32_t>(Gfn2TerminalClassicalEnergyPlanError::kInvalidRequestedMask));
 
+  /* Role, provenance, and range corruption are synchronous plan errors: no
+   * repulsion launch or diagnostic reset may precede their rejection. */
+  const std::array<std::uint8_t, 2> valid_requested{1u, 1u};
+  CUDA_CHECK(fixture.requested.upload(valid_requested, stream));
+  auto rejects_without_writes = [&](const Gfn2TerminalClassicalEnergyDevicePlan& rejected) -> int {
+    if (evaluate_gfn2_terminal_classical_energy_cuda(rejected, fixture.activity, fixture.results,
+                                                     fixture.workspace, fixture.diagnostics,
+                                                     stream) != cudaErrorInvalidValue ||
+        fixture.result_repulsion.download(repulsion.data(), repulsion.size(), stream) !=
+            cudaSuccess ||
+        fixture.result_atm.download(atm.data(), atm.size(), stream) != cudaSuccess ||
+        fixture.plan_error.download(&plan_error, 1, stream) != cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+      return __LINE__;
+    }
+    if (repulsion[0] != kSentinel || repulsion[1] != kSentinel || atm[0] != kSentinel ||
+        atm[1] != kSentinel ||
+        plan_error != static_cast<std::uint32_t>(
+                          Gfn2TerminalClassicalEnergyPlanError::kInvalidRequestedMask)) {
+      return __LINE__;
+    }
+    return 0;
+  };
+  auto invalid_plan = fixture.plan;
+  invalid_plan.abi_version = 1u;
+  CHECK(rejects_without_writes(invalid_plan) == 0);
+  invalid_plan = fixture.plan;
+  invalid_plan.d4_cache.atm_pairs.role = Gfn2PairListRole::kD4TwoBody;
+  CHECK(rejects_without_writes(invalid_plan) == 0);
+  invalid_plan = fixture.plan;
+  invalid_plan.d4_cache.atm_pairs.plan_token ^= 1u;
+  CHECK(rejects_without_writes(invalid_plan) == 0);
+  invalid_plan = fixture.plan;
+  invalid_plan.d4_cache.coordination_generations = fixture.pair_generations.get();
+  CHECK(rejects_without_writes(invalid_plan) == 0);
+  invalid_plan = fixture.plan;
+  invalid_plan.d4_cache.atm_pairs.pairs =
+      reinterpret_cast<const Gfn2AtomPair*>(fixture.result_repulsion.get());
+  CHECK(rejects_without_writes(invalid_plan) == 0);
+
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
@@ -472,11 +609,12 @@ int test_terminal_base_d4_and_rollbacks() {
 int test_terminal_graph_epoch_replay() {
   TerminalHostData host;
   CHECK(host.initialize());
+  CHECK(std::isfinite(host.expected_atm[0]) && host.expected_atm[0] != 0.0);
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   TerminalDeviceFixture fixture;
   CHECK(fixture.initialize(host, stream));
-  fixture.enable_d4(false);
+  fixture.enable_d4(true);
   const std::array<std::uint8_t, 2> requested{1u, 1u};
   CUDA_CHECK(fixture.requested.upload(requested, stream));
   CUDA_CHECK(fixture.reset_results(stream));
@@ -492,30 +630,42 @@ int test_terminal_graph_epoch_replay() {
   CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0));
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
   std::array<double, 2> repulsion{};
+  std::array<double, 2> atm{};
   CUDA_CHECK(fixture.result_repulsion.download(repulsion.data(), repulsion.size(), stream));
+  CUDA_CHECK(fixture.result_atm.download(atm.data(), atm.size(), stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(near(repulsion[0], host.expected_repulsion[0]));
   CHECK(near(repulsion[1], host.expected_repulsion[1]));
+  CHECK(near(atm[0], host.expected_atm[0], 2.0e-11));
+  CHECK(near(atm[1], host.expected_atm[1], 2.0e-11));
 
   const std::array<std::uint64_t, 1> next_epoch{8u};
   const std::array<std::uint64_t, 2> mixed_generations{8u, 7u};
   CUDA_CHECK(fixture.epoch.upload(next_epoch, stream));
   CUDA_CHECK(fixture.committed_generations.upload(mixed_generations, stream));
+  CUDA_CHECK(fixture.pair_generations.upload(mixed_generations, stream));
   CUDA_CHECK(fixture.reset_results(stream));
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
   CUDA_CHECK(fixture.result_repulsion.download(repulsion.data(), repulsion.size(), stream));
+  CUDA_CHECK(fixture.result_atm.download(atm.data(), atm.size(), stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(near(repulsion[0], host.expected_repulsion[0]));
   CHECK(repulsion[1] == kSentinel);
+  CHECK(near(atm[0], host.expected_atm[0], 2.0e-11));
+  CHECK(atm[1] == kSentinel);
 
   const std::array<std::uint64_t, 2> next_generations{8u, 8u};
   CUDA_CHECK(fixture.committed_generations.upload(next_generations, stream));
+  CUDA_CHECK(fixture.pair_generations.upload(next_generations, stream));
   CUDA_CHECK(fixture.reset_results(stream));
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
   CUDA_CHECK(fixture.result_repulsion.download(repulsion.data(), repulsion.size(), stream));
+  CUDA_CHECK(fixture.result_atm.download(atm.data(), atm.size(), stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(near(repulsion[0], host.expected_repulsion[0]));
   CHECK(near(repulsion[1], host.expected_repulsion[1]));
+  CHECK(near(atm[0], host.expected_atm[0], 2.0e-11));
+  CHECK(near(atm[1], host.expected_atm[1], 2.0e-11));
 
   CUDA_CHECK(cudaGraphExecDestroy(executable));
   CUDA_CHECK(cudaGraphDestroy(graph));
@@ -540,6 +690,8 @@ struct PublicationFixture {
   DeviceBuffer<double> qm_forces;
   DeviceBuffer<double> charges;
   DeviceBuffer<double> point_forces;
+  DeviceBuffer<double> positions;
+  DeviceBuffer<double> atomic_dipoles;
   DeviceBuffer<std::uint32_t> terminal_system_errors;
   DeviceBuffer<std::uint32_t> terminal_plan_error;
   DeviceBuffer<std::uint32_t> execution_system_errors;
@@ -548,6 +700,7 @@ struct PublicationFixture {
   DeviceBuffer<double> public_qm_forces;
   DeviceBuffer<double> public_charges;
   DeviceBuffer<double> public_point_forces;
+  DeviceBuffer<double> public_dipoles;
   DeviceBuffer<std::int32_t> public_iterations;
   DeviceBuffer<std::uint8_t> public_converged;
   DeviceBuffer<xtbloom_status_t> public_statuses;
@@ -563,16 +716,21 @@ struct PublicationFixture {
 
   std::vector<std::int64_t> host_atom_offsets{0, 2, 3, 4, 5, 6, 7};
   std::vector<std::int64_t> host_point_offsets{0, 1, 1, 2, 2, 3, 3};
-  std::vector<double> host_energies{1.0, 2.0, 3.0,
-                                    4.0, 5.0, std::numeric_limits<double>::quiet_NaN()};
+  std::vector<double> host_energies{1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
   std::vector<double> host_qm_forces;
   std::vector<double> host_charges;
   std::vector<double> host_point_forces;
+  std::vector<double> host_positions;
+  std::vector<double> host_atomic_dipoles;
+  std::vector<double> expected_dipoles;
 
   bool initialize(cudaStream_t stream) {
     host_qm_forces.resize(3u * static_cast<std::size_t>(kAtoms));
     host_charges.resize(static_cast<std::size_t>(kAtoms));
     host_point_forces.resize(3u * static_cast<std::size_t>(kPoints));
+    host_positions.resize(3u * static_cast<std::size_t>(kAtoms));
+    host_atomic_dipoles.resize(3u * static_cast<std::size_t>(kAtoms));
+    expected_dipoles.assign(3u * static_cast<std::size_t>(kBatch), 0.0);
     for (std::size_t index = 0u; index < host_qm_forces.size(); ++index) {
       host_qm_forces[index] = 0.01 * static_cast<double>(index + 1u);
     }
@@ -581,6 +739,24 @@ struct PublicationFixture {
     }
     for (std::size_t index = 0u; index < host_point_forces.size(); ++index) {
       host_point_forces[index] = -0.04 * static_cast<double>(index + 1u);
+    }
+    for (std::size_t index = 0u; index < host_positions.size(); ++index) {
+      host_positions[index] = -0.7 + 0.11 * static_cast<double>(index);
+      host_atomic_dipoles[index] = 0.03 - 0.002 * static_cast<double>(index);
+    }
+    /* A successful upstream peer with a nonfinite stationary multipole must
+     * be converted into one complete failed result, including the dipole. */
+    host_atomic_dipoles[3u * static_cast<std::size_t>(kAtoms - 1)] =
+        std::numeric_limits<double>::quiet_NaN();
+    for (std::int64_t system = 0; system < kBatch; ++system) {
+      for (std::int64_t atom = host_atom_offsets[system]; atom < host_atom_offsets[system + 1];
+           ++atom) {
+        for (std::int64_t component = 0; component < 3; ++component) {
+          expected_dipoles[3 * system + component] +=
+              host_positions[3 * atom + component] * host_charges[atom] +
+              host_atomic_dipoles[3 * atom + component];
+        }
+      }
     }
     const bool allocated =
         atom_offsets.allocate(host_atom_offsets.size()) == cudaSuccess &&
@@ -591,6 +767,8 @@ struct PublicationFixture {
         energies.allocate(kBatch) == cudaSuccess && qm_forces.allocate(3 * kAtoms) == cudaSuccess &&
         charges.allocate(kAtoms) == cudaSuccess &&
         point_forces.allocate(3 * kPoints) == cudaSuccess &&
+        positions.allocate(3 * kAtoms) == cudaSuccess &&
+        atomic_dipoles.allocate(3 * kAtoms) == cudaSuccess &&
         terminal_system_errors.allocate(kBatch) == cudaSuccess &&
         terminal_plan_error.allocate(1) == cudaSuccess &&
         execution_system_errors.allocate(kBatch) == cudaSuccess &&
@@ -599,6 +777,7 @@ struct PublicationFixture {
         public_qm_forces.allocate(3 * kAtoms) == cudaSuccess &&
         public_charges.allocate(kAtoms) == cudaSuccess &&
         public_point_forces.allocate(3 * kPoints) == cudaSuccess &&
+        public_dipoles.allocate(3 * kBatch) == cudaSuccess &&
         public_iterations.allocate(kBatch) == cudaSuccess &&
         public_converged.allocate(kBatch) == cudaSuccess &&
         public_statuses.allocate(kBatch) == cudaSuccess &&
@@ -628,6 +807,8 @@ struct PublicationFixture {
         qm_forces.upload(host_qm_forces, stream) != cudaSuccess ||
         charges.upload(host_charges, stream) != cudaSuccess ||
         point_forces.upload(host_point_forces, stream) != cudaSuccess ||
+        positions.upload(host_positions, stream) != cudaSuccess ||
+        atomic_dipoles.upload(host_atomic_dipoles, stream) != cudaSuccess ||
         terminal_system_errors.upload(zero_system_errors, stream) != cudaSuccess ||
         terminal_plan_error.upload(zero_plan_error, stream) != cudaSuccess ||
         execution_system_errors.upload(zero_system_errors, stream) != cudaSuccess ||
@@ -636,9 +817,9 @@ struct PublicationFixture {
     }
 
     constexpr std::uint64_t token = 0x123125ULL;
-    plan.requested_properties = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
-                                XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-                                XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+    plan.requested_properties =
+        XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+        XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
     plan.plan_token = token;
     plan.maximum_iterations = 5u;
     plan.batch_size = kBatch;
@@ -649,27 +830,32 @@ struct PublicationFixture {
     plan.geometry_epoch = {epoch.get(), 1, token};
     plan.committed_generations = generations.get();
     plan.generation_elements = kBatch;
-    input = {eligible.get(),
-             kBatch,
-             iterations.get(),
-             converged.get(),
-             statuses.get(),
-             kBatch,
-             energies.get(),
-             kBatch,
-             qm_forces.get(),
-             3 * kAtoms,
-             charges.get(),
-             kAtoms,
-             point_forces.get(),
-             3 * kPoints,
-             terminal_system_errors.get(),
-             kBatch,
-             terminal_plan_error.get(),
-             execution_system_errors.get(),
-             kBatch,
-             execution_plan_error.get(),
-             token};
+    input = {};
+    input.eligible_mask = eligible.get();
+    input.eligible_elements = kBatch;
+    input.iterations = iterations.get();
+    input.converged = converged.get();
+    input.system_statuses = statuses.get();
+    input.scc_elements = kBatch;
+    input.energies = energies.get();
+    input.energy_elements = kBatch;
+    input.qm_forces = qm_forces.get();
+    input.qm_force_elements = 3 * kAtoms;
+    input.atomic_charges = charges.get();
+    input.atomic_charge_elements = kAtoms;
+    input.point_forces = point_forces.get();
+    input.point_force_elements = 3 * kPoints;
+    input.terminal_system_errors = terminal_system_errors.get();
+    input.terminal_system_error_elements = kBatch;
+    input.terminal_plan_error = terminal_plan_error.get();
+    input.execution_system_errors = execution_system_errors.get();
+    input.execution_system_error_elements = kBatch;
+    input.execution_plan_error = execution_plan_error.get();
+    input.plan_token = token;
+    input.positions = positions.get();
+    input.position_elements = 3 * kAtoms;
+    input.atomic_dipoles = atomic_dipoles.get();
+    input.atomic_dipole_elements = 3 * kAtoms;
     results = {public_energies.get(),
                kBatch,
                public_qm_forces.get(),
@@ -682,7 +868,9 @@ struct PublicationFixture {
                public_converged.get(),
                public_statuses.get(),
                kBatch,
-               token};
+               token,
+               public_dipoles.get(),
+               3 * kBatch};
     workspace = {epoch_snapshot.get(), 1, token};
     diagnostics = {system_errors.get(), kBatch, plan_error.get(), 1, token};
     return cudaStreamSynchronize(stream) == cudaSuccess;
@@ -693,6 +881,7 @@ struct PublicationFixture {
     if (status == cudaSuccess) status = public_qm_forces.fill(kSentinel, stream);
     if (status == cudaSuccess) status = public_charges.fill(kSentinel, stream);
     if (status == cudaSuccess) status = public_point_forces.fill(kSentinel, stream);
+    if (status == cudaSuccess) status = public_dipoles.fill(kSentinel, stream);
     if (status == cudaSuccess) status = public_iterations.fill(-73, stream);
     if (status == cudaSuccess) status = public_converged.fill(7u, stream);
     if (status == cudaSuccess)
@@ -722,6 +911,7 @@ int test_inference_publication_semantics() {
   std::vector<double> forces(static_cast<std::size_t>(3 * fixture.kAtoms));
   std::vector<double> charges(static_cast<std::size_t>(fixture.kAtoms));
   std::vector<double> point_forces(static_cast<std::size_t>(3 * fixture.kPoints));
+  std::vector<double> dipoles(static_cast<std::size_t>(3 * fixture.kBatch));
   std::vector<std::int32_t> iterations(static_cast<std::size_t>(fixture.kBatch));
   std::vector<std::uint8_t> converged(static_cast<std::size_t>(fixture.kBatch));
   std::vector<xtbloom_status_t> statuses(static_cast<std::size_t>(fixture.kBatch));
@@ -731,6 +921,7 @@ int test_inference_publication_semantics() {
   CUDA_CHECK(fixture.public_charges.download(charges.data(), charges.size(), stream));
   CUDA_CHECK(
       fixture.public_point_forces.download(point_forces.data(), point_forces.size(), stream));
+  CUDA_CHECK(fixture.public_dipoles.download(dipoles.data(), dipoles.size(), stream));
   CUDA_CHECK(fixture.public_iterations.download(iterations.data(), iterations.size(), stream));
   CUDA_CHECK(fixture.public_converged.download(converged.data(), converged.size(), stream));
   CUDA_CHECK(fixture.public_statuses.download(statuses.data(), statuses.size(), stream));
@@ -742,6 +933,9 @@ int test_inference_publication_semantics() {
   CHECK(near(forces[0], fixture.host_qm_forces[0]));
   CHECK(near(charges[0], fixture.host_charges[0]));
   CHECK(near(point_forces[0], fixture.host_point_forces[0]));
+  CHECK(near(dipoles[0], fixture.expected_dipoles[0]));
+  CHECK(near(dipoles[1], fixture.expected_dipoles[1]));
+  CHECK(near(dipoles[2], fixture.expected_dipoles[2]));
 
   CHECK(std::isnan(energies[1]) && iterations[1] == 5 && converged[1] == 0u &&
         statuses[1] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
@@ -767,6 +961,7 @@ int test_inference_publication_semantics() {
                                 fixture.host_atom_offsets[system + 1], 1));
     CHECK(floating_slice_is_nan(point_forces, fixture.host_point_offsets[system],
                                 fixture.host_point_offsets[system + 1], 3));
+    CHECK(floating_slice_is_nan(dipoles, system, system + 1, 3));
   }
 
   /* Malformed eligibility is plan-wide and leaves all public bytes untouched. */
@@ -777,6 +972,7 @@ int test_inference_publication_semantics() {
   std::vector<double> before_forces(static_cast<std::size_t>(3 * fixture.kAtoms), kSentinel);
   std::vector<double> before_charges(static_cast<std::size_t>(fixture.kAtoms), kSentinel);
   std::vector<double> before_point_forces(static_cast<std::size_t>(3 * fixture.kPoints), kSentinel);
+  std::vector<double> before_dipoles(static_cast<std::size_t>(3 * fixture.kBatch), kSentinel);
   std::vector<std::int32_t> before_iterations(static_cast<std::size_t>(fixture.kBatch), -73);
   std::vector<std::uint8_t> before_converged(static_cast<std::size_t>(fixture.kBatch), 7u);
   std::vector<xtbloom_status_t> before_statuses(static_cast<std::size_t>(fixture.kBatch),
@@ -789,6 +985,7 @@ int test_inference_publication_semantics() {
   CUDA_CHECK(fixture.public_charges.download(charges.data(), charges.size(), stream));
   CUDA_CHECK(
       fixture.public_point_forces.download(point_forces.data(), point_forces.size(), stream));
+  CUDA_CHECK(fixture.public_dipoles.download(dipoles.data(), dipoles.size(), stream));
   CUDA_CHECK(fixture.public_iterations.download(iterations.data(), iterations.size(), stream));
   CUDA_CHECK(fixture.public_converged.download(converged.data(), converged.size(), stream));
   CUDA_CHECK(fixture.public_statuses.download(statuses.data(), statuses.size(), stream));
@@ -798,6 +995,7 @@ int test_inference_publication_semantics() {
   CHECK(byte_equal(forces, before_forces));
   CHECK(byte_equal(charges, before_charges));
   CHECK(byte_equal(point_forces, before_point_forces));
+  CHECK(byte_equal(dipoles, before_dipoles));
   CHECK(byte_equal(iterations, before_iterations));
   CHECK(byte_equal(converged, before_converged));
   CHECK(byte_equal(statuses, before_statuses));

@@ -533,6 +533,24 @@ static_assert(std::is_standard_layout_v<Gfn2ElementIdentityProjectionView>);
     std::uint64_t expected_geometry_generation) noexcept;
 
 /*
+ * Fail-closed shallow projection of one committed pair-list storage view onto
+ * another physical consumer role.  The source must already be a canonical,
+ * structurally valid view for the authoritative topology: its role and
+ * cutoff must agree, its plan/memory space must match, and candidate storage
+ * is rejected.  The builder cutoff must cover the requested target role.
+ *
+ * On success every pointer, extent, capacity, generation/eligibility field,
+ * mask, and plan token is copied unchanged; only role and cutoff_bohr change.
+ * No array is dereferenced, allocated, transferred, or reordered, so the same
+ * helper projects host and device descriptors during setup.  `projection` is
+ * cleared before validation and remains empty on failure.
+ */
+[[nodiscard]] Gfn2PlanSchemaDiagnostic project_gfn2_pair_list_role_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2PairListConsumerView& source,
+    Gfn2PairListRole target_role, Gfn2PlanMemorySpace expected_memory_space,
+    Gfn2PairListConsumerView& projection) noexcept;
+
+/*
  * Recompute the order-sensitive element-identity seal for a populated host
  * descriptor.  The fingerprint intentionally excludes pointer values,
  * memory_space, and its own stored fingerprint so the same immutable

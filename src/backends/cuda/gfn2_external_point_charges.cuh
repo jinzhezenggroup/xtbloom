@@ -7,6 +7,7 @@
 
 #include <cstdint>
 
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
@@ -56,6 +57,7 @@ struct Gfn2ExternalPointChargeDeviceBatch {
   const double* point_hardnesses = nullptr;
   /* Optional setup identity used by SCC-specific cache consumers. */
   std::uint64_t plan_token = 0u;
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /* Geometry-generation-scoped explicit point-charge shell-potential cache. */
@@ -90,7 +92,8 @@ struct Gfn2ExternalPointChargeForceDeviceWorkspace {
 
 /*
  * Queue Vpc_s = sum_p Q_p / sqrt(r_sp^2 + a_sp^2), where
- * a_sp = 2 / (gamma_s + gamma_p).
+ * a_sp = 2 / (gamma_s + gamma_p) for GFN2 and
+ * a_sp = 0.5 / gamma_s + 0.5 / gamma_p for GFN1.
  *
  * shell_potentials is overwritten, including with zero for systems without
  * point charges. The return value only reports host argument, enqueue, and

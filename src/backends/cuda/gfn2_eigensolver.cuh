@@ -141,11 +141,14 @@ struct Gfn2EigensolverBucketActivity {
  * Caller-owned unpublished storage. matrix_scratch_a and matrix_scratch_b each
  * contain total_matrix_elements bucket-packed doubles. eigenvalue_scratch is
  * similarly bucket-packed. Pointer arrays are device arrays consumed by
- * potrfBatched/trsmBatched. sequence_active captures the sticky device-error
- * state at call entry so a pre-existing global failure makes the whole launch
- * fail closed without turning a later per-system numerical error into a batch
- * failure. The generic cuSOLVER workspace may include both a device allocation
- * and pinned/pageable host storage, allocated during setup.
+ * potrfBatched/trsmBatched; a healthy spin solve may point its read-only TRSM
+ * factor directly at the immutable overlap cache while rejected fixed-capacity
+ * slots keep using identity matrix_scratch_a. sequence_active captures the
+ * sticky device-error state at call entry so a pre-existing global failure
+ * makes the whole launch fail closed without turning a later per-system
+ * numerical error into a batch failure. The generic cuSOLVER workspace may
+ * include both a device allocation and pinned/pageable host storage, allocated
+ * during setup.
  */
 struct Gfn2EigensolverDeviceWorkspace {
   double* matrix_scratch_a = nullptr;
@@ -476,6 +479,20 @@ cudaError_t reset_gfn2_eigensolver_device_errors_cuda(std::int64_t batch_size,
  */
 Gfn2EigensolverLaunchResult prepare_gfn2_eigensolver_launch_sequence_cuda(
     const Gfn2EigensolverDeviceBatch& batch, const Gfn2EigensolverDeviceWorkspace& workspace,
+    std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
+
+/* Capture-safe production-equivalent spin-solve preflight. The full solver and
+ * this focused validation/profiling entry point share the same enqueue helpers.
+ * It opens one launch sequence, validates device-resident spin topology, stages
+ * exact symmetric Hamiltonians, selects cache/scratch factor pointers, and
+ * fills rejected fixed-capacity slots with identity. It performs no provider
+ * call, allocation, transfer, polling, or synchronization. */
+Gfn2EigensolverLaunchResult prepare_gfn2_spin_solve_buckets_cuda(
+    const Gfn2EigensolverDeviceBatch& batch, const Gfn2WavefunctionLayoutView& layout,
+    const Gfn2EigensolverBucket* buckets, std::int64_t bucket_count,
+    const Gfn2EigensolverOverlapCache& cache, std::uint64_t geometry_generation,
+    const double* hamiltonians, const Gfn2EigensolverOptions& options,
+    const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*

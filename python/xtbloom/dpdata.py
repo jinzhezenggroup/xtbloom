@@ -30,8 +30,8 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 from dpdata.driver import Driver, Minimizer
 
-from ._optimizer import curvature, initial_step_size, lbfgs_direction
-from .exceptions import XTBloomNotSupportedError, XTBloomRuntimeError, XTBloomValueError
+from ._optimizer import _LBFGSState, _validated_controls
+from .exceptions import XTBloomRuntimeError, XTBloomValueError
 from .interface import BatchCalculator, Structure, symbols_to_numbers
 
 if TYPE_CHECKING:
@@ -42,15 +42,6 @@ if TYPE_CHECKING:
 HARTREE_TO_EV = 27.211386245988
 BOHR_TO_ANGSTROM = 0.529177210903
 _FORCE_TO_EV_ANG = HARTREE_TO_EV / BOHR_TO_ANGSTROM
-
-#: Fraction of the current energy accepted as numerical noise when deciding
-#: whether a trial geometry improves the previous one.
-_ACCEPT_TOLERANCE = 1.0e-8
-#: Per-frame step length evolution.  After the first accepted step the L-BFGS
-#: direction already carries the inverse-Hessian scale, so the natural step is
-#: ``alpha = 1``; a rejected trial halves alpha and the next accept restores it.
-_ALPHA_DECAY = 0.5
-_ALPHA_MIN = 1.0e-4
 
 
 class _SymbolMap:
@@ -87,7 +78,16 @@ def _structures_from_data(
     dpdata's Angstrom convention to bohr.
     """
     atom_names = list(data["atom_names"])
-    atom_types = np.asarray(data["atom_types"], dtype=np.int64)
+    raw_atom_types = np.asarray(data["atom_types"])
+    if raw_atom_types.ndim != 1 or raw_atom_types.size == 0:
+        raise XTBloomValueError(
+            "atom_types must be a nonempty one-dimensional array of integer indices"
+        )
+    if raw_atom_types.dtype.kind not in "iu":
+        raise XTBloomValueError("atom_types must contain exact integer indices")
+    if np.any(raw_atom_types < 0) or np.any(raw_atom_types >= len(atom_names)):
+        raise XTBloomValueError("atom_types contains an index outside atom_names")
+    atom_types = np.asarray(raw_atom_types, dtype=np.int64)
     coords = np.asarray(data["coords"], dtype=np.float64)
     if coords.ndim != 3 or coords.shape[1:] != (atom_types.size, 3):
         raise XTBloomValueError("coords must have shape (nframes, natoms, 3)")
@@ -98,6 +98,8 @@ def _structures_from_data(
         [symbol_map[atom_names[index]] for index in atom_types], dtype=np.int64
     )
     positions_bohr = coords / BOHR_TO_ANGSTROM
+    periodic = _periodic_frames(data, nframes)
+    cells_bohr = _periodic_cells(data, nframes, periodic)
 
     structures = []
     for frame in range(nframes):
@@ -114,6 +116,14 @@ def _structures_from_data(
             )
             if uhf_value is None and multiplicity_value is None:
                 uhf_value = 0
+        cell = None
+        if periodic[frame]:
+            # _periodic_cells returns a validated array for every periodic
+            # frame; keep the check local so static analyzers retain the
+            # runtime invariant across the NumPy boolean index.
+            if cells_bohr is None:
+                raise XTBloomValueError("periodic cells are missing")
+            cell = cells_bohr[frame]
         structures.append(
             Structure(
                 numbers,
@@ -125,6 +135,8 @@ def _structures_from_data(
                 uhf=cast("int | None", uhf_value),
                 multiplicity=cast("int | None", multiplicity_value),
                 spin_channels=spin_channels,
+                cell=cell,
+                pbc=bool(periodic[frame]),
             )
         )
     return structures
@@ -132,12 +144,13 @@ def _structures_from_data(
 
 @Driver.register("xtbloom")
 class XTBloomDriver(Driver):
-    """Label molecular frames with GFN2-xTB using the xTBloom library.
+    """Label molecular or full-XYZ-periodic frames with GFN1/GFN2-xTB.
 
     Parameters
     ----------
     method : str, default "GFN2-xTB"
-        Underlying tight-binding method (only GFN2-xTB is currently supported).
+        Underlying tight-binding method. Both GFN1-xTB and GFN2-xTB use the
+        shared CPU/CUDA backend policy.
     charge : float, optional
         Fixed total charge applied to every frame. When ``None`` the per-frame
         ``data["charge"]`` key (or 0) is used.
@@ -148,11 +161,13 @@ class XTBloomDriver(Driver):
         Alternative to ``uhf`` (``uhf = multiplicity - 1``).
     spin_channels : int, optional
         Orbital channels (1 restricted / 2 unrestricted). Defaults to
-        unrestricted for open-shell frames on the CPU backend.
+        unrestricted for open-shell frames.
     **kwargs
         Forwarded to :class:`xtbloom.interface.BatchCalculator`: ``backend``,
         ``device_id``, ``cpu_threads``, ``max_scc_iterations``,
-        ``charge_tolerance``, ``energy_tolerance``, ``electronic_temperature``.
+        ``charge_tolerance``, ``energy_tolerance``, ``electronic_temperature``,
+        ``scc_mixer``, ``scc_mixer_history``, ``scc_mixer_damping``, and
+        ``determinism``.
     """
 
     def __init__(
@@ -185,7 +200,6 @@ class XTBloomDriver(Driver):
         dict
             Copy of ``data`` with ``energies`` (eV) and ``forces`` (eV/Angstrom).
         """
-        _reject_periodic(data)
         structures = _structures_from_data(
             data,
             charge=self.charge,
@@ -259,6 +273,10 @@ class XTBloomMinimizer(Minimizer):
     Examples
     --------
     >>> system.minimize("xtbloom", driver=XTBloomDriver(backend="cuda"), fmax=1e-2)
+
+    A full-XYZ periodic frame is accepted when dpdata provides ``nopbc=False``
+    and a finite 3x3 ``cells`` matrix. Geometry optimization updates only
+    coordinates; the direct cell remains fixed throughout minimization.
     """
 
     def __init__(
@@ -269,16 +287,11 @@ class XTBloomMinimizer(Minimizer):
         max_steps: int | None = None,
         memory: int = 5,
     ) -> None:
-        if not np.isfinite(fmax) or fmax <= 0.0:
-            raise XTBloomValueError("fmax must be finite and positive")
-        if max_steps is not None and int(max_steps) < 1:
-            raise XTBloomValueError("max_steps must be a positive integer or None")
-        if int(memory) < 1:
-            raise XTBloomValueError("memory must be a positive integer")
+        fmax, max_steps, memory = _validated_controls(fmax, max_steps, memory)
         self._driver = driver if driver is not None else XTBloomDriver()
-        self._fmax = float(fmax)
-        self._max_steps = None if max_steps is None else int(max_steps)
-        self._memory = int(memory)
+        self._fmax = fmax
+        self._max_steps = max_steps
+        self._memory = memory
 
     def minimize(self, data: dict) -> dict:
         """Minimize the system and label it with the relaxed geometries.
@@ -304,7 +317,6 @@ class XTBloomMinimizer(Minimizer):
             at the minimum step size. The caller never receives silently bogus
             or rejected labels.
         """
-        _reject_periodic(data)
         driver = self._driver
         structures = _structures_from_data(
             data,
@@ -317,20 +329,9 @@ class XTBloomMinimizer(Minimizer):
         if nframes == 0:
             raise XTBloomValueError("cannot minimize a system without frames")
 
-        # Per-frame optimizer ledger, keyed by original frame index.  Only an
-        # energy-accepted evaluation enters ``accepted_*``; this keeps a rejected
-        # final trial from becoming the published result when max_steps expires.
-        accepted_pos: dict[int, np.ndarray] = {}
-        accepted_energy: dict[int, float] = {}
-        accepted_force: dict[int, np.ndarray] = {}
-        prev_pos: dict[int, np.ndarray] = {}
-        prev_energy: dict[int, float] = {}
-        prev_gradient: dict[int, np.ndarray] = {}
-        alpha: dict[int, float] = {}
-        s_history: dict[int, list[np.ndarray]] = {}
-        y_history: dict[int, list[np.ndarray]] = {}
-        rho_history: dict[int, list[float]] = {}
-        initialized: set[int] = set()
+        # The shared state object guarantees that rejected trials never replace
+        # a frame's published position, energy, force, or L-BFGS history.
+        states: dict[int, _LBFGSState] = {}
         done: set[int] = set()
         failed: set[int] = set()
         line_search_failed: set[int] = set()
@@ -367,110 +368,59 @@ class XTBloomMinimizer(Minimizer):
                         # its last successfully evaluated geometry.
                         failed.add(frame)
                         done.add(frame)
-                        if frame in initialized:
-                            structures[frame].update(positions=prev_pos[frame])
+                        if frame in states:
+                            structures[frame].update(positions=states[frame].position)
                         continue
 
-                    if frame not in initialized:
+                    if frame not in states:
                         # The input geometry is the first accepted baseline.
-                        accepted_pos[frame] = evaluated_pos
-                        accepted_energy[frame] = energy
-                        accepted_force[frame] = force
-                        max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
+                        state = _LBFGSState.from_evaluation(
+                            evaluated_pos, energy, force, self._memory
+                        )
+                        states[frame] = state
+                        max_force = float(
+                            np.max(np.linalg.norm(force * _FORCE_TO_EV_ANG, axis=1))
+                        )
                         if max_force <= self._fmax:
                             done.add(frame)
                             continue
                         if not can_move:
                             continue
 
-                        # ``force`` is -dE/dR (library convention); the
-                        # optimizer works with the energy gradient +dE/dR.
-                        gradient = -force
-                        alpha[frame] = initial_step_size(gradient)
-                        prev_pos[frame] = evaluated_pos
-                        prev_energy[frame] = energy
-                        prev_gradient[frame] = gradient
-                        s_history[frame] = []
-                        y_history[frame] = []
-                        rho_history[frame] = []
-                        initialized.add(frame)
-                        direction = lbfgs_direction(gradient, [], [], [])
-                        trial = prev_pos[frame] + alpha[frame] * direction
-                        structures[frame].update(positions=trial)
+                        structures[frame].update(positions=state.initial_trial())
                     else:
-                        baseline_pos = prev_pos[frame]
-                        acceptance_limit = prev_energy[frame] + _ACCEPT_TOLERANCE * max(
-                            1.0, abs(prev_energy[frame])
-                        )
-                        if energy > acceptance_limit:
+                        state = states[frame]
+                        if not state.accepts(energy):
                             # Trial did not improve: retry from the accepted
                             # baseline with a shorter step, reusing the same
                             # history. Once the minimum step has itself been
                             # rejected, stop this frame instead of retrying the
                             # identical geometry forever.
-                            if alpha[frame] <= _ALPHA_MIN:
+                            trial = state.backoff_trial()
+                            if trial is None:
                                 line_search_failed.add(frame)
                                 done.add(frame)
-                                structures[frame].update(positions=baseline_pos)
+                                structures[frame].update(positions=state.position)
                                 continue
                             if not can_move:
                                 continue
-                            alpha[frame] = max(alpha[frame] * _ALPHA_DECAY, _ALPHA_MIN)
-                            direction = lbfgs_direction(
-                                prev_gradient[frame],
-                                s_history[frame],
-                                y_history[frame],
-                                rho_history[frame],
-                            )
-                            trial = prev_pos[frame] + alpha[frame] * direction
                             structures[frame].update(positions=trial)
                             continue
 
-                        gradient = -force
-                        s_step = evaluated_pos - baseline_pos
-                        y_step = gradient - prev_gradient[frame]
-                        rho = curvature(s_step, y_step)
-                        if rho > 0.0:
-                            # Positive curvature: keep the pair.  A
-                            # non-positive pair means the Hessian along the
-                            # step is not positive definite, so the history
-                            # is left untouched for robustness.
-                            s_history[frame].append(s_step)
-                            y_history[frame].append(y_step)
-                            rho_history[frame].append(1.0 / rho)
-                            if len(s_history[frame]) > self._memory:
-                                s_history[frame].pop(0)
-                                y_history[frame].pop(0)
-                                rho_history[frame].pop(0)
-
-                        accepted_pos[frame] = evaluated_pos
-                        accepted_energy[frame] = energy
-                        accepted_force[frame] = force
-                        prev_pos[frame] = evaluated_pos
-                        prev_energy[frame] = energy
-                        prev_gradient[frame] = gradient
+                        state.accept_trial(evaluated_pos, energy, force)
 
                         # A rejected geometry cannot establish convergence; the
                         # force criterion is checked only after energy acceptance.
-                        max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
+                        max_force = float(
+                            np.max(np.linalg.norm(force * _FORCE_TO_EV_ANG, axis=1))
+                        )
                         if max_force <= self._fmax:
                             done.add(frame)
                             continue
                         if not can_move:
                             continue
 
-                        # L-BFGS directions carry the inverse-Hessian scale, so
-                        # the natural accepted step is alpha = 1 (restored here
-                        # after any rejection halving).
-                        alpha[frame] = 1.0
-                        direction = lbfgs_direction(
-                            gradient,
-                            s_history[frame],
-                            y_history[frame],
-                            rho_history[frame],
-                        )
-                        trial = prev_pos[frame] + alpha[frame] * direction
-                        structures[frame].update(positions=trial)
+                        structures[frame].update(positions=state.next_trial())
 
                 evaluations += 1
                 if done:
@@ -483,6 +433,8 @@ class XTBloomMinimizer(Minimizer):
                     else:
                         active = []
         finally:
+            for frame, state in states.items():
+                structures[frame].update(positions=state.position)
             calculator.close()
 
         if failed:
@@ -508,17 +460,17 @@ class XTBloomMinimizer(Minimizer):
         # Frames not finished (max_steps reached) are reported at their last
         # energy-accepted geometry, never at an unevaluated or rejected trial.
         final_pos = (
-            np.stack([accepted_pos[frame] for frame in range(nframes)])
+            np.stack([states[frame].position for frame in range(nframes)])
             * BOHR_TO_ANGSTROM
         )
         final_energies = (
             np.asarray(
-                [accepted_energy[frame] for frame in range(nframes)], dtype=np.float64
+                [states[frame].energy for frame in range(nframes)], dtype=np.float64
             )
             * HARTREE_TO_EV
         )
         final_forces = (
-            np.stack([accepted_force[frame] for frame in range(nframes)])
+            np.stack([states[frame].force for frame in range(nframes)])
             * _FORCE_TO_EV_ANG
         )
 
@@ -529,13 +481,61 @@ class XTBloomMinimizer(Minimizer):
         return labeled
 
 
-def _reject_periodic(data: dict) -> None:
-    """Raise for periodic systems the molecular ABI cannot represent."""
-    if not bool(np.asarray(data.get("nopbc", True)).all()):
-        raise XTBloomNotSupportedError(
-            "the xTBloom Python driver does not support periodic systems "
-            "(the public C ABI has no lattice input)"
+def _periodic_frames(data: dict, nframes: int) -> np.ndarray:
+    """Return one full-periodic flag per frame from dpdata's ``nopbc`` field."""
+    if "nopbc" not in data:
+        return np.zeros(nframes, dtype=bool)
+    raw = np.asarray(data["nopbc"])
+    if raw.ndim == 0:
+        values = np.full(nframes, _strict_bool(raw.item(), "nopbc"), dtype=bool)
+    else:
+        if raw.shape != (nframes,):
+            raise XTBloomValueError(
+                "nopbc must be a scalar or a one-dimensional array with one "
+                "value per frame"
+            )
+        values = np.asarray([_strict_bool(value, "nopbc") for value in raw], dtype=bool)
+    # dpdata's flag is named ``nopbc``: false means native full XYZ periodicity.
+    return ~values
+
+
+def _strict_bool(value: object, name: str) -> bool:
+    """Accept only booleans or exact integer 0/1 metadata values."""
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)) and int(value) in (0, 1):
+        return bool(value)
+    raise XTBloomValueError(f"{name} must contain boolean or exact 0/1 values")
+
+
+def _periodic_cells(
+    data: dict, nframes: int, periodic: np.ndarray
+) -> np.ndarray | None:
+    """Validate and convert dpdata ``cells`` from Angstrom to bohr.
+
+    Cells are required only for periodic frames.  Nonperiodic frames may retain
+    arbitrary upstream cell metadata because it is intentionally not part of
+    their native topology.
+    """
+    if not np.any(periodic):
+        return None
+    if "cells" not in data:
+        raise XTBloomValueError(
+            "periodic dpdata frames require a cells array with shape (nframes, 3, 3)"
         )
+    try:
+        cells = np.asarray(data["cells"], dtype=np.float64)
+    except (TypeError, ValueError, OverflowError):
+        raise XTBloomValueError(
+            "cells must have shape (nframes, 3, 3) and finite values"
+        ) from None
+    if cells.shape != (nframes, 3, 3):
+        raise XTBloomValueError(
+            f"cells must have shape ({nframes}, 3, 3), got {cells.shape}"
+        )
+    if not np.isfinite(cells[periodic]).all():
+        raise XTBloomValueError("periodic cells must be finite")
+    return np.ascontiguousarray(cells / BOHR_TO_ANGSTROM, dtype=np.float64)
 
 
 def _frame_value(
@@ -549,13 +549,17 @@ def _frame_value(
     """Return a fixed scalar, a per-frame value, or the default."""
     if fixed is not None:
         return fixed
-    if key in data:
-        value = np.asarray(data[key])
-        if value.ndim == 0:
-            return value.item()
-        if value.size == nframes:
-            return value[frame].item()
-    return default
+    if key not in data:
+        return default
+    value = np.asarray(data[key])
+    if value.ndim == 0:
+        return value.item()
+    if value.ndim != 1 or value.shape[0] != nframes:
+        raise XTBloomValueError(
+            f"{key} must be a scalar or a one-dimensional array with "
+            "one value per frame"
+        )
+    return value[frame].item()
 
 
 __all__ = ["XTBloomDriver", "XTBloomMinimizer"]

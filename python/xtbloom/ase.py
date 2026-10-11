@@ -25,12 +25,22 @@ from typing import Any
 
 import numpy as np
 
-from .exceptions import XTBloomRuntimeError, XTBloomValueError
-from .interface import Calculator, Result, _resolve_uhf, _validated_compute_setting
+from .exceptions import (
+    XTBloomNotSupportedError,
+    XTBloomRuntimeError,
+    XTBloomValueError,
+)
+from .interface import (
+    Calculator,
+    Result,
+    _normalize_periodic,
+    _resolve_uhf,
+    _validated_compute_setting,
+)
 
 
 class XTBloom(ase.calculators.calculator.Calculator):
-    r"""ASE calculator for GFN2-xTB energies and analytic forces from xTBloom.
+    r"""ASE calculator for GFN1/GFN2-xTB energies and forces from xTBloom.
 
     Supported properties: ``energy`` (alias ``free_energy``), ``forces``, and
     ``charges``.
@@ -38,14 +48,18 @@ class XTBloom(ase.calculators.calculator.Calculator):
     ======================== ================= =========================================
      Keyword                  Default           Description
     ======================== ================= =========================================
-     method                   "GFN2-xTB"        Underlying tight-binding method
+     method                   "GFN2-xTB"        GFN1-xTB or GFN2-xTB
      charge                   None              Total charge (sum of initial charges)
      multiplicity             None              Total spin multiplicity
      electronic_temperature   300.0             Electronic temperature in kelvin
      max_scc_iterations       250               SCC iteration ceiling
      charge_tolerance         1e-6              SCC charge tolerance (e)
      energy_tolerance         1e-8              SCC energy tolerance (Hartree)
-     backend                  "auto"            Execution backend: auto/cpu/cuda
+     scc_mixer               "modified_broyden" SCC mixing algorithm
+     scc_mixer_history        8                 Broyden history vectors (1..64)
+     scc_mixer_damping        0.4               Broyden damping in (0, 1]
+     determinism             "default"          default/reproducible execution policy
+     backend                  "auto"            Execution backend for either model
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
      cache_api                True              Reuse the underlying API calculator
@@ -76,6 +90,10 @@ class XTBloom(ase.calculators.calculator.Calculator):
         "max_scc_iterations": 250,
         "charge_tolerance": 1.0e-6,
         "energy_tolerance": 1.0e-8,
+        "scc_mixer": "modified_broyden",
+        "scc_mixer_history": 8,
+        "scc_mixer_damping": 0.4,
+        "determinism": "default",
         "backend": "auto",
         "device_id": None,
         "cpu_threads": 1,
@@ -116,6 +134,10 @@ class XTBloom(ase.calculators.calculator.Calculator):
             "charge_tolerance",
             "energy_tolerance",
             "electronic_temperature",
+            "scc_mixer",
+            "scc_mixer_history",
+            "scc_mixer_damping",
+            "determinism",
         ):
             if attribute in kwargs:
                 _validated_compute_setting(attribute, kwargs[attribute])
@@ -145,6 +167,14 @@ class XTBloom(ase.calculators.calculator.Calculator):
                 self._xtb.set("charge_tolerance", parameters.charge_tolerance)
             if "energy_tolerance" in changed:
                 self._xtb.set("energy_tolerance", parameters.energy_tolerance)
+            if "scc_mixer" in changed:
+                self._xtb.set("scc_mixer", parameters.scc_mixer)
+            if "scc_mixer_history" in changed:
+                self._xtb.set("scc_mixer_history", parameters.scc_mixer_history)
+            if "scc_mixer_damping" in changed:
+                self._xtb.set("scc_mixer_damping", parameters.scc_mixer_damping)
+            if "determinism" in changed:
+                self._xtb.set("determinism", parameters.determinism)
         else:
             self._close_api_calculator()
             self._res = None
@@ -174,7 +204,7 @@ class XTBloom(ase.calculators.calculator.Calculator):
         properties: list[str] | None = None,
         system_changes: list[str] = ase.calculators.calculator.all_changes,
     ) -> None:
-        """Calculate the requested ASE properties for a molecular structure."""
+        """Calculate requested ASE properties for molecular or XYZ-periodic input."""
         if not properties:
             properties = ["energy"]
         ase.calculators.calculator.Calculator.calculate(
@@ -201,6 +231,8 @@ class XTBloom(ase.calculators.calculator.Calculator):
                 positions=atoms.positions / Bohr,
                 charge=_get_charge(atoms, parameters),
                 uhf=_get_uhf(atoms, parameters),
+                cell=_ase_cell(atoms),
+                pbc=_ase_pbc(atoms),
             )
 
         assert xtb is not None
@@ -218,12 +250,26 @@ class XTBloom(ase.calculators.calculator.Calculator):
 
 
 def _validate_ase_atoms(atoms: ase.Atoms) -> None:
-    """Reject periodic ASE inputs that the public molecular ABI cannot model."""
-    if np.any(atoms.pbc):
-        raise ase.calculators.calculator.InputError(
-            "xTBloom does not support periodic ASE systems; the public C ABI "
-            "has no lattice or periodic-boundary descriptor"
-        )
+    """Validate ASE's cell/PBC pair against the released native 3D contract."""
+    try:
+        _normalize_periodic(_ase_cell(atoms), _ase_pbc(atoms))
+    except (XTBloomNotSupportedError, XTBloomValueError) as error:
+        raise ase.calculators.calculator.InputError(str(error)) from error
+
+
+def _ase_pbc(atoms: ase.Atoms) -> bool | np.ndarray:
+    """Return ASE periodicity while preserving partial-axis information."""
+    pbc = np.asarray(atoms.pbc)
+    if pbc.ndim == 0:
+        return bool(pbc)
+    return np.asarray(pbc, dtype=bool)
+
+
+def _ase_cell(atoms: ase.Atoms) -> np.ndarray | None:
+    """Return an ASE direct cell in bohr, or ``None`` for a molecule."""
+    if not np.any(np.asarray(atoms.pbc)):
+        return None
+    return np.asarray(atoms.cell.array, dtype=np.float64) / Bohr
 
 
 def _create_api_calculator(
@@ -237,6 +283,8 @@ def _create_api_calculator(
             atoms.positions / Bohr,
             charge=_get_charge(atoms, parameters),
             uhf=_get_uhf(atoms, parameters),
+            cell=_ase_cell(atoms),
+            pbc=_ase_pbc(atoms),
             backend=parameters.backend,
             device_id=parameters.device_id,
             cpu_threads=parameters.cpu_threads,
@@ -244,9 +292,13 @@ def _create_api_calculator(
             charge_tolerance=parameters.charge_tolerance,
             energy_tolerance=parameters.energy_tolerance,
             electronic_temperature=parameters.electronic_temperature,
+            scc_mixer=parameters.scc_mixer,
+            scc_mixer_history=parameters.scc_mixer_history,
+            scc_mixer_damping=parameters.scc_mixer_damping,
+            determinism=parameters.determinism,
             warm_start=bool(parameters.warm_start),
         )
-    except XTBloomValueError as e:
+    except (XTBloomNotSupportedError, XTBloomValueError) as e:
         raise ase.calculators.calculator.InputError(str(e)) from e
 
 
@@ -264,10 +316,23 @@ def _get_charge(
 def _get_uhf(
     atoms: ase.Atoms, parameters: ase.calculators.calculator.Parameters
 ) -> int:
-    """Return unpaired electrons from the multiplicity or initial magmoms."""
-    if parameters.multiplicity is None:
-        return int(atoms.get_initial_magnetic_moments().sum().round())
-    return _resolve_uhf(None, parameters.multiplicity)
+    """Return the nonnegative unpaired-electron count from ASE spin metadata."""
+    if parameters.multiplicity is not None:
+        return _resolve_uhf(None, parameters.multiplicity)
+
+    total_moment = float(np.asarray(atoms.get_initial_magnetic_moments()).sum())
+    if not np.isfinite(total_moment):
+        raise ase.calculators.calculator.InputError(
+            "initial magnetic moments must sum to a finite integer number of "
+            "unpaired electrons; set multiplicity explicitly"
+        )
+    rounded_moment = round(total_moment)
+    if not np.isclose(total_moment, rounded_moment, rtol=0.0, atol=1.0e-8):
+        raise ase.calculators.calculator.InputError(
+            "initial magnetic moments must sum to an integer number of unpaired "
+            "electrons; set multiplicity explicitly for a nonintegral total"
+        )
+    return abs(int(rounded_moment))
 
 
 if "xtbloom" not in ase.calculators.calculator.external_calculators:

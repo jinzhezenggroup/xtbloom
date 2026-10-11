@@ -15,7 +15,11 @@ import numpy as np
 import pytest
 from _cases import case_by_id, structure_inputs
 from xtbloom import ArrayBatch, Calculator
-from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
+from xtbloom.exceptions import (
+    XTBloomNotSupportedError,
+    XTBloomRuntimeError,
+    XTBloomValueError,
+)
 
 # --- environment probes ---------------------------------------------------------
 
@@ -260,6 +264,44 @@ def test_requires_grad_output_rejected() -> None:
 
 
 @pytest.mark.cuda
+def test_cuda_default_spin_channels_follow_open_shell() -> None:
+    """Omitted packed CUDA spin channels resolve radicals to two channels."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    case = case_by_id("oh_radical")
+    numbers, positions, charge, uhf, _spin = structure_inputs(case)
+    arrays = {
+        "atom_offsets": _wrap(
+            torch, "atom_offsets", np.array([0, len(numbers)], np.int64)
+        ),
+        "atomic_numbers": _wrap(torch, "atomic_numbers", numbers.astype(np.int32)),
+        "positions": _wrap(torch, "positions", positions),
+        "molecular_charges": _wrap(
+            torch, "molecular_charges", np.array([charge], dtype=np.float64)
+        ),
+        "unpaired_electrons": _wrap(
+            torch, "unpaired_electrons", np.array([uhf], dtype=np.int32)
+        ),
+    }
+    reference = Calculator(
+        "GFN2-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        backend="cuda",
+    ).singlepoint()
+    result = ArrayBatch(**arrays, backend="cuda").compute()
+    assert abs(float(result.energies.item()) - reference.energy) < 1.0e-10
+    assert np.allclose(result.forces, reference.forces, atol=1.0e-9)
+
+
+@pytest.mark.cuda
 def test_torch_cuda_batch_with_spin() -> None:
     """A ragged unrestricted batch runs on pure torch device arrays."""
     reason = _device_ready()
@@ -408,6 +450,61 @@ def test_cuda_compute_restores_callers_current_device() -> None:
 
         with pytest.raises(XTBloomRuntimeError, match="atom_offsets"):
             ArrayBatch(**bad, backend="cuda", device_id=context_device).compute()
+        assert torch.cuda.current_device() == caller_device
+
+
+@pytest.mark.cuda
+def test_foreign_cuda_array_rejected_before_custom_stream_export() -> None:
+    """Never expose a device-0 stream to a device-1 DLPack producer."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+
+    class TrackingProducer:
+        """Proxy one tensor while recording whether capsule export occurred."""
+
+        def __init__(self, tensor: object) -> None:
+            self.tensor = tensor
+            self.shape = tensor.shape
+            self.exports = 0
+
+        def __dlpack_device__(self) -> tuple[int, int]:
+            return self.tensor.__dlpack_device__()
+
+        def __dlpack__(self, **kwargs: object) -> object:
+            self.exports += 1
+            return self.tensor.__dlpack__(**kwargs)
+
+    context_device = 0
+    foreign_device = 1
+    with torch.cuda.device(context_device):
+        stream = torch.cuda.Stream()
+    with torch.cuda.device(foreign_device):
+        foreign = TrackingProducer(
+            torch.tensor([0.0], dtype=torch.float64, device="cuda:1")
+        )
+        caller_device = torch.cuda.current_device()
+
+        arrays = _water_host_arrays()
+        arrays["molecular_charges"] = foreign
+        with pytest.raises(
+            XTBloomNotSupportedError,
+            match=r"device 1.*resolved device 0",
+        ):
+            ArrayBatch(
+                **arrays,
+                backend="cuda",
+                device_id=context_device,
+                stream=int(stream.cuda_stream),
+            ).compute()
+
+        assert foreign.exports == 0
         assert torch.cuda.current_device() == caller_device
 
 

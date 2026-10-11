@@ -1,9 +1,38 @@
 # Issue #340 adaptive CPU precision evidence
 
-This directory archives correctness-qualified public-C-ABI latency evidence for
+This directory retains compact, correctness-qualified public-C-ABI latency evidence for
 the experimental `XTBLOOM_CPU_PRECISION=adaptive` CPU policy. Measurements were
 generated from clean implementation commit
 `584d8a0b880993af042ff3c36094086b9474a574` on 2026-08-11 local time.
+
+## Retained evidence and historical raw samples
+
+The eight compact CSVs preserve their original bytes. `SHA256SUMS` checks the
+retained CSVs, this README, and `RAW_SHA256SUMS`. Oversized reproducible JSON
+samples are omitted from the tracked tree to honor the 1 MiB/file and 16 MiB
+repository evidence budget. `RAW_SHA256SUMS` retains their original SHA-256
+identities, distinct from the current-tree manifest.
+
+The original raw files remain retrievable from PR #341 history at
+`fbc1aaeafba9a1fb59b0049401e617d8810e6f93`. From a clone, retrieve them into an
+external scratch directory (do not re-add them to the repository):
+
+```bash
+source=fbc1aaeafba9a1fb59b0049401e617d8810e6f93
+bundle=benchmarks/evidence/issue-340/2026-08-11-node3
+out=$(mktemp -d)
+git fetch origin "$source"
+while read -r digest filename; do
+  git show "$source:$bundle/$filename" > "$out/$filename"
+done < "$bundle/RAW_SHA256SUMS"
+cp "$bundle/RAW_SHA256SUMS" "$out/"
+(cd "$out" && sha256sum -c RAW_SHA256SUMS)
+```
+
+These are historical measurements of the implementation revision named above,
+not fresh performance qualification of later main integrations. Exact argv,
+input identities, convergence records, and timing samples remain in the
+hash-pinned historical JSON; the reproduction command shape is retained below.
 
 ## Environment
 
@@ -29,7 +58,7 @@ generated from clean implementation commit
 - BLAS policy: `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
   `MKL_NUM_THREADS=1`, dynamic threading disabled, MKL LP64 sequential.
 
-Every JSON artifact records the complete argv, clean repository revision,
+Each historical JSON artifact records the complete argv, clean repository revision,
 library hash, configure-time provider-entry hash, build cache, compiler,
 process affinity, thread environment, workload identity, observables,
 convergence state, and all 30 raw timing samples. The actual private shim and

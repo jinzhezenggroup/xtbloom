@@ -1,0 +1,107 @@
+{
+  "case_id": "gfn1_ketene",
+  "method": "GFN1-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "energy_hartree": -9.957347825797923,
+    "forces_hartree_per_bohr": [
+      -6.929639365568294e-17,
+      2.7968428874213608e-18,
+      -0.0211644474397831,
+      0.004761779311993859,
+      1.59055505322638e-17,
+      0.0005748673713723203,
+      -0.00476177931199379,
+      1.510643164922932e-17,
+      0.0005748673713723065,
+      1.571438032522684e-17,
+      6.2893901548452e-17,
+      0.00851761073268742,
+      -1.5621141378325889e-18,
+      -9.670272661736648e-17,
+      0.011497101964351
+    ],
+    "gradient_hartree_per_bohr": [
+      6.929639365568294e-17,
+      -2.7968428874213608e-18,
+      0.0211644474397831,
+      -0.004761779311993859,
+      -1.59055505322638e-17,
+      -0.0005748673713723203,
+      0.00476177931199379,
+      -1.510643164922932e-17,
+      -0.0005748673713723065,
+      -1.571438032522684e-17,
+      -6.2893901548452e-17,
+      -0.00851761073268742,
+      1.5621141378325889e-18,
+      9.670272661736648e-17,
+      -0.011497101964351
+    ]
+  },
+  "provenance": {
+    "accuracy": 0.0001,
+    "command": [
+      "{executable}",
+      "{input}",
+      "--no-restart",
+      "--method",
+      "gfn1",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "{gradient_output}",
+      "[--charge {signed_charge}]",
+      "--json",
+      "{json_output}"
+    ],
+    "command_template": [
+      "{executable}",
+      "{input}",
+      "--no-restart",
+      "--method",
+      "gfn1",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "{gradient_output}",
+      "[--charge {signed_charge}]",
+      "--json",
+      "{json_output}"
+    ],
+    "engine": "tblite",
+    "environment": {
+      "cleared_variable_prefixes": [
+        "XTB"
+      ],
+      "inherited_environment_boundary": "Non-XTB variables are inherited; executable, shared-library, parameter, input, and normalized-output hashes remain pinned.",
+      "set": {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OMP_STACKSIZE": "4G",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    },
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/gfn1/inputs/gfn1_ketene.coord",
+    "runtime": {
+      "libtblite": {
+        "filename": "libtblite.so.0.7.0",
+        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725"
+      }
+    },
+    "source_output_sha256": "38f3fa070c0801603bc09c4618d478d187a44f39453ff4d0b4f72dcc4958a484",
+    "source_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 0
+}

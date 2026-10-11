@@ -18,9 +18,9 @@ constexpr std::uint32_t component_bit(Gfn2SccPotentialComponent component) noexc
   return static_cast<std::uint32_t>(component);
 }
 
-constexpr std::uint32_t kMandatoryComponents = component_bit(Gfn2SccPotentialComponent::kES2) |
-                                               component_bit(Gfn2SccPotentialComponent::kES3) |
-                                               component_bit(Gfn2SccPotentialComponent::kAES2);
+constexpr std::uint32_t kMandatoryComponents =
+    component_bit(Gfn2SccPotentialComponent::kES2) | component_bit(Gfn2SccPotentialComponent::kES3);
+constexpr std::int64_t kMinimumStageReportCount = kGfn2SccIterationBaseStageReportCount - 2;
 
 BindingDiagnostic fail(BindingError error, BindingField field, std::int64_t index = -1) noexcept {
   return {error, field, index};
@@ -43,7 +43,9 @@ CanonicalStages canonical_stages(std::uint32_t components) noexcept {
   stages.append(Gfn2SccStageId::kSpinPotential);
   stages.append(Gfn2SccStageId::kES2Potential);
   stages.append(Gfn2SccStageId::kES3Potential);
-  stages.append(Gfn2SccStageId::kAES2Potential);
+  if (enabled(components, Gfn2SccPotentialComponent::kAES2)) {
+    stages.append(Gfn2SccStageId::kAES2Potential);
+  }
   if (enabled(components, Gfn2SccPotentialComponent::kD4TwoBody)) {
     stages.append(Gfn2SccStageId::kD4Potential);
   }
@@ -60,7 +62,9 @@ CanonicalStages canonical_stages(std::uint32_t components) noexcept {
   stages.append(Gfn2SccStageId::kSpinRawEnergy);
   stages.append(Gfn2SccStageId::kES2RawEnergy);
   stages.append(Gfn2SccStageId::kES3RawEnergy);
-  stages.append(Gfn2SccStageId::kAES2RawEnergy);
+  if (enabled(components, Gfn2SccPotentialComponent::kAES2)) {
+    stages.append(Gfn2SccStageId::kAES2RawEnergy);
+  }
   if (enabled(components, Gfn2SccPotentialComponent::kD4TwoBody)) {
     stages.append(Gfn2SccStageId::kD4RawEnergy);
   }
@@ -297,6 +301,15 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
     potential.periodic_atomic = storage.periodic_atomic_potential;
     potential.periodic_atomic_elements = storage.periodic_atomic_elements;
   }
+  const bool electric_field = plan.electric_field_batch.plan_token == token;
+  potential.electric_field_atomic =
+      electric_field ? input.electric_field_potentials.atomic : nullptr;
+  potential.electric_field_atomic_elements =
+      electric_field ? input.electric_field_potentials.atom_elements : 0;
+  potential.electric_field_dipole =
+      electric_field ? input.electric_field_potentials.dipole : nullptr;
+  potential.electric_field_dipole_elements =
+      electric_field ? input.electric_field_potentials.dipole_elements : 0;
   potential.plan_token = token;
 
   workspace.scalar_bridge.fields = {
@@ -347,38 +360,38 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
                              workspace.staged_occupations.entropy_elements,
                              token};
 
-  input.classical_energy = {storage.es2_energy,
-                            storage.es2_energy_elements,
-                            storage.es3_energy,
-                            storage.es3_energy_elements,
-                            storage.aes2_energy,
-                            storage.aes2_energy_elements,
-                            nullptr,
-                            0,
-                            nullptr,
-                            0,
-                            nullptr,
-                            0,
-                            token};
-  input.free_energy = {storage.core_energy,
-                       storage.core_energy_elements,
-                       workspace.staged_occupations.entropies,
-                       workspace.staged_occupations.entropy_elements,
-                       storage.es2_energy,
-                       storage.es2_energy_elements,
-                       storage.es3_energy,
-                       storage.es3_energy_elements,
-                       storage.aes2_energy,
-                       storage.aes2_energy_elements,
-                       workspace.staged_spin_energies,
-                       workspace.staged_spin_energy_elements,
-                       nullptr,
-                       0,
-                       nullptr,
-                       0,
-                       nullptr,
-                       0,
-                       token};
+  input.classical_energy = {};
+  input.classical_energy.es2 = storage.es2_energy;
+  input.classical_energy.es2_elements = storage.es2_energy_elements;
+  input.classical_energy.es3 = storage.es3_energy;
+  input.classical_energy.es3_elements = storage.es3_energy_elements;
+  input.classical_energy.aes2 = storage.aes2_energy;
+  input.classical_energy.aes2_elements = storage.aes2_energy_elements;
+  input.classical_energy.plan_token = token;
+  input.free_energy = {};
+  input.free_energy.core = storage.core_energy;
+  input.free_energy.core_elements = storage.core_energy_elements;
+  input.free_energy.entropy = workspace.staged_occupations.entropies;
+  input.free_energy.entropy_elements = workspace.staged_occupations.entropy_elements;
+  input.free_energy.es2 = storage.es2_energy;
+  input.free_energy.es2_elements = storage.es2_energy_elements;
+  input.free_energy.es3 = storage.es3_energy;
+  input.free_energy.es3_elements = storage.es3_energy_elements;
+  input.free_energy.aes2 = storage.aes2_energy;
+  input.free_energy.aes2_elements = storage.aes2_energy_elements;
+  input.free_energy.spin = workspace.staged_spin_energies;
+  input.free_energy.spin_elements = workspace.staged_spin_energy_elements;
+  input.free_energy.plan_token = token;
+  if (electric_field) {
+    input.classical_energy.electric_field_multipoles = {
+        workspace.physical_topology.atomic_charges, workspace.physical_topology.atom_elements,
+        workspace.physical_topology.atomic_dipoles, workspace.physical_topology.dipole_elements,
+        token};
+    input.classical_energy.electric_field_potentials = input.electric_field_potentials;
+    input.free_energy.electric_field = workspace.staged_classical_energy.electric_field;
+    input.free_energy.electric_field_elements =
+        workspace.staged_classical_energy.electric_field_elements;
+  }
   if (enabled(components, Gfn2SccPotentialComponent::kD4TwoBody)) {
     input.classical_energy.d4_two_body = storage.d4_two_body_energy;
     input.classical_energy.d4_two_body_elements = storage.d4_two_body_energy_elements;
@@ -433,6 +446,8 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
   state.free_energy.explicit_point_charge = state.classical_energy.explicit_point_charge;
   state.free_energy.explicit_point_charge_elements =
       state.classical_energy.explicit_point_charge_elements;
+  state.free_energy.electric_field = state.classical_energy.electric_field;
+  state.free_energy.electric_field_elements = state.classical_energy.electric_field_elements;
   state.free_energy.periodic_embedding = state.classical_energy.periodic_embedding;
   state.free_energy.periodic_embedding_elements =
       state.classical_energy.periodic_embedding_elements;
@@ -461,6 +476,9 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
       workspace.staged_classical_energy.explicit_point_charge;
   workspace.staged_free_energy.explicit_point_charge_elements =
       workspace.staged_classical_energy.explicit_point_charge_elements;
+  workspace.staged_free_energy.electric_field = workspace.staged_classical_energy.electric_field;
+  workspace.staged_free_energy.electric_field_elements =
+      workspace.staged_classical_energy.electric_field_elements;
   workspace.staged_free_energy.periodic_embedding =
       workspace.staged_classical_energy.periodic_embedding;
   workspace.staged_free_energy.periodic_embedding_elements =
@@ -588,7 +606,7 @@ Gfn2SccIterationBindingDiagnostic query_gfn2_scc_iteration_report_storage_cuda(
   }
 
   const CanonicalStages stages = canonical_stages(enabled_components);
-  if (stages.count < kGfn2SccIterationBaseStageReportCount ||
+  if (stages.count < kMinimumStageReportCount ||
       stages.count > kGfn2SccIterationMaximumStageReportCount ||
       batch_size > std::numeric_limits<std::int64_t>::max() / stages.count) {
     return fail(BindingError::kAddressOverflow, BindingField::kStageReports);

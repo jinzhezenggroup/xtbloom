@@ -1,8 +1,11 @@
 # CPU FRESH/WARM molecule-size scaling
 
-`natoms_scaling.py` measures strict xTBloom SCC start policies and a persistent
-public-C-API tblite reference across a deterministic alkane size sweep. This is
-a separate protocol from the public cross-engine figure.
+`natoms_scaling.py` measures strict xTBloom SCC start policies and persistent
+public-C-API references across deterministic atom-count sweeps. The historical
+alkane sweep remains the default. `--topology compact-carbon` and
+`--topology open-carbon` accept every positive exact atom count, including
+`16,32,48,64,96,128,256`. This is a separate protocol from the public
+cross-engine figure.
 
 ## Eligibility
 
@@ -13,6 +16,19 @@ descriptor, options image, and caller-owned result buffers.
 - `fresh` performs independent SCC initialization in every timed call.
 - `warm` performs one untimed compatible `FRESH` seed, then uses strict
   `WARM` for every warmup and measured call.
+
+Every warmup and sample retains identical coordinates and is labeled
+`same_geometry_repeated_compute`. It remains a complete public compute call;
+the label does not claim pair-list no-refresh reuse or isolate list-cache cost.
+
+The exact-size classes contain only carbon. `compact-carbon` uses a centered
+radial prefix of a 2.5-bohr cubic lattice whose complete 256-atom extent remains
+inside the 25-bohr cutoff. `open-carbon` uses deterministic bonded C2 fragments
+(plus one C3 fragment for odd sizes) whose centers form a slightly staggered
+12-bohr-spaced chain with sparse O(N) cutoff connectivity. This preserves a
+publicly convergent restricted-SCC workload instead of treating every neutral
+carbon as an isolated closed-shell atom. Workload identity records the topology
+name plus SHA-256 hashes of the exact atomic-number and position vectors.
 
 JSON is authoritative and retains every latency, energy, requested force
 vector, SCC iteration count, convergence flag, and per-system status. CSV is a
@@ -60,7 +76,23 @@ python3 benchmarks/natoms_scaling.py \
   --cross-engine-force-atol 5e-6 \
   --output-json build/benchmarks/warm.json \
   --output-csv build/benchmarks/warm.csv
+
+python3 benchmarks/natoms_scaling.py \
+  --engine xtbloom \
+  --library /absolute/path/to/libxtbloom.so \
+  --backend cuda --property force --start-mode fresh \
+  --topology compact-carbon --natoms 16,32,48,64,96,128,256 \
+  --batch-sizes 1,8,32 --warmups 3 --repetitions 20 \
+  --output-json build/benchmarks/compact-carbon.json \
+  --output-csv build/benchmarks/compact-carbon.csv
 ```
+
+For issue-scoped internal CUDA term evidence, the D4 and AES2 benchmark-only
+targets accept the same `--topology compact|open` distinction.  D4 open rows
+exercise the committed sparse 50-bohr pair-list superset, while AES2 remains an
+all-pair operator and uses the topology only to vary the distance distribution.
+These internal CUDA-event measurements complement, but do not replace, the
+complete public-call rows above.
 
 Pin process affinity and keep BLAS one-threaded in final CPU evidence. The JSON
 records the exact argv, environment, build/runtime identity, and hashes.

@@ -9,12 +9,17 @@
 #include <type_traits>
 
 #include "backends/cuda/gfn2_d4.cuh"
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
+#include "backends/cuda/gfn2_native_periodic_d4.cuh"
+#include "backends/cuda/gfn2_native_periodic_short_range.cuh"
 #include "backends/cuda/gfn2_repulsion.cuh"
 
 namespace xtbloom::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2TerminalClassicalEnergyAbiVersion = 1u;
+/* ABI v2 replaces the legacy dense D4 cache with the committed pair-list
+ * cache and its role-specific consumer views. */
+inline constexpr std::uint32_t kGfn2TerminalClassicalEnergyAbiVersion = 2u;
 
 enum class Gfn2TerminalClassicalEnergyComponent : std::uint32_t {
   kD4Atm = 1u << 0u,
@@ -57,11 +62,19 @@ struct Gfn2TerminalClassicalEnergyDevicePlan {
   Gfn2RepulsionDeviceBatch repulsion{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  Gfn2D4PairListDeviceCache d4_cache{};
 
   Gfn2GeometryEpochDevice geometry_epoch{};
   const std::uint64_t* committed_generations = nullptr;
   std::int64_t generation_elements = 0;
+  /* Native XYZ periodic repulsion is evaluated during numerical refresh,
+   * alongside periodic CN, and consumed here as a read-only candidate.  A
+   * null pointer retains the molecular repulsion leaf for non-periodic plans. */
+  const double* native_repulsion_energies = nullptr;
+  std::int64_t native_repulsion_elements = 0;
+  /* Native XYZ periodic D4 uses the SCC arena's image-aware evaluator.  A
+   * zero-token view keeps the legacy molecular pair-list route unchanged. */
+  Gfn2NativePeriodicD4DeviceBatch native_d4_batch{};
 };
 
 /* One byte per system. Zero leaves that member's result tuple unchanged. */
@@ -69,6 +82,7 @@ struct Gfn2TerminalClassicalEnergyDeviceActivity {
   const std::uint8_t* requested_mask = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
+  Gfn2DeviceAdmission admission{};
 };
 
 /* Component values consumed by the total-energy composer. */
@@ -95,6 +109,7 @@ struct Gfn2TerminalClassicalEnergyDeviceWorkspace {
   std::uint64_t* epoch_snapshot = nullptr;
   std::int64_t epoch_snapshot_elements = 0;
   std::uint64_t plan_token = 0u;
+  Gfn2NativePeriodicD4DeviceWorkspace native_d4_workspace{};
 };
 
 /* Native primitive diagnostics plus normalized execution-level projections. */

@@ -12,9 +12,10 @@
 //   xtbloom_scc_trace_mixer <case.spec> <sequence-file>
 //
 // The sequence file is line-oriented:
-//   nat <nat> nsh <nsh> steps <K>
+//   nat <nat> nsh <nsh> spin_channels <1|2> steps <K>
 //   step <k>
-//   mixed <nsh + 3*nat + 6*nat values in residual order qsh, dpat, qpat>
+//   mixed <spin_channels*(nsh + 3*nat + 6*nat) values in channel-major
+//          residual order qsh, dpat, qpat>
 //   raw   <same layout>
 // for each logical step.  On stdout the executable emits one line per
 // completed transition:
@@ -37,6 +38,7 @@ using namespace xtbloom_trace_harness;
 struct Sequence {
   std::int64_t nat = 0;
   std::int64_t nsh = 0;
+  std::int64_t spin_channels = 0;
   std::int64_t steps = 0;
   std::vector<std::vector<double>> mixed;  // per logical step, residual order
   std::vector<std::vector<double>> raw;    // per logical step, residual order
@@ -57,15 +59,21 @@ bool parse_sequence(const std::string& path, Sequence& sequence, std::string& er
     err = "sequence file missing nsh";
     return false;
   }
+  if (!(file >> token) || token != "spin_channels" || !(file >> sequence.spin_channels)) {
+    err = "sequence file missing spin_channels";
+    return false;
+  }
   if (!(file >> token) || token != "steps" || !(file >> sequence.steps)) {
     err = "sequence file missing steps";
     return false;
   }
-  if (sequence.nat <= 0 || sequence.nsh <= 0 || sequence.steps <= 0) {
+  if (sequence.nat <= 0 || sequence.nsh <= 0 ||
+      (sequence.spin_channels != 1 && sequence.spin_channels != 2) || sequence.steps <= 0) {
     err = "sequence counts must be positive";
     return false;
   }
-  const std::size_t dimension = static_cast<std::size_t>(sequence.nsh + 9 * sequence.nat);
+  const std::size_t dimension =
+      static_cast<std::size_t>(sequence.spin_channels * (sequence.nsh + 9 * sequence.nat));
   sequence.mixed.assign(static_cast<std::size_t>(sequence.steps), {});
   sequence.raw.assign(static_cast<std::size_t>(sequence.steps), {});
   for (std::int64_t k = 1; k <= sequence.steps; ++k) {
@@ -117,20 +125,24 @@ int main(int argc, char** argv) {
     std::cerr << err << "\n";
     return 2;
   }
+  if (spec.nat != sequence.nat || spec.spin_channels != sequence.spin_channels) {
+    std::cerr << "sequence topology does not match case spec\n";
+    return 2;
+  }
   batch.add_case(spec);
   if (xtbloom_status_t s = batch.build(err); s != XTBLOOM_STATUS_SUCCESS) {
     std::cerr << "geometry build failed: " << err << "\n";
     return static_cast<int>(s);
   }
-  const std::int64_t dimension = sequence.nsh + 9 * sequence.nat;
+  const std::int64_t dimension = sequence.spin_channels * (sequence.nsh + 9 * sequence.nat);
+  const std::int64_t qsh_count = sequence.spin_channels * sequence.nsh;
+  const std::int64_t dipole_count = sequence.spin_channels * 3 * sequence.nat;
 
   auto split = [&](const std::vector<double>& flattened, std::vector<double>& qsh,
                    std::vector<double>& dpat, std::vector<double>& qpat) {
-    qsh.assign(flattened.begin(), flattened.begin() + sequence.nsh);
-    dpat.assign(flattened.begin() + sequence.nsh,
-                flattened.begin() + sequence.nsh + 3 * sequence.nat);
-    qpat.assign(flattened.begin() + sequence.nsh + 3 * sequence.nat,
-                flattened.begin() + sequence.nsh + 9 * sequence.nat);
+    qsh.assign(flattened.begin(), flattened.begin() + qsh_count);
+    dpat.assign(flattened.begin() + qsh_count, flattened.begin() + qsh_count + dipole_count);
+    qpat.assign(flattened.begin() + qsh_count + dipole_count, flattened.end());
   };
 
   // Seed the mixer's current input from the golden mixed state of step 1 and
@@ -149,8 +161,9 @@ int main(int argc, char** argv) {
     return static_cast<int>(s);
   }
 
-  std::cout << "mixer_replay case nat " << sequence.nat << " nsh " << sequence.nsh << " steps "
-            << sequence.steps << " dimension " << dimension << "\n";
+  std::cout << "mixer_replay case nat " << sequence.nat << " nsh " << sequence.nsh
+            << " spin_channels " << sequence.spin_channels << " steps " << sequence.steps
+            << " dimension " << dimension << "\n";
   for (std::int64_t k = 1; k <= sequence.steps; ++k) {
     split(sequence.raw[static_cast<std::size_t>(k - 1)], qsh, dpat, qpat);
     if (xtbloom_status_t s = batch.write_multipoles(0, qsh, dpat, qpat, err);

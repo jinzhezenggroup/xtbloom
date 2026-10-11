@@ -413,7 +413,8 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
                            const std::vector<double>& charges,
                            const std::vector<std::int32_t>& unpaired,
                            const std::vector<std::int32_t>& spins, Evaluation& evaluation,
-                           std::string& error, double minimum_rcond = 1.0e-12) {
+                           std::string& error, double minimum_rcond = 1.0e-12,
+                           bool enable_single_precision = false) {
   BasisPlan basis;
   if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
                                              static_cast<std::int64_t>(atomic_numbers.size()),
@@ -423,7 +424,8 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
           basis, atomic_numbers.data(), charges.data(), unpaired.data(), spins.data(),
           evaluation.layout, error) != XTBLOOM_STATUS_SUCCESS ||
       xtbloom::detail::gfn2::make_eigensolver_plan(evaluation.layout, evaluation.plan, error,
-                                                   minimum_rcond) != XTBLOOM_STATUS_SUCCESS) {
+                                                   minimum_rcond, enable_single_precision) !=
+          XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -1098,7 +1100,7 @@ int test_single_precision_pipeline_publishes_binary64_results() {
   Evaluation reference;
   Evaluation candidate;
   CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, reference, error));
-  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, candidate, error));
+  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, candidate, error, 1.0e-12, true));
   const std::vector<double> overlap{1.0, 0.12, 0.12, 1.0};
   const std::vector<double> hamiltonian{-0.72, -0.08, -0.08, 0.31};
   CHECK(factor(reference, overlap, 91u, error));
@@ -1133,6 +1135,90 @@ int test_single_precision_pipeline_publishes_binary64_results() {
   CHECK(near(candidate.band_energies[0], reference.band_energies[0], 3.0e-6));
   CHECK(near(candidate.free_energies[0], reference.free_energies[0], 3.0e-6));
   CHECK(near(metric_trace(candidate.wavefunction.density, overlap.data(), 2u), 2.0, 3.0e-6));
+  return 0;
+}
+
+int test_single_precision_workspace_requires_opt_in() {
+  std::string error;
+  // These are the established FP64 segment sizes, including 64-byte padding.
+  const std::array<std::int64_t, 4> orbitals{2, 64, 242, 482};
+  const std::array<std::size_t, 4> worker_bytes{576, 268672, 3772416, 14917056};
+  const std::array<std::size_t, 4> full_bytes{1408, 401728, 5652928, 22363648};
+  for (std::size_t index = 0; index < orbitals.size(); ++index) {
+    const std::vector<std::int64_t> offsets{0, orbitals[index]};
+    const std::vector<std::int32_t> numbers(static_cast<std::size_t>(orbitals[index]), 1);
+    const std::int32_t unpaired = 0;
+    const std::int32_t spin = 1;
+    const double charge = 0.0;
+    BasisPlan basis;
+    WavefunctionLayout layout;
+    EigensolverPlan fp64;
+    EigensolverPlan mixed;
+    CHECK(xtbloom::detail::gfn2::make_basis_plan(1, orbitals[index], offsets.data(), numbers.data(),
+                                                 basis, error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(basis, numbers.data(), &charge, &unpaired,
+                                                          &spin, layout,
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::make_eigensolver_plan(layout, fp64, error) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::make_eigensolver_plan(layout, mixed, error, 1.0e-12, true) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(!fp64.single_precision_enabled());
+    CHECK(mixed.single_precision_enabled());
+    CHECK(fp64.worker_workspace_size_bytes() == worker_bytes[index]);
+    CHECK(fp64.workspace_size_bytes() == full_bytes[index]);
+    CHECK(mixed.worker_workspace_size_bytes() > fp64.worker_workspace_size_bytes());
+    CHECK(mixed.workspace_size_bytes() - fp64.workspace_size_bytes() ==
+          mixed.worker_workspace_size_bytes() - fp64.worker_workspace_size_bytes());
+  }
+
+  Evaluation candidate;
+  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, candidate, error));
+  CHECK(candidate.scratch.single_coefficients == nullptr);
+  CHECK(candidate.scratch.single_densities == nullptr);
+  CHECK(candidate.scratch.single_energy_weighted_densities == nullptr);
+  CHECK(candidate.scratch.single_eigenvalues == nullptr);
+  CHECK(candidate.scratch.single_factor == nullptr);
+  CHECK(candidate.scratch.single_lapack_work == nullptr);
+  CHECK(factor(candidate, {1.0, 0.0, 0.0, 1.0}, 93u, error));
+  fill_outputs(candidate, 31.0);
+  const std::vector<double> hamiltonian{-0.7, 0.0, 0.0, 0.3};
+  EigensolverThermodynamicsView thermodynamics = candidate.thermodynamics();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_cpu_single_precision(
+            candidate.plan, 0, candidate.cache, 93u, hamiltonian.data(), 0.0, mixed_backend(),
+            candidate.scratch, candidate.wavefunction, thermodynamics,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(outputs_equal_sentinel(candidate, 31.0));
+  EigensolverWorkspace forged = candidate.scratch;
+  forged.single_factor = reinterpret_cast<float*>(forged.coefficients);
+  CHECK(xtbloom::detail::gfn2::validate_eigensolver_worker_workspace_binding(
+            candidate.plan, forged, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  return 0;
+}
+
+int test_single_precision_range_failure_is_unpublished_and_fp64_retryable() {
+  std::string error;
+  Evaluation candidate;
+  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, candidate, error, 1.0e-12, true));
+  CHECK(factor(candidate, {1.0, 0.0, 0.0, 1.0}, 92u, error));
+  const std::vector<double> hamiltonian{-1.0e40, 0.0, 0.0, 1.0e40};
+  fill_outputs(candidate, 29.0);
+  EigensolverThermodynamicsView thermodynamics = candidate.thermodynamics();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_cpu_single_precision(
+            candidate.plan, 0, candidate.cache, 92u, hamiltonian.data(), 0.0, mixed_backend(),
+            candidate.scratch, candidate.wavefunction, thermodynamics,
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(candidate.statuses[0] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
+  candidate.statuses[0] = static_cast<xtbloom_status_t>(99);
+  CHECK(outputs_equal_sentinel(candidate, 29.0));
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_cpu(
+            candidate.plan, 0, candidate.cache, 92u, hamiltonian.data(), 0.0, mixed_backend(),
+            candidate.scratch, candidate.wavefunction, thermodynamics,
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(candidate.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(near(candidate.wavefunction.eigenvalues[0], -1.0e40, 1.0e-12));
+  CHECK(near(candidate.wavefunction.eigenvalues[1], 1.0e40, 1.0e-12));
+  CHECK(std::isfinite(candidate.band_energies[0]));
   return 0;
 }
 
@@ -1860,10 +1946,17 @@ int main(int argc, char** argv) {
     return status;
   }
   if (const int status = test_broken_optional_fp32_cohort_preserves_fp64_backend(); status != 0) {
-    return status;
+    return EXIT_FAILURE;
+  }
+  if (const int status = test_single_precision_workspace_requires_opt_in(); status != 0) {
+    return EXIT_FAILURE;
+  }
+  if (const int status = test_single_precision_range_failure_is_unpublished_and_fp64_retryable();
+      status != 0) {
+    return EXIT_FAILURE;
   }
   if (const int status = test_single_precision_pipeline_publishes_binary64_results(); status != 0) {
-    return status;
+    return EXIT_FAILURE;
   }
   if (const int status = test_unrestricted_literal_generalized_eigenproblem(); status != 0) {
     return status;

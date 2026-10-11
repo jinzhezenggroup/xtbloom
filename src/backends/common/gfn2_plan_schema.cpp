@@ -1190,6 +1190,35 @@ Gfn2PlanSchemaDiagnostic validate_gfn2_pair_list_consumer_host(
   return success();
 }
 
+Gfn2PlanSchemaDiagnostic project_gfn2_pair_list_role_binding(
+    const Gfn2RaggedTopologyView& topology, const Gfn2PairListConsumerView& source,
+    Gfn2PairListRole target_role, Gfn2PlanMemorySpace expected_memory_space,
+    Gfn2PairListConsumerView& projection) noexcept {
+  projection = {};
+  Gfn2PlanSchemaDiagnostic diagnostic =
+      validate_gfn2_pair_list_consumer_binding(topology, source, expected_memory_space);
+  if (diagnostic.error != Gfn2PlanSchemaError::kSuccess) {
+    return diagnostic;
+  }
+  if (!known_pair_list_role(target_role)) {
+    return failure(Gfn2PlanSchemaError::kInvalidPairListRole,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
+  const double target_cutoff = pair_list_role_cutoff(target_role);
+  if (source.list_builder_cutoff_bohr < target_cutoff) {
+    return failure(Gfn2PlanSchemaError::kInsufficientPairListCutoff,
+                   Gfn2PlanSchemaField::kPairListConsumer);
+  }
+
+  /* The committed storage and publication metadata form one lease.  Preserve
+   * it byte-for-byte at the field level and specialize only the consumer's
+   * physical predicate. */
+  projection = source;
+  projection.role = target_role;
+  projection.cutoff_bohr = target_cutoff;
+  return success();
+}
+
 namespace {
 
 constexpr Gfn2PlanSchemaDiagnostic projection_failure(Gfn2PlanSchemaError error,

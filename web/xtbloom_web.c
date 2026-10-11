@@ -5,8 +5,8 @@
  * front end never has to marshal the ABI structs by hand:
  *
  *   const char* xtbloom_web_version(void);
- *   const char* xtbloom_web_compute(xyz, charge, unpaired, etemp_eh, etol, qtol,
- *                                   max_iter, forces, *ok_out);
+ *   const char* xtbloom_web_compute(xyz, model, charge, unpaired, etemp_eh,
+ *                                   etol, qtol, max_iter, forces);
  *
  * Input is plain XYZ ("Symbol x y z" or "Z x y z", one atom per line, values
  * in angstrom -- converted to bohr internally, since xtbloom positions are in
@@ -270,6 +270,79 @@ static int parse_xyz(const char* xyz, Atom* atoms, int max_atoms) {
 static StrBuf g_result;
 static xtbloom_context_t* g_context = NULL;
 
+/* The Web protocol carries the stable public model tag explicitly so the
+ * adapter never relies on an initializer default or silently substitutes one
+ * GFN-xTB method for another. */
+static int valid_model_tag(int model) {
+  return model == XTBLOOM_MODEL_GFN1_XTB || model == XTBLOOM_MODEL_GFN2_XTB;
+}
+
+static const char* model_name(int model) {
+  return model == XTBLOOM_MODEL_GFN1_XTB ? "GFN1-xTB" : "GFN2-xTB";
+}
+
+/* Whether the adapter's most recent compute left a fully converged
+ * compatible state on the shared context that a strict WARM SCC request may
+ * consume. Mirrors the native gate so the browser optimizer can reuse the
+ * previous converged electronic state as the next step's SCC guess. Geometry
+ * is not part of the native warm identity, which is exactly what makes
+ * successive geometry-optimization steps ideal warm-start candidates.
+ *
+ * Standalone single-point computes always run FRESH and consume the prior
+ * checkpoint (native semantics), so a user calculation can never inherit an
+ * unrelated optimization's electronic state. The first step of every new
+ * optimization run is also forced FRESH, resetting the previous run's state. */
+static int g_warm_ready = 0;
+
+/* Run one native compute with the adapter's automatic warm-start policy.
+ *
+ * allow_warm selects whether this call may consume the retained checkpoint.
+ * When a WARM request is refused (no compatible fully converged predecessor:
+ * first call, superseded or consumed checkpoint, or changed charge/spin/
+ * topology/compute policy), the strict native gate rejects it with
+ * INVALID_ARGUMENT before modifying any caller output, so one independent
+ * FRESH retry is safe and transparent.
+ *
+ * When stats is non-NULL the helper records, per SCC solve, the requested
+ * start mode and the reported SCC iteration count so the browser optimizer can
+ * report warm-start effectiveness (see WebSccStats below). */
+typedef struct {
+  int fresh_solves;     /* SCC solves started from the immutable fresh state */
+  int warm_solves;      /* SCC solves that consumed a compatible checkpoint */
+  int warm_fallbacks;   /* WARM requests rejected, retried transparently FRESH */
+  long long iterations; /* total SCC iterations across every solve in the run */
+} WebSccStats;
+
+static xtbloom_status_t compute_adaptive(xtbloom_context_t* context, const xtbloom_batch_t* batch,
+                                         xtbloom_compute_options_t* options,
+                                         xtbloom_batch_result_t* result, int allow_warm,
+                                         WebSccStats* stats) {
+  const int want_warm = allow_warm != 0 && g_warm_ready != 0;
+  options->scc_start_mode = want_warm ? XTBLOOM_SCC_START_WARM : XTBLOOM_SCC_START_FRESH;
+  xtbloom_status_t status = xtbloom_compute(context, batch, options, result);
+  int used_warm = want_warm;
+  if (status == XTBLOOM_STATUS_INVALID_ARGUMENT && want_warm) {
+    used_warm = 0;
+    options->scc_start_mode = XTBLOOM_SCC_START_FRESH;
+    status = xtbloom_compute(context, batch, options, result);
+  }
+  if (stats != NULL) {
+    if (used_warm) {
+      ++stats->warm_solves;
+    } else {
+      ++stats->fresh_solves;
+      if (want_warm) {
+        ++stats->warm_fallbacks;
+      }
+    }
+    const int32_t* iterations = (const int32_t*)result->scc_iterations.data;
+    if (iterations != NULL) {
+      stats->iterations += (long long)iterations[0];
+    }
+  }
+  return status;
+}
+
 /* Front-end-localizable error: stable ASCII code (+ optional raw diagnostic). */
 static const char* error_json(const char* code, const char* raw) {
   g_result.len = 0;
@@ -286,9 +359,12 @@ static const char* error_json(const char* code, const char* raw) {
 const char* xtbloom_web_version(void) { return xtbloom_version_string(); }
 
 /* Parse/compute and return a JSON document in a static reused buffer. */
-const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
+const char* xtbloom_web_compute(const char* xyz, int model, double charge, int unpaired,
                                 double electronic_temperature_eh, double energy_tolerance,
                                 double charge_tolerance, int max_iterations, int compute_forces) {
+  if (!valid_model_tag(model)) {
+    return error_json("err_model", NULL);
+  }
   /* --- parse geometry --- */
   Atom atoms[512];
   const int n_atoms = parse_xyz(xyz, atoms, 512);
@@ -379,6 +455,7 @@ const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
   if (xtbloom_compute_options_init(&options, sizeof(options)) != XTBLOOM_STATUS_SUCCESS) {
     return error_json("err_init", NULL);
   }
+  options.model = (xtbloom_model_t)model;
   options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
   if (compute_forces != 0) {
     options.flags |= XTBLOOM_COMPUTE_FORCES;
@@ -421,7 +498,12 @@ const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
   result.per_system_status.data = per_system_status;
   result.per_system_status.size_bytes = sizeof(int32_t);
 
-  const xtbloom_status_t status = xtbloom_compute(g_context, &batch, &options, &result);
+  /* Standalone single-point evaluations always start SCC fresh. The accepted
+   * FRESH attempt consumes any preceding checkpoint, so ordinary browser
+   * calculations never reuse electronic state from an unrelated request. */
+  const xtbloom_status_t status = compute_adaptive(g_context, &batch, &options, &result, 0, NULL);
+  g_warm_ready = (status == XTBLOOM_STATUS_SUCCESS &&
+                  per_system_status[0] == XTBLOOM_STATUS_SUCCESS && scc_converged[0] == 1u);
 
   /* --- serialize --- */
   g_result.len = 0;
@@ -443,7 +525,11 @@ const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
     return sb_finish(&g_result);
   }
 
-  sb_puts(&g_result, "{\"ok\":1,\"energy_Eh\":");
+  sb_puts(&g_result, "{\"ok\":1,\"model\":");
+  sb_puti(&g_result, model);
+  sb_puts(&g_result, ",\"method\":");
+  sb_put_json_string(&g_result, model_name(model));
+  sb_puts(&g_result, ",\"energy_Eh\":");
   sb_putd(&g_result, energies[0]);
   sb_puts(&g_result, ",\"scc_iterations\":");
   sb_puti(&g_result, scc_iterations[0]);
@@ -500,7 +586,7 @@ const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
 /* ------------------------------------------------------------------ */
 /* Minimal L-BFGS geometry optimizer (demo quality)                    */
 /*                                                                     */
-/* Minimizes the GFN2-xTB energy by moving nuclear coordinates (bohr)  */
+/* Minimizes the selected GFN-xTB energy by moving coordinates (bohr) */
 /* along an L-BFGS search direction with an Armijo backtracking line   */
 /* search. Each trial reads the analytic energy and force from         */
 /* xtbloom_compute on a cached context, so convergence is driven by the */
@@ -568,10 +654,13 @@ static XTBloomOptimizeStepFn g_optimize_step_fn = NULL;
 
 void xtbloom_web_set_optimize_step_cb(XTBloomOptimizeStepFn fn) { g_optimize_step_fn = fn; }
 
-const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
+const char* xtbloom_web_optimize(const char* xyz, int model, double charge, int unpaired,
                                  double electronic_temperature_eh, double energy_tolerance,
                                  double charge_tolerance, int scc_max_iterations,
                                  int opt_max_iterations, double grad_tol, double max_move) {
+  if (!valid_model_tag(model)) {
+    return error_json("err_model", NULL);
+  }
   Atom atoms[512];
   const int n_atoms = parse_xyz(xyz, atoms, 512);
   if (n_atoms <= 0) {
@@ -633,12 +722,13 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
   double* alpha = (double*)malloc(LBFGS_M * sizeof(double));
   double* trajectory = (double*)malloc((size_t)(traj_cap) * sizeof(double));
   double* step_buf = (double*)malloc((size_t)dim * sizeof(double));
+  int32_t* scc_per_step = (int32_t*)malloc((size_t)(traj_cap) * sizeof(int32_t));
   if (atom_offsets == NULL || atomic_numbers == NULL || positions == NULL ||
       molecular_charges == NULL || unpaired_electrons == NULL || energy == NULL ||
       charges_q == NULL || forces == NULL || scc_iterations == NULL || scc_converged == NULL ||
       per_system_status == NULL || x == NULL || g == NULL || g2 == NULL || x2 == NULL ||
       p == NULL || q == NULL || r == NULL || s_hist == NULL || y_hist == NULL || rho == NULL ||
-      alpha == NULL || trajectory == NULL || step_buf == NULL) {
+      alpha == NULL || trajectory == NULL || step_buf == NULL || scc_per_step == NULL) {
     free(atom_offsets);
     free(atomic_numbers);
     free(positions);
@@ -663,6 +753,7 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
     free(alpha);
     free(trajectory);
     free(step_buf);
+    free(scc_per_step);
     return error_json("err_alloc", NULL);
   }
 
@@ -695,6 +786,7 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
 
   xtbloom_compute_options_t options;
   xtbloom_compute_options_init(&options, sizeof(options));
+  options.model = (xtbloom_model_t)model;
   options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES | XTBLOOM_COMPUTE_FORCES;
   if (scc_max_iterations > 0) {
     options.max_scc_iterations = scc_max_iterations;
@@ -729,17 +821,27 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
   int steps = 0;
   const char* fail_code = NULL;
   const char* fail_reason = NULL;
+  WebSccStats scc_stats;
+  memset(&scc_stats, 0, sizeof(scc_stats));
 
-  /* initial point: compute energy + gradient */
+  /* The first evaluation of an optimization run always starts SCC fresh.
+   * The accepted FRESH attempt consumes any checkpoint retained by a previous
+   * run, so a new optimization never inherits an older run's electronic state
+   * and the first step cannot reuse a stale warm guess. */
+  g_warm_ready = 0;
   w_copy(positions, x, dim);
-  const xtbloom_status_t initial_status = xtbloom_compute(g_context, &batch, &options, &result);
+  const xtbloom_status_t initial_status =
+      compute_adaptive(g_context, &batch, &options, &result, 0, &scc_stats);
   if (initial_status != XTBLOOM_STATUS_SUCCESS || *per_system_status != XTBLOOM_STATUS_SUCCESS) {
+    g_warm_ready = 0;
     fail_code = "err_initial_calc";
     fail_reason = initial_status != XTBLOOM_STATUS_SUCCESS
                       ? xtbloom_get_last_error()
                       : xtbloom_status_string(*per_system_status);
     goto done;
   }
+  g_warm_ready = (initial_status == XTBLOOM_STATUS_SUCCESS &&
+                  *per_system_status == XTBLOOM_STATUS_SUCCESS && *scc_converged == 1u);
   f = energy[0];
   for (int i = 0; i < dim; ++i) {
     g[i] = -forces[i]; /* gradient = -force, Eh/bohr */
@@ -749,6 +851,7 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
     goto done;
   }
   trajectory[0] = f;
+  scc_per_step[0] = *scc_iterations;
 
   for (steps = 0; steps < opt_max_iterations; ++steps) {
     if (w_maxabs(g, dim) < grad_tol) {
@@ -809,8 +912,10 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
         x2[j] = x[j] + step * p[j];
         positions[j] = x2[j];
       }
-      const xtbloom_status_t step_status = xtbloom_compute(g_context, &batch, &options, &result);
+      const xtbloom_status_t step_status =
+          compute_adaptive(g_context, &batch, &options, &result, 1, &scc_stats);
       if (step_status != XTBLOOM_STATUS_SUCCESS || *per_system_status != XTBLOOM_STATUS_SUCCESS) {
+        g_warm_ready = 0;
         fail_code = "err_step_sp";
         fail_reason = step_status != XTBLOOM_STATUS_SUCCESS
                           ? xtbloom_get_last_error()
@@ -820,6 +925,8 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
         }
         goto done;
       }
+      g_warm_ready = (step_status == XTBLOOM_STATUS_SUCCESS &&
+                      *per_system_status == XTBLOOM_STATUS_SUCCESS && *scc_converged == 1u);
       const double f2 = energy[0];
       if (isfinite(f2) && f2 <= f + c1 * step * gpg) {
         for (int j = 0; j < dim; ++j) {
@@ -852,6 +959,11 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
       goto done;
     }
     trajectory[steps + 1] = f;
+    /* SCC iteration count for the accepted point (the current solve
+     * published energy/scc_iterations, which is the accepted line-search
+     * trial's solve). Reported alongside the trajectory to make warm-start
+     * effectiveness observable. */
+    scc_per_step[steps + 1] = *scc_iterations;
     if (g_optimize_step_fn != NULL) {
       for (int j = 0; j < dim; ++j) {
         step_buf[j] = x[j] / BOHR_PER_ANGSTROM;
@@ -866,10 +978,18 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
 done:
   /* --- serialize --- */
   if (fail_code != NULL) {
+    /* A failed run must not leave a consumable warm state behind: the next
+     * calculation (fresh single point or a new optimization) never inherits
+     * the interrupted run's electronic state. */
+    g_warm_ready = 0;
     error_json(fail_code, fail_reason != NULL && *fail_reason ? fail_reason : NULL);
   } else {
     g_result.len = 0;
-    sb_puts(&g_result, "{\"ok\":1,\"converged\":");
+    sb_puts(&g_result, "{\"ok\":1,\"model\":");
+    sb_puti(&g_result, model);
+    sb_puts(&g_result, ",\"method\":");
+    sb_put_json_string(&g_result, model_name(model));
+    sb_puts(&g_result, ",\"converged\":");
     sb_puti(&g_result, converged);
     sb_puts(&g_result, ",\"iterations\":");
     sb_puti(&g_result, steps);
@@ -886,7 +1006,22 @@ done:
       }
       sb_putd(&g_result, trajectory[i]);
     }
-    sb_puts(&g_result, "],\"geometry\":\"");
+    sb_puts(&g_result, "],\"scc_iterations\":[");
+    for (int i = 0; i <= steps; ++i) {
+      if (i) {
+        sb_putc(&g_result, ',');
+      }
+      sb_puti(&g_result, scc_per_step[i]);
+    }
+    sb_puts(&g_result, "],\"scc_iterations_total\":");
+    sb_puti(&g_result, scc_stats.iterations);
+    sb_puts(&g_result, ",\"scc_fresh_solves\":");
+    sb_puti(&g_result, scc_stats.fresh_solves);
+    sb_puts(&g_result, ",\"scc_warm_solves\":");
+    sb_puti(&g_result, scc_stats.warm_solves);
+    sb_puts(&g_result, ",\"scc_warm_fallbacks\":");
+    sb_puti(&g_result, scc_stats.warm_fallbacks);
+    sb_puts(&g_result, ",\"geometry\":\"");
     for (int i = 0; i < n_atoms; ++i) {
       if (i) {
         sb_puts(&g_result, "\\n");
@@ -953,6 +1088,7 @@ done:
   free(alpha);
   free(trajectory);
   free(step_buf);
+  free(scc_per_step);
   return sb_finish(&g_result);
 }
 

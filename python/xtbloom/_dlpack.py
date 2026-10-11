@@ -359,6 +359,7 @@ def consume_from_dlpack(
     expected_dtype: np.dtype,
     expected_shape: Sequence[int],
     stream: int | None,
+    expected_cuda_device: int | None = None,
     copy: bool = False,
     writable_required: bool = False,
     writable_hint: bool | None = None,
@@ -376,6 +377,10 @@ def consume_from_dlpack(
     stream
         The xTBloom context's native CUDA stream pointer, or ``None`` for the
         legacy default stream.  Only meaningful for CUDA producers.
+    expected_cuda_device
+        The resolved context device when a CUDA stream belongs to a specific
+        xTBloom context.  A foreign producer is rejected before ``__dlpack__``
+        can observe that stream handle.
     copy
         When ``True`` the producer may create a contiguous copy; otherwise a
         non-contiguous/unaligned view raises :class:`BufferError` instead of
@@ -418,11 +423,30 @@ def consume_from_dlpack(
             f"DLPack device type {device_type} is not supported by xTBloom "
             "(only CPU, CPU-pinned host memory, and CUDA device memory are usable)"
         )
+    if (
+        device_type == _DLPACK_DEVICE_CUDA
+        and expected_cuda_device is not None
+        and int(device_id) != int(expected_cuda_device)
+    ):
+        raise XTBloomNotSupportedError(
+            f"CUDA array on device {device_id} does not match the context's "
+            f"resolved device {expected_cuda_device}"
+        )
 
     stream_value = _stream_argument(stream, device_type)
-    capsule = _produce_capsule(
-        export_producer, stream_value, copy and not copied_by_consumer
+    # CUDA's current device is thread-local and is independent of the xTBloom
+    # context device.  PyTorch and other producers may require their array's
+    # device to be current during __dlpack__; restore the caller device before
+    # parsing the capsule or entering native validation/compute.
+    device_scope = (
+        library._cuda_device_scope(device_id)
+        if device_type == _DLPACK_DEVICE_CUDA
+        else contextlib.nullcontext()
     )
+    with device_scope:
+        capsule = _produce_capsule(
+            export_producer, stream_value, copy and not copied_by_consumer
+        )
     versioned = bool(_pyapi.PyCapsule_IsValid(capsule, _CAPSULE_NAME_VERSIONED))
     legacy = bool(_pyapi.PyCapsule_IsValid(capsule, _CAPSULE_NAME))
     if not versioned and not legacy:

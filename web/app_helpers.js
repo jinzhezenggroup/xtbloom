@@ -313,6 +313,357 @@ export async function runWithRetries(
   throw new Error("retry loop exhausted");
 }
 
+/* Elements 1..103, index aligned with atomic number. This is the same table
+ * as the C web adapter (web/xtbloom_web.c), so the inline preview accepts
+ * exactly the structures the wasm engine can calculate. */
+export const ELEMENT_SYMBOLS = [
+  "", "H","He","Li","Be","B","C","N","O","F","Ne","Na","Mg","Al","Si","P","S","Cl","Ar",
+  "K","Ca","Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+  "Rb","Sr","Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te","I","Xe",
+  "Cs","Ba","La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+  "Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn","Fr","Ra","Ac",
+  "Th","Pa","U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr",
+];
+
+/* Case-insensitive element lookup mirroring symbol_to_z in web/xtbloom_web.c:
+ * title-case the first letter, lowercase the second, then compare to the
+ * reference table. Returns the atomic number or 0 when unknown. */
+function elementSymbolToZ(symbol) {
+  const normalized = String(symbol || "").slice(0, 2);
+  if (!normalized) return 0;
+  let key = normalized[0].toUpperCase();
+  if (normalized.length > 1) key += normalized[1].toLowerCase();
+  const z = ELEMENT_SYMBOLS.indexOf(key);
+  return z > 0 && z <= ELEMENT_SYMBOLS.length - 1 ? z : 0;
+}
+
+/* Convert parsed atoms back to canonical XYZ text ("Symbol x y z", angstrom)
+ * for the 3D viewer, so numeric atomic numbers ("8 0 0 0") and non-title-case
+ * symbols render the same way the engine interprets them. */
+export function xyzAtomsToText(atoms) {
+  return atoms.map((atom) =>
+    `${atom.symbol} ${atom.x} ${atom.y} ${atom.z}`,
+  ).join("\n");
+}
+
+/* A small ownership primitive for async UI work. Advancing the revision
+ * supersedes every captured token, while release() succeeds only for the task
+ * that still owns the current revision. This prevents an old finally block
+ * from clearing the busy state of work started after Reset. */
+export function createRevisionOwner() {
+  let revision = 0;
+  let activeOwner = null;
+  return {
+    capture: () => revision,
+    isCurrent: (token) => token === revision,
+    advance() {
+      revision += 1;
+      activeOwner = null;
+      return revision;
+    },
+    claim(token = revision) {
+      if (token !== revision || activeOwner !== null) return false;
+      activeOwner = token;
+      return true;
+    },
+    release(token) {
+      if (token !== revision || activeOwner !== token) return false;
+      activeOwner = null;
+      return true;
+    },
+    isBusy: () => activeOwner === revision,
+  };
+}
+
+/* Own the optional OpenChemLib Worker as one restartable generation. SMILES
+ * conversion is synchronous inside the Worker, so cancellation must terminate
+ * that Worker rather than merely abandon the page-side Promise. Capturing both
+ * the Worker object and its generation prevents queued events from an older
+ * instance from changing the replacement's state. */
+export function createSmilesWorkerClient({
+  createWorker,
+  onStateChange = () => {},
+  loadTimeoutMs = 60000,
+  generationTimeoutMs = 120000,
+  setTimer = (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimer = (timer) => clearTimeout(timer),
+} = {}) {
+  if (typeof createWorker !== "function") {
+    throw new TypeError("createWorker must be a function");
+  }
+
+  let worker = null;
+  let state = "idle";
+  let generation = 0;
+  let loadTimer = null;
+  let requestSequence = 0;
+  let disposed = false;
+  let recoveryStatus = null;
+  const pending = new Map();
+
+  function codedError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  function clearLoadTimer() {
+    if (loadTimer !== null) {
+      clearTimer(loadTimer);
+      loadTimer = null;
+    }
+  }
+
+  function publishState(nextState, detail = {}) {
+    state = nextState;
+    onStateChange({ state: nextState, recoveryStatus, ...detail });
+  }
+
+  function rejectPending(error) {
+    for (const entry of pending.values()) {
+      clearTimer(entry.timer);
+      entry.reject(error);
+    }
+    pending.clear();
+  }
+
+  function terminateCurrent(error) {
+    clearLoadTimer();
+    if (worker) worker.terminate();
+    worker = null;
+    rejectPending(error);
+  }
+
+  function failWorker(candidate, workerGeneration, error) {
+    if (candidate !== worker || workerGeneration !== generation || disposed) return;
+    terminateCurrent(error);
+    publishState("error", { error });
+  }
+
+  function start(
+    reason = "start",
+    pendingError = new DOMException("SMILES worker restarted", "AbortError"),
+    statusToRestore = null,
+  ) {
+    if (disposed) throw new Error("SMILES worker client is disposed");
+    generation += 1;
+    terminateCurrent(pendingError);
+    recoveryStatus = statusToRestore;
+    publishState("loading", { reason });
+
+    let candidate;
+    try {
+      candidate = createWorker();
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      publishState("error", { error });
+      return;
+    }
+    worker = candidate;
+    const workerGeneration = generation;
+
+    candidate.onmessage = (event) => {
+      if (candidate !== worker || workerGeneration !== generation || disposed) return;
+      const message = event.data;
+      if (!message || typeof message !== "object") return;
+      if (message.type === "ready") {
+        clearLoadTimer();
+        publishState("ready", { version: message.version });
+        recoveryStatus = null;
+        return;
+      }
+      if (message.type === "load-error") {
+        failWorker(
+          candidate,
+          workerGeneration,
+          new Error(String(message.error || "OpenChemLib load failed")),
+        );
+        return;
+      }
+      if (message.type !== "result") return;
+      const entry = pending.get(message.id);
+      if (!entry) return;
+      pending.delete(message.id);
+      clearTimer(entry.timer);
+      if (message.ok) {
+        entry.resolve(message.result);
+      } else {
+        entry.reject(codedError(
+          message.errorCode || "smiles_err_unknown",
+          String(message.error || "SMILES generation failed"),
+        ));
+      }
+    };
+    candidate.onerror = (event) => {
+      failWorker(
+        candidate,
+        workerGeneration,
+        new Error((event && event.message) || "SMILES worker error"),
+      );
+    };
+    loadTimer = setTimer(() => {
+      failWorker(
+        candidate,
+        workerGeneration,
+        new Error("OpenChemLib resource download timed out"),
+      );
+    }, loadTimeoutMs);
+  }
+
+  function request(smiles) {
+    if (state !== "ready" || !worker || typeof worker.postMessage !== "function") {
+      return Promise.reject(codedError("smiles_err_library", "OpenChemLib is not ready"));
+    }
+    const id = ++requestSequence;
+    const candidate = worker;
+    const workerGeneration = generation;
+    return new Promise((resolve, reject) => {
+      const timer = setTimer(() => {
+        const entry = pending.get(id);
+        if (!entry || candidate !== worker || workerGeneration !== generation) return;
+        pending.delete(id);
+        const error = codedError("smiles_err_timeout", "SMILES generation timed out");
+        entry.reject(error);
+        /* OpenChemLib cannot interrupt its synchronous conformer search. Kill
+         * the abandoned computation and transparently prepare a clean Worker
+         * so the next click is a real generation retry. */
+        start("generation-timeout", error, {
+          key: "smiles_err_timeout",
+          tone: "err",
+        });
+      }, generationTimeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      try {
+        candidate.postMessage({ type: "generate", id, smiles });
+      } catch (cause) {
+        pending.delete(id);
+        clearTimer(timer);
+        const error = codedError(
+          "smiles_err_library",
+          "SMILES worker rejected the request",
+        );
+        error.cause = cause;
+        reject(error);
+        /* A synchronous postMessage failure means this Worker can no longer
+         * be trusted for the retry. Rebuild it just as we do after a timeout,
+         * while preserving the localized failure for the current request. */
+        start("post-failed", error);
+      }
+    });
+  }
+
+  function cancel(error = new DOMException("SMILES generation cancelled", "AbortError")) {
+    if (pending.size === 0) return false;
+    start("cancelled", error);
+    return true;
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    generation += 1;
+    terminateCurrent(new DOMException("SMILES worker disposed", "AbortError"));
+    state = "disposed";
+  }
+
+  return {
+    start,
+    request,
+    cancel,
+    dispose,
+    getState: () => state,
+    hasPending: () => pending.size !== 0,
+  };
+}
+
+/* Debounce only publication, not validation. cancel() invalidates the queued
+ * callback even if a test scheduler later invokes the cleared timer, matching
+ * browser races where an already-queued callback may still run. */
+export function createDebouncedPublisher(
+  publish,
+  {
+    delayMs = 0,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+  } = {},
+) {
+  if (typeof publish !== "function") throw new TypeError("publish must be a function");
+  const delay = Math.max(0, Number(delayMs) || 0);
+  let generation = 0;
+  let timer = null;
+
+  function cancel() {
+    generation += 1;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+  }
+
+  return {
+    cancel,
+    schedule(value) {
+      cancel();
+      const owner = generation;
+      timer = setTimer(() => {
+        timer = null;
+        if (owner === generation) publish(value);
+      }, delay);
+    },
+  };
+}
+
+/* Input validation for the live 3D preview, independent of the compute path.
+ * It accepts ordinary surrounding whitespace and blank lines, then callers
+ * submit xyzAtomsToText(atoms) rather than the raw editor text. That canonical
+ * form obeys parse_xyz in web/xtbloom_web.c even where its line scanner rejects
+ * leading or whitespace-only rows. Additional trailing tokens are ignored by
+ * both parsers. The front end is deliberately stricter about coordinates:
+ * they must be finite, so unusable structures are rejected before execution.
+ *
+ * Returns { ok: true, atoms, atomCount } or
+ *         { ok: false, errorCode, messageVars } where errorCode is one of
+ *         "no_xyz" | "err_xyz_parse" | "err_xyz_too_many" | "err_xyz_element".
+ */
+export function parseXyzCoordinates(xyz, { maxAtoms = 512 } = {}) {
+  const max = Math.max(1, Math.trunc(Number(maxAtoms) || 512));
+  const lines = String(xyz || "").split(/\r?\n/);
+  const atoms = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const tokens = trimmed.split(/\s+/);
+    if (tokens.length < 4) {
+      return { ok: false, errorCode: "err_xyz_parse" };
+    }
+    const symbolToken = tokens[0];
+    let symbol;
+    if (/^[+-]?\d+$/.test(symbolToken)) {
+      const z = Number(symbolToken);
+      if (!Number.isInteger(z) || z < 1 || z > ELEMENT_SYMBOLS.length - 1) {
+        return { ok: false, errorCode: "err_xyz_element", messageVars: { sym: symbolToken } };
+      }
+      symbol = ELEMENT_SYMBOLS[z];
+    } else {
+      const z = elementSymbolToZ(symbolToken);
+      if (z === 0) {
+        return { ok: false, errorCode: "err_xyz_element", messageVars: { sym: symbolToken } };
+      }
+      symbol = ELEMENT_SYMBOLS[z];
+    }
+    if (atoms.length >= max) {
+      return { ok: false, errorCode: "err_xyz_too_many" };
+    }
+    const coords = tokens.slice(1, 4).map(Number);
+    if (coords.some((value) => !Number.isFinite(value))) {
+      return { ok: false, errorCode: "err_xyz_parse" };
+    }
+    atoms.push({ symbol, x: coords[0], y: coords[1], z: coords[2] });
+  }
+  if (atoms.length === 0) {
+    return { ok: false, errorCode: "no_xyz" };
+  }
+  return { ok: true, atoms, atomCount: atoms.length };
+}
+
 /* URLSearchParams performs the required percent decoding. Literal '+' in a
  * charged SMILES must therefore be encoded as %2B, as required by URL syntax. */
 export function readSmilesQuery(url, maxLength = 2048) {

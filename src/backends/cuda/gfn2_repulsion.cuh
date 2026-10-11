@@ -7,6 +7,8 @@
 
 #include <cstdint>
 
+#include "backends/common/xtb_model.hpp"
+
 namespace xtbloom::detail::cuda {
 
 /*
@@ -33,6 +35,13 @@ struct Gfn2RepulsionDeviceBatch {
   const std::int64_t* atom_offsets = nullptr;
   const std::int32_t* atomic_numbers = nullptr;
   const double* positions = nullptr;
+  /* Model extension fields are appended to preserve existing aggregate
+   * initializers for the established GFN2 descriptor prefix. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
+  const double* sqrt_alpha = nullptr;
+  const double* effective_charge = nullptr;
+  std::int64_t sqrt_alpha_elements = 0;
+  std::int64_t effective_charge_elements = 0;
 };
 
 /*

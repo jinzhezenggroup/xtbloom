@@ -37,6 +37,7 @@ using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceWorkspace;
 using xtbloom::detail::cuda::kGfn2SccClassicalAllComponents;
 using xtbloom::detail::cuda::kGfn2SccFreeEnergyDiagnosticComponents;
 using xtbloom::detail::cuda::kGfn2SccFreeEnergyInputComponents;
+using xtbloom::detail::cuda::kGfn2SccFreeEnergyStorageComponents;
 using xtbloom::detail::cuda::reset_gfn2_scc_classical_energy_device_errors_cuda;
 using xtbloom::detail::cuda::reset_gfn2_scc_energy_device_errors_cuda;
 using xtbloom::detail::cuda::reset_gfn2_scc_free_energy_device_errors_cuda;
@@ -212,8 +213,7 @@ struct DeviceCase {
 
   explicit DeviceCase(const HostCase& host)
       : active(host.active.size()),
-        scratch(host.active.size() *
-                static_cast<std::size_t>(kGfn2SccFreeEnergyDiagnosticComponents)),
+        scratch(host.active.size() * static_cast<std::size_t>(kGfn2SccFreeEnergyStorageComponents)),
         sequence_active(1u),
         system_errors(host.active.size()),
         device_error(1u) {
@@ -285,8 +285,8 @@ struct DeviceCase {
     diagnostics.free_energy = outputs[10].get();
     diagnostics.free_energy_elements = count;
     diagnostics.plan_token = kPlanToken;
-    workspace = {scratch.get(), static_cast<std::int64_t>(scratch.size()), sequence_active.get(), 1,
-                 kPlanToken};
+    workspace = {scratch.get(), count * kGfn2SccFreeEnergyDiagnosticComponents,
+                 sequence_active.get(), 1, kPlanToken};
   }
 
   cudaError_t fill_outputs(double value, cudaStream_t stream = nullptr) {
@@ -442,6 +442,108 @@ int test_final_fma_rounding_counterexample() {
   CHECK(output[9][0] == host.inputs[0][0]);
   CHECK(output[10][0] == host.expected[10][0]);
   CHECK(output[10][0] != unfused_free_energy);
+  return 0;
+}
+
+int test_electric_field_component_order_and_nonfinite_peer() {
+  HostCase host = make_case(2u);
+  DeviceCase device(host);
+  const std::vector<double> field{0x1.8p-3, -0x1.4p-4};
+  DeviceBuffer<double> device_field(field.size());
+  DeviceBuffer<double> field_output(field.size());
+  CHECK(device_field.upload(field) == cudaSuccess);
+  CHECK(field_output.upload(std::vector<double>(2, kSentinel)) == cudaSuccess);
+  device.input.electric_field = device_field.get();
+  device.input.electric_field_elements = 2;
+  device.diagnostics.electric_field = field_output.get();
+  device.diagnostics.electric_field_elements = 2;
+  device.workspace.diagnostic_elements =
+      2 * xtbloom::detail::cuda::kGfn2SccFreeEnergyStorageComponents;
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(launch(device) == 0);
+
+  std::array<std::vector<double>, kGfn2SccFreeEnergyDiagnosticComponents> output;
+  CHECK(download_outputs(device, output) == 0);
+  std::vector<double> field_diagnostic;
+  CHECK(field_output.download(field_diagnostic) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  for (std::size_t system = 0; system < 2u; ++system) {
+    double internal = host.inputs[0][system];
+    internal = cpu_add(internal, host.inputs[2][system]);
+    internal = cpu_add(internal, host.inputs[3][system]);
+    internal = cpu_add(internal, host.inputs[4][system]);
+    internal = cpu_add(internal, host.inputs[5][system]);
+    internal = cpu_add(internal, host.inputs[6][system]);
+    internal = cpu_add(internal, host.inputs[7][system]);
+    internal = cpu_add(internal, field[system]);
+    internal = cpu_add(internal, host.inputs[8][system]);
+    const double expected_free = std::fma(-host.temperature, host.inputs[1][system], internal);
+    CHECK(field_diagnostic[system] == field[system]);
+    CHECK(output[9][system] == internal);
+    CHECK(output[10][system] == expected_free);
+  }
+
+  const std::vector<double> bad_field{field[0], std::numeric_limits<double>::quiet_NaN()};
+  CHECK(device_field.upload(bad_field) == cudaSuccess);
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(field_output.upload(std::vector<double>(2, kSentinel)) == cudaSuccess);
+  CHECK(launch(device) == 0);
+  std::vector<std::uint32_t> errors;
+  CHECK(device.system_errors.download(errors) == cudaSuccess);
+  CHECK(field_output.download(field_diagnostic) == cudaSuccess);
+  CHECK(download_outputs(device, output) == 0);
+  CHECK(errors[0] == 0u);
+  CHECK(errors[1] ==
+        static_cast<std::uint32_t>(Gfn2SccFreeEnergyDeviceError::kNonfiniteElectricField));
+  CHECK(field_diagnostic[0] == field[0]);
+  CHECK(field_diagnostic[1] == kSentinel && output[9][1] == kSentinel &&
+        output[10][1] == kSentinel);
+  return 0;
+}
+
+int test_output_only_electric_field_requires_full_scratch() {
+  HostCase host = make_case(1u);
+  DeviceCase device(host);
+  DeviceBuffer<double> field_output(1u);
+
+  /* A requested diagnostic is independent of field attachment. With no field
+   * input, the complete energy transaction publishes an exact zero in the
+   * appended diagnostic slot and otherwise preserves the field-free result. */
+  CHECK(device.input.electric_field == nullptr && device.input.electric_field_elements == 0);
+  device.diagnostics.electric_field = field_output.get();
+  device.diagnostics.electric_field_elements = 1;
+  device.workspace.diagnostic_elements = kGfn2SccFreeEnergyStorageComponents;
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(field_output.upload({kSentinel}) == cudaSuccess);
+  CHECK(launch(device) == 0);
+
+  std::array<std::vector<double>, kGfn2SccFreeEnergyDiagnosticComponents> output;
+  std::vector<double> field_diagnostic;
+  CHECK(download_outputs(device, output) == 0);
+  CHECK(field_output.download(field_diagnostic) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  for (std::size_t component = 0; component < output.size(); ++component) {
+    CHECK(output[component] == host.expected[component]);
+  }
+  CHECK(field_diagnostic == std::vector<double>{0.0});
+
+  /* The appended field slot makes twelve component-major scratch slices
+   * mandatory even when the input field is absent. Reject a one-slice-short
+   * binding synchronously before any caller-visible output can change. */
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(field_output.upload({kSentinel}) == cudaSuccess);
+  device.workspace.diagnostic_elements = kGfn2SccFreeEnergyStorageComponents - 1;
+  CHECK(compose_gfn2_scc_free_energy_cuda(
+            device.batch, device.input, device.activity, device.diagnostics, device.workspace,
+            device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
+  CHECK(download_outputs(device, output) == 0);
+  CHECK(field_output.download(field_diagnostic) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  for (const auto& component : output) {
+    CHECK(std::all_of(component.begin(), component.end(),
+                      [](double value) { return value == kSentinel; }));
+  }
+  CHECK(field_diagnostic == std::vector<double>{kSentinel});
   return 0;
 }
 
@@ -917,10 +1019,13 @@ int test_cuda_graph_replay() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 9> tests{
+  const std::array<int (*)(), 11> tests{
       {test_batch_parity_custom_stream_and_disabled_terms,
        test_exact_cpu_association_and_subtotal_counterexamples,
-       test_final_fma_rounding_counterexample, test_existing_cuda_stage_output_binding,
+       test_final_fma_rounding_counterexample,
+       test_electric_field_component_order_and_nonfinite_peer,
+       test_output_only_electric_field_requires_full_scratch,
+       test_existing_cuda_stage_output_binding,
        test_nonfinite_peer_isolation_inactive_and_upstream_system_error,
        test_intermediate_and_final_fma_overflow_and_sticky_plan_error,
        test_hostile_metadata_alias_token_misalignment_and_reset,

@@ -12,7 +12,7 @@
 
 namespace xtbloom::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2PublicResultBridgeAbiVersion = 1u;
+inline constexpr std::uint32_t kGfn2PublicResultBridgeAbiVersion = 2u;
 
 /*
  * Aggregate bridge failures are control-plane failures. A non-success value
@@ -29,6 +29,10 @@ enum class Gfn2PublicResultBridgeError : std::uint32_t {
   kInvalidExtents = 6u,
   kInvalidDestinations = 7u,
   kRequestTopologyMismatch = 8u,
+  kRequestInvalidArgument = 9u,
+  kRequestNotSupported = 10u,
+  kRequestNotImplemented = 11u,
+  kRequestWarmIncompatible = 12u,
 };
 
 /* Host and CUDA outputs are both staged before the caller-visible commit. */
@@ -72,12 +76,17 @@ struct Gfn2PublicResultBridgeDeviceInput {
 
   /* Control values produced by internal inference publication. */
   const std::uint32_t* publication_plan_error = nullptr;
-  /* Stream-ordered fixed-plan validation. Nonzero suppresses every caller
-   * destination without requiring a host admission fence. */
+  /* Stream-ordered request validation uses the shared priority codes in
+   * gfn2_device_admission.cuh. All failures suppress caller destinations
+   * without requiring a host admission fence. The historical field name is
+   * retained to avoid unnecessary internal descriptor churn. */
   const std::uint32_t* request_topology_error = nullptr;
   const std::uint64_t* publication_epoch_snapshot = nullptr;
   const std::uint64_t* current_geometry_epoch = nullptr;
   std::uint64_t plan_token = 0u;
+
+  const double* dipole_moments = nullptr;
+  std::int64_t dipole_moment_elements = 0;
 };
 
 /*
@@ -101,6 +110,9 @@ struct Gfn2PublicResultBridgeDeviceStaging {
   xtbloom_status_t* system_statuses = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
+
+  double* dipole_moments = nullptr;
+  std::int64_t dipole_moment_elements = 0;
 };
 
 /*
@@ -123,6 +135,7 @@ struct Gfn2PublicResultBridgeDeviceDestinations {
   Gfn2PublicResultBridgeDestination converged{};
   Gfn2PublicResultBridgeDestination system_statuses{};
   std::uint64_t plan_token = 0u;
+  Gfn2PublicResultBridgeDestination dipole_moments{};
 };
 
 struct Gfn2PublicResultBridgeHostBuffer {
@@ -147,6 +160,7 @@ struct Gfn2PublicResultBridgeHostStaging {
   std::int64_t control_elements = 0;
   std::uint32_t* pending_result_flags = nullptr;
   std::uint64_t plan_token = 0u;
+  Gfn2PublicResultBridgeHostBuffer dipole_moments{};
 };
 
 /* One device-produced record is downloaded after all requested host results. */

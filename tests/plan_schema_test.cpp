@@ -48,6 +48,7 @@ using xtbloom::detail::project_gfn2_ao_matrix_projection_host;
 using xtbloom::detail::project_gfn2_atom_projection_host;
 using xtbloom::detail::project_gfn2_element_identity_projection_host;
 using xtbloom::detail::project_gfn2_packed_all_pair_projection_host;
+using xtbloom::detail::project_gfn2_pair_list_role_binding;
 using xtbloom::detail::project_gfn2_shell_ownership_projection_host;
 using xtbloom::detail::validate_gfn2_ao_bucket_projection_binding;
 using xtbloom::detail::validate_gfn2_ao_matrix_projection_binding;
@@ -526,6 +527,35 @@ struct HostPairListConsumer {
   }
 };
 
+bool same_pair_list_lease(const Gfn2PairListConsumerView& source,
+                          const Gfn2PairListConsumerView& projection) {
+  return projection.memory_space == source.memory_space && projection.state == source.state &&
+         projection.pair_map_kind == source.pair_map_kind &&
+         projection.plan_token == source.plan_token &&
+         projection.list_builder_cutoff_bohr == source.list_builder_cutoff_bohr &&
+         projection.batch_size == source.batch_size &&
+         projection.total_atoms == source.total_atoms &&
+         projection.max_pairs_per_system == source.max_pairs_per_system &&
+         projection.max_neighbors_per_atom == source.max_neighbors_per_atom &&
+         projection.pair_offset_count == source.pair_offset_count &&
+         projection.neighbor_offset_count == source.neighbor_offset_count &&
+         projection.pair_count == source.pair_count &&
+         projection.neighbor_count == source.neighbor_count &&
+         projection.pair_offsets == source.pair_offsets && projection.pairs == source.pairs &&
+         projection.pair_count_elements == source.pair_count_elements &&
+         projection.neighbor_count_elements == source.neighbor_count_elements &&
+         projection.pair_counts == source.pair_counts &&
+         projection.neighbor_counts == source.neighbor_counts &&
+         projection.neighbor_offsets == source.neighbor_offsets &&
+         projection.neighbors == source.neighbors &&
+         projection.committed_generation_count == source.committed_generation_count &&
+         projection.eligible_mask_count == source.eligible_mask_count &&
+         projection.active_mask_count == source.active_mask_count &&
+         projection.committed_generations == source.committed_generations &&
+         projection.eligible_mask == source.eligible_mask &&
+         projection.active_mask == source.active_mask;
+}
+
 HostPairListConsumer make_pair_list_consumer(const HostTopology& topology,
                                              std::uint64_t generation) {
   HostPairListConsumer consumer;
@@ -828,6 +858,92 @@ int test_pair_list_consumer() {
   return 0;
 }
 
+int test_pair_list_role_projection() {
+  HostTopology topology = make_topology(8, /*explicit_pairs=*/true);
+  HostPairListConsumer consumer = make_pair_list_consumer(topology, kGeneration);
+  std::vector<std::uint8_t> active_mask(static_cast<std::size_t>(topology.view.batch_size), 1u);
+  consumer.view.active_mask_count = topology.view.batch_size;
+  consumer.view.active_mask = active_mask.data();
+  /* One canonical 50-bohr-capable source lease can be specialized for every
+   * role without duplicating or rebasing any per-peer storage. */
+  consumer.view.list_builder_cutoff_bohr = 50.0;
+
+  struct RoleCutoffCase {
+    Gfn2PairListRole role;
+    double cutoff;
+  };
+  for (const RoleCutoffCase& role_case : {
+           RoleCutoffCase{Gfn2PairListRole::kCoordination, 25.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4Coordination, 30.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4TwoBody, 50.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4Atm, 25.0},
+       }) {
+    Gfn2PairListConsumerView projection{};
+    CHECK(project_gfn2_pair_list_role_binding(topology.view, consumer.view, role_case.role,
+                                              Gfn2PlanMemorySpace::kHost, projection)
+              .error == Gfn2PlanSchemaError::kSuccess);
+    CHECK(projection.role == role_case.role);
+    CHECK(projection.cutoff_bohr == role_case.cutoff);
+    CHECK(same_pair_list_lease(consumer.view, projection));
+    CHECK(validate_gfn2_pair_list_consumer_binding(topology.view, projection,
+                                                   Gfn2PlanMemorySpace::kHost)
+              .error == Gfn2PlanSchemaError::kSuccess);
+  }
+
+  Gfn2PairListConsumerView projection = consumer.view;
+  Gfn2PairListConsumerView invalid_source = consumer.view;
+  invalid_source.plan_token += 1u;
+  CHECK(project_gfn2_pair_list_role_binding(topology.view, invalid_source, Gfn2PairListRole::kD4Atm,
+                                            Gfn2PlanMemorySpace::kHost, projection)
+            .error == Gfn2PlanSchemaError::kCrossPlan);
+  CHECK(projection.plan_token == 0u && projection.pairs == nullptr &&
+        projection.committed_generations == nullptr);
+
+  projection = consumer.view;
+  invalid_source = consumer.view;
+  invalid_source.state = Gfn2PairListState::kCandidate;
+  CHECK(project_gfn2_pair_list_role_binding(topology.view, invalid_source,
+                                            Gfn2PairListRole::kCoordination,
+                                            Gfn2PlanMemorySpace::kHost, projection)
+            .error == Gfn2PlanSchemaError::kInvalidPairListState);
+  CHECK(projection.plan_token == 0u && projection.pair_offsets == nullptr);
+
+  projection = consumer.view;
+  CHECK(project_gfn2_pair_list_role_binding(topology.view, consumer.view,
+                                            static_cast<Gfn2PairListRole>(99u),
+                                            Gfn2PlanMemorySpace::kHost, projection)
+            .error == Gfn2PlanSchemaError::kInvalidPairListRole);
+  CHECK(projection.plan_token == 0u && projection.eligible_mask == nullptr);
+
+  projection = consumer.view;
+  invalid_source = consumer.view;
+  invalid_source.role = static_cast<Gfn2PairListRole>(99u);
+  CHECK(project_gfn2_pair_list_role_binding(topology.view, invalid_source,
+                                            Gfn2PairListRole::kCoordination,
+                                            Gfn2PlanMemorySpace::kHost, projection)
+            .error == Gfn2PlanSchemaError::kInvalidPairListRole);
+  CHECK(projection.plan_token == 0u);
+
+  projection = consumer.view;
+  invalid_source = consumer.view;
+  invalid_source.cutoff_bohr = 30.0;  // Non-canonical for kCoordination.
+  CHECK(project_gfn2_pair_list_role_binding(topology.view, invalid_source,
+                                            Gfn2PairListRole::kD4Coordination,
+                                            Gfn2PlanMemorySpace::kHost, projection)
+            .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
+  CHECK(projection.plan_token == 0u);
+
+  projection = consumer.view;
+  invalid_source = consumer.view;
+  invalid_source.list_builder_cutoff_bohr = 30.0;
+  CHECK(project_gfn2_pair_list_role_binding(topology.view, invalid_source,
+                                            Gfn2PairListRole::kD4TwoBody,
+                                            Gfn2PlanMemorySpace::kHost, projection)
+            .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
+  CHECK(projection.plan_token == 0u && projection.active_mask == nullptr);
+  return 0;
+}
+
 int test_projections() {
   static_assert(std::is_trivially_copyable_v<Gfn2AtomProjectionView>);
   static_assert(std::is_standard_layout_v<Gfn2AtomProjectionView>);
@@ -1060,6 +1176,9 @@ int main() {
   }
   if (status == 0) {
     status = test_pair_list_consumer();
+  }
+  if (status == 0) {
+    status = test_pair_list_role_projection();
   }
   if (status == 0) {
     status = test_projections();

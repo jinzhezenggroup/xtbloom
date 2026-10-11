@@ -18,6 +18,7 @@ constexpr double kMinimumDistanceSquared = 1.0e-12;
 constexpr double kFirstSteepness = 10.0;
 constexpr double kSecondSteepness = 20.0;
 constexpr double kSecondRadiusShiftBohr = 2.0;
+constexpr double kGfn1Steepness = 16.0;
 
 struct SystemRanges {
   std::int64_t atom_begin;
@@ -61,20 +62,41 @@ __device__ void record_system_error(std::uint32_t* system_errors, std::int64_t s
   }
 }
 
-/* Stable logistic form of 1/(1+exp(-argument)), matching the CPU reference. */
-__device__ double logistic(double argument) {
+struct LogisticValue {
+  double value;
+  double derivative;
+};
+
+/* Stable logistic value and derivative. Computing both from the same
+ * nonpositive exponential preserves the tiny GFN1 derivative after the value
+ * itself has rounded to one, matching the CPU reference. */
+__device__ LogisticValue logistic_with_derivative(double argument) {
   if (argument >= 0.0) {
     const double exponential = exp(-argument);
-    return 1.0 / (1.0 + exponential);
+    const double denominator = 1.0 + exponential;
+    return {1.0 / denominator, exponential / (denominator * denominator)};
   }
   const double exponential = exp(argument);
-  return exponential / (1.0 + exponential);
+  const double denominator = 1.0 + exponential;
+  return {exponential / denominator, exponential / (denominator * denominator)};
 }
 
-__device__ bool evaluate_pair(double dx, double dy, double dz, double radius, PairValues* values) {
+__device__ double logistic(double argument) { return logistic_with_derivative(argument).value; }
+
+__device__ bool evaluate_pair(XtbModelFlavor model, double dx, double dy, double dz, double radius,
+                              PairValues* values) {
   const double distance_squared = dx * dx + dy * dy + dz * dz;
-  if (!isfinite(distance_squared) || distance_squared < kMinimumDistanceSquared) {
+  if (!isfinite(distance_squared)) {
     return false;
+  }
+
+  if (distance_squared < kMinimumDistanceSquared) {
+    if (model != XtbModelFlavor::kGfn1) return false;
+    /* GFN1 skips sub-threshold coincident pairs. Publish a canonical zero
+     * cache entry so later CN/VJP consumers never observe stale arena data.
+     * Equality remains active, matching the CPU contract. */
+    *values = {};
+    return true;
   }
 
   values->distance = sqrt(distance_squared);
@@ -90,14 +112,24 @@ __device__ bool evaluate_pair(double dx, double dy, double dz, double radius, Pa
   }
 
   const double inverse_distance_squared = values->inverse_distance * values->inverse_distance;
-  const double shifted_radius = radius + kSecondRadiusShiftBohr;
-  const double first = logistic(kFirstSteepness * (radius * values->inverse_distance - 1.0));
-  const double second =
-      logistic(kSecondSteepness * (shifted_radius * values->inverse_distance - 1.0));
-  values->count = first * second;
-  const double derivative = -inverse_distance_squared *
-                            (kFirstSteepness * radius * first * (1.0 - first) * second +
-                             kSecondSteepness * shifted_radius * second * (1.0 - second) * first);
+  double derivative = 0.0;
+  if (model == XtbModelFlavor::kGfn1) {
+    const LogisticValue count =
+        logistic_with_derivative(kGfn1Steepness * (radius * values->inverse_distance - 1.0));
+    values->count = count.value;
+    derivative = -kGfn1Steepness * radius * inverse_distance_squared * count.derivative;
+  } else if (model == XtbModelFlavor::kGfn2) {
+    const double shifted_radius = radius + kSecondRadiusShiftBohr;
+    const double first = logistic(kFirstSteepness * (radius * values->inverse_distance - 1.0));
+    const double second =
+        logistic(kSecondSteepness * (shifted_radius * values->inverse_distance - 1.0));
+    values->count = first * second;
+    derivative = -inverse_distance_squared *
+                 (kFirstSteepness * radius * first * (1.0 - first) * second +
+                  kSecondSteepness * shifted_radius * second * (1.0 - second) * first);
+  } else {
+    return false;
+  }
   values->derivative_over_distance = derivative * values->inverse_distance;
   return values->count >= 0.0 && values->count <= 1.0 && isfinite(values->count) &&
          isfinite(values->derivative_over_distance);
@@ -214,7 +246,7 @@ __global__ void build_pair_cache_kernel(Gfn2GeometryDeviceBatch batch, const dou
       }
       const double radius = batch.covalent_radii[upper] + batch.covalent_radii[lower];
       PairValues values{};
-      if (!evaluate_pair(dx, dy, dz, radius, &values)) {
+      if (!evaluate_pair(batch.model, dx, dy, dz, radius, &values)) {
         const double distance_squared = dx * dx + dy * dy + dz * dz;
         const Gfn2GeometryDeviceError error =
             isfinite(distance_squared) && distance_squared < kMinimumDistanceSquared
@@ -359,7 +391,8 @@ __global__ void coordination_vjp_kernel(
       const double* const data = cache.pair_data + pair * kGfn2GeometryPairDataElements;
       const double radius = batch.covalent_radii[upper] + batch.covalent_radii[lower];
       PairValues expected{};
-      const bool expected_valid = evaluate_pair(data[0], data[1], data[2], radius, &expected);
+      const bool expected_valid =
+          evaluate_pair(batch.model, data[0], data[1], data[2], radius, &expected);
       if (!expected_valid || data[3] != expected.distance || data[4] != expected.inverse_distance ||
           data[5] != expected.count || data[6] != expected.derivative_over_distance) {
         record_system_error(system_errors, system, device_error,
@@ -503,6 +536,7 @@ cudaError_t validate_common(const Gfn2GeometryDeviceBatch& batch,
       batch.atom_offset_elements != batch.batch_size + 1 ||
       batch.pair_offset_elements != batch.batch_size + 1 ||
       batch.covalent_radius_elements < batch.total_atoms || batch.plan_token == 0u ||
+      !valid_xtb_model_flavor(batch.model) ||
       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.pair_offsets, alignof(std::int64_t)) ||
       !required_pointer(batch.covalent_radii, batch.total_atoms) ||

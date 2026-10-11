@@ -828,12 +828,20 @@ __global__ void publish_kernel(Gfn2PairListDeviceBatch batch, std::uint64_t pair
  * Coordination consumer over the published all-direction neighbor ranges.
  * Neighbor lists are canonical (ascending) so the per-atom accumulation order
  * matches the dense geometry cache exactly for retained pairs.
+ *
+ * Device descriptors are passed by value deliberately.  A CUDA kernel
+ * reference parameter is lowered to a pointer to the launcher's host object;
+ * dereferencing that pointer fails on GPUs without host-memory access and can
+ * appear to work only when the platform's heterogeneous-memory support masks
+ * the bug.
  */
-__global__ void evaluate_coordination_kernel(
-    Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
-    std::uint64_t scalar_generation, const Gfn2PairListDeviceCache& cache, double* coordination,
-    const std::uint32_t* sequence_active, std::uint32_t* system_errors,
-    std::uint32_t* device_error) {
+__global__ void evaluate_coordination_kernel(Gfn2PairListDeviceBatch batch, const double* positions,
+                                             const double* covalent_radii,
+                                             std::uint64_t scalar_generation,
+                                             Gfn2PairListDeviceCache cache, double* coordination,
+                                             const std::uint32_t* sequence_active,
+                                             std::uint32_t* system_errors,
+                                             std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   __shared__ SystemRanges ranges;
   __shared__ int valid;
@@ -910,7 +918,7 @@ __global__ void evaluate_coordination_kernel(
  */
 __global__ void preflight_coordination_pairs_kernel(
     Gfn2PairListDeviceBatch batch, const double* positions, const double* covalent_radii,
-    std::uint64_t scalar_generation, const Gfn2PairListDeviceCache& cache,
+    std::uint64_t scalar_generation, Gfn2PairListDeviceCache cache,
     const std::uint32_t* sequence_active, std::uint32_t* system_errors,
     std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);

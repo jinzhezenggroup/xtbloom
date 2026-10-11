@@ -106,7 +106,7 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
                            const std::vector<double>& charges,
                            const std::vector<std::int32_t>& unpaired,
                            const std::vector<std::int32_t>& spins, Evaluation& evaluation,
-                           std::string& error) {
+                           std::string& error, bool enable_single_precision = false) {
   xtbloom::detail::gfn2::BasisPlan basis;
   if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
                                              static_cast<std::int64_t>(atomic_numbers.size()),
@@ -116,7 +116,8 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
           basis, atomic_numbers.data(), charges.data(), unpaired.data(), spins.data(),
           evaluation.layout, error) != XTBLOOM_STATUS_SUCCESS ||
       xtbloom::detail::gfn2::make_eigensolver_plan(evaluation.layout, evaluation.plan, error,
-                                                   1.0e-12) != XTBLOOM_STATUS_SUCCESS) {
+                                                   1.0e-12, enable_single_precision) !=
+          XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -189,7 +190,7 @@ int run_literal_generalized_eigenproblem(const CpuLinearAlgebraBackend& backend,
 int run_literal_single_precision_generalized_eigenproblem(const CpuLinearAlgebraBackend& backend,
                                                           std::string& error) {
   Evaluation evaluation;
-  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {2}, evaluation, error));
+  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {2}, evaluation, error, true));
   const std::vector<double> overlap{1.2, 0.15, 0.15, 0.9};
   const std::vector<double> hamiltonian{-0.8, 0.13, 0.13, 0.25, -0.55, -0.08, -0.08, 0.42};
   CHECK(backend.single_precision_ready());
@@ -424,7 +425,7 @@ int run_expect_missing_shim() {
 #if defined(XTBLOOM_TEST_HAS_WHEEL_OPENBLAS)
   CHECK(error.find("private wheel OpenBLAS provider") != std::string::npos);
 #else
-  CHECK(error.find("host-isolated MKL provider shim") != std::string::npos);
+  CHECK(error.find("host-isolated MKL pthread bridge/provider shim") != std::string::npos);
 #endif
   return 0;
 }

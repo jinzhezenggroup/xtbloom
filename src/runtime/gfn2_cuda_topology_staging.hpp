@@ -36,6 +36,7 @@ enum class Gfn2CudaTopologyStagingError : std::uint32_t {
   kAllocationFailed = 7u,
   kCudaError = 8u,
   kNoCandidate = 9u,
+  kNotSupported = 10u,
 };
 
 enum class Gfn2CudaTopologyStagingField : std::uint32_t {
@@ -51,6 +52,8 @@ enum class Gfn2CudaTopologyStagingField : std::uint32_t {
   kArena = 9u,
   kEvent = 10u,
   kSpinChannels = 11u,
+  kCellMatrices = 12u,
+  kPeriodicAxes = 13u,
 };
 
 /* CUDA-free diagnostic. cuda_status stores the numeric cudaError_t value. */
@@ -75,7 +78,11 @@ struct Gfn2CudaTopologyHostSnapshot {
   std::int64_t total_atoms = 0;
   std::int64_t total_point_charges = 0;
   std::int64_t total_charge_response_elements = 0;
+  /* `periodic_enabled` describes the caller-owned b + A*q embedding.  Native
+   * lattice identity is kept separately so a charge-response request cannot
+   * masquerade as native PBC (or vice versa). */
   bool periodic_enabled = false;
+  bool native_lattice_enabled = false;
   std::vector<std::int64_t> atom_offsets;
   std::vector<std::int32_t> atomic_numbers;
   std::vector<double> molecular_charges;
@@ -83,6 +90,11 @@ struct Gfn2CudaTopologyHostSnapshot {
   std::vector<std::int32_t> spin_channels;
   std::vector<std::int64_t> point_charge_offsets;
   std::vector<std::int64_t> charge_response_offsets;
+  /* Canonical ABI-v4 lattice leaves.  They are always present: absent V4
+   * suffixes and explicit all-NONE suffixes are represented by zero cells and
+   * NONE masks. */
+  std::vector<double> cell_matrices;
+  std::vector<std::int32_t> periodic_axes;
 };
 
 /* Opaque device views.  Addresses are diagnostics/bridge inputs, not host pointers. */
@@ -96,6 +108,8 @@ struct Gfn2CudaTopologyDeviceKeyIdentity {
   std::uintptr_t spin_channels = 0u;
   std::uintptr_t point_charge_offsets = 0u;
   std::uintptr_t charge_response_offsets = 0u;
+  std::uintptr_t cell_matrices = 0u;
+  std::uintptr_t periodic_axes = 0u;
 };
 
 /* Fixed-topology observability used to prove stable storage and zero full D2H. */

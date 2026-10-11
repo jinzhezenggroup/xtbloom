@@ -925,10 +925,79 @@ int test_failed_upload_clears_ready_and_submits_no_partial_copy() {
   return 0;
 }
 
+int test_conditional_restore_admission_validation_and_atomicity() {
+  const std::uint32_t mandatory = static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
+                                  static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
+                                  static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+  BoundArena arena(mandatory);
+  CHECK(arena.valid);
+  FreshData data;
+  Gfn2SccIterationInitializer initializer;
+  auto diagnostic = Gfn2SccIterationInitializer::create(
+      arena.plan, arena.requirements, arena.allocation.pointer, arena.requirements.total_bytes,
+      arena.state, arena.workspace, arena.reports, data.view(), initializer);
+  CHECK(diagnostic.success());
+  DeviceAllocation admission(sizeof(std::uint32_t));
+  CHECK(admission.pointer != nullptr);
+  Stream stream;
+  CHECK(stream.value != nullptr);
+
+  const std::uint32_t rejected = kGfn2RequestErrorWarmIncompatible;
+  CUDA_CHECK(cudaMemcpyAsync(admission.pointer, &rejected, sizeof(rejected), cudaMemcpyHostToDevice,
+                             stream.value));
+  CUDA_CHECK(cudaMemsetAsync(arena.allocation.pointer, 0x5a, arena.requirements.total_bytes,
+                             stream.value));
+  Gfn2SccIterationInitializationReady ready{};
+  diagnostic = initializer.upload_if_admitted_async(
+      arena.allocation.pointer, arena.requirements.total_bytes, ready,
+      static_cast<const std::uint32_t*>(admission.pointer), stream.value);
+  CHECK(diagnostic.success());
+  std::array<std::byte, 32> sentinel{};
+  CUDA_CHECK(cudaMemcpyAsync(sentinel.data(), arena.allocation.pointer, sentinel.size(),
+                             cudaMemcpyDeviceToHost, stream.value));
+  CUDA_CHECK(cudaStreamSynchronize(stream.value));
+  for (const std::byte value : sentinel) CHECK(value == std::byte{0x5a});
+
+  const std::uint32_t admitted = 0u;
+  CUDA_CHECK(cudaMemcpyAsync(admission.pointer, &admitted, sizeof(admitted), cudaMemcpyHostToDevice,
+                             stream.value));
+  diagnostic = initializer.upload_if_admitted_async(
+      arena.allocation.pointer, arena.requirements.total_bytes, ready,
+      static_cast<const std::uint32_t*>(admission.pointer), stream.value);
+  CHECK(diagnostic.success());
+  CHECK(copy_from_device(arena.state.raw_population.qsh, kShells, stream.value) == data.qsh);
+  std::vector<std::byte> restored(arena.requirements.total_bytes);
+  std::vector<std::byte> checkpoint(arena.requirements.total_bytes);
+  CUDA_CHECK(cudaMemcpyAsync(restored.data(), arena.allocation.pointer, restored.size(),
+                             cudaMemcpyDeviceToHost, stream.value));
+  CUDA_CHECK(cudaMemcpyAsync(checkpoint.data(), initializer.device_checkpoint(), checkpoint.size(),
+                             cudaMemcpyDeviceToHost, stream.value));
+  CUDA_CHECK(cudaStreamSynchronize(stream.value));
+  CHECK(restored == checkpoint);
+
+  diagnostic = initializer.upload_if_admitted_async(
+      arena.allocation.pointer, arena.requirements.total_bytes, ready,
+      reinterpret_cast<const std::uint32_t*>(static_cast<const std::byte*>(admission.pointer) + 1u),
+      stream.value);
+  CHECK(diagnostic.error == Gfn2SccIterationInitializationError::kInvalidArenaMemory);
+  CHECK(diagnostic.field == Gfn2SccIterationInitializationField::kAdmission);
+  diagnostic = initializer.upload_if_admitted_async(
+      arena.allocation.pointer, arena.requirements.total_bytes, ready,
+      static_cast<const std::uint32_t*>(arena.allocation.pointer), stream.value);
+  CHECK(diagnostic.error == Gfn2SccIterationInitializationError::kInvalidArenaMemory);
+  CHECK(diagnostic.field == Gfn2SccIterationInitializationField::kAdmission);
+  diagnostic = initializer.upload_if_admitted_async(
+      arena.allocation.pointer, arena.requirements.total_bytes, ready,
+      static_cast<const std::uint32_t*>(initializer.device_checkpoint()), stream.value);
+  CHECK(diagnostic.error == Gfn2SccIterationInitializationError::kInvalidArenaMemory);
+  CHECK(diagnostic.field == Gfn2SccIterationInitializationField::kAdmission);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 8> tests{{
+  const std::array<int (*)(), 9> tests{{
       test_fresh_initialization_and_stream_ready_publication,
       test_mixed_layout_seal_rejects_same_totals_swapped_channels,
       test_device_checkpoint_repeated_restore_and_graph_replay,
@@ -937,6 +1006,7 @@ int main() {
       test_max_iteration_preserves_mixer_and_scc_status_roles,
       test_invalid_host_state_is_transactional,
       test_failed_upload_clears_ready_and_submits_no_partial_copy,
+      test_conditional_restore_admission_validation_and_atomicity,
   }};
   for (const auto test : tests) {
     if (const int line = test(); line != 0) {

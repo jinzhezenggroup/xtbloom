@@ -9,8 +9,12 @@ const appContentVersion = appModuleUrl.searchParams.get("xtbloom_version");
 const appBootstrapToken = appModuleUrl.searchParams.get("xtbloom_bootstrap");
 const appHelpersUrl = new URL("./app_helpers.js", import.meta.url);
 const c60CaseUrl = new URL("./c60_case.js", import.meta.url);
+const smilesWorkerModuleUrl = new URL("./smiles_worker.js", import.meta.url);
 if (appContentVersion) appHelpersUrl.searchParams.set("xtbloom_version", appContentVersion);
 if (appContentVersion) c60CaseUrl.searchParams.set("xtbloom_version", appContentVersion);
+if (appContentVersion) {
+  smilesWorkerModuleUrl.searchParams.set("xtbloom_version", appContentVersion);
+}
 if (appBootstrapToken) appHelpersUrl.searchParams.set("xtbloom_bootstrap", appBootstrapToken);
 if (appBootstrapToken) c60CaseUrl.searchParams.set("xtbloom_bootstrap", appBootstrapToken);
 
@@ -27,17 +31,23 @@ currentAppImportOrAbort();
 const { C60_XYZ } = await import(c60CaseUrl.href);
 currentAppImportOrAbort();
 const {
+  ELEMENT_SYMBOLS,
   angstromToBohr,
   canStartUrlSmiles,
   clampProgressPercent,
+  createDebouncedPublisher,
+  createRevisionOwner,
+  createSmilesWorkerClient,
   fetchResourceBatch,
   initializeWorker,
   isRetryableLoadError,
+  parseXyzCoordinates,
   postToReadyWorker,
   readSmilesQuery,
   runWithRetries,
   validateEngineManifest,
   withTimeout,
+  xyzAtomsToText,
 } = await import(appHelpersUrl.href);
 currentAppImportOrAbort();
 
@@ -45,15 +55,9 @@ const EH2EV = 27.211386245988;
 const EH2KCAL = 627.509474063;
 const EHB2EVA = EH2EV / 0.529177210903;
 const K2EH = 3.166811563e-6;
-
-const ELEMENT_SYMBOLS = [
-  "", "H","He","Li","Be","B","C","N","O","F","Ne","Na","Mg","Al","Si","P","S","Cl","Ar",
-  "K","Ca","Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
-  "Rb","Sr","Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te","I","Xe",
-  "Cs","Ba","La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
-  "Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn","Fr","Ra","Ac",
-  "Th","Pa","U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr"
-];
+/* These are stable public C ABI tag values, not UI-local ordinal choices. */
+const MODEL_GFN1_XTB = 1;
+const MODEL_GFN2_XTB = 2;
 
 const PRESETS = {
   water: { xyz: "O  0.00000000  0.00000000  0.00000000\nH  0.00000000  0.00000000  0.95720000\nH  0.00000000  0.75718000 -0.58552000", charge: 0, unpaired: 0 },
@@ -66,7 +70,7 @@ const PRESETS = {
 
 const I18N = {
   zh: {
-    tagline: "无需安装或上传，在浏览器中运行 GFN2-xTB 单点与几何优化",
+    tagline: "无需安装或上传，在浏览器中运行 GFN1-xTB 或 GFN2-xTB",
     engine_loading: "引擎加载中…",
     panel_input: "输入",
     presets_label: "模板分子",
@@ -82,7 +86,7 @@ const I18N = {
     smiles_ready_status: "结构生成器已就绪。将补全显式氢并执行 MMFF94 预优化。",
     smiles_retry_button: "重试下载",
     smiles_generate_button: "正在生成…",
-    smiles_generate_status: "正在生成显式氢三维构象并进行 MMFF94 预优化…",
+    smiles_generate_status: "正在生成显式氢三维构象并进行 MMFF94 预优化（复杂分子最长约两分钟）…",
     smiles_generated: "已生成 {{n}} 个原子的三维结构；形式电荷 {{q}}。",
     smiles_load_failed: "SMILES 结构生成资源加载失败：{{e}}",
     smiles_url_optimizing: "已从地址读取 SMILES，正在自动执行 xTBloom 几何优化…",
@@ -90,14 +94,19 @@ const I18N = {
     smiles_url_failed: "地址中的 SMILES 自动生成/优化失败：{{e}}",
     smiles_go: "去生成",
     mol_title: "分子可视化",
-    mol_hint: "实时显示当前坐标；计算、优化、应用优化坐标后自动更新。",
+    mol_hint: "有效坐标实时预览；输入无效时保留上一次有效结构，并在输入框旁提示错误。",
     mol_unavailable: "当前浏览器不支持 WebGL 分子可视化。",
     opt_running: "优化中… {{n}}/{{max}} 步 · E = {{e}} Eh",
     opt_done: "完成 ✓",
     xyz_label: "坐标（XYZ，单位：埃 Å）",
     xyz_placeholder: "每行：元素符号 x y z（埃，Å）",
+    method_label: "计算方法",
+    method_hint: "默认 GFN2-xTB；两种方法均在浏览器内使用单线程 CPU/WASM。",
     charge_label: "分子电荷 q / e",
     unpaired_label: "未配对电子数",
+    advanced_settings: "高级设置",
+    scc_settings: "SCC 设置",
+    optimizer_settings: "优化器设置",
     etemp_label: "电子温度 K",
     etemp_tip: "电子温度即 k_B·T 能量标度；0 = 精确 0 K（默认）",
     maxiter_label: "最大 SCC 迭代",
@@ -130,7 +139,12 @@ const I18N = {
     tag_done: "已支持",
     roadmap_opt_desc: "内置 L-BFGS 优化器，使用解析力收敛到稳定结构。在左侧“优化”区配置后点击“几何优化”。",
     opt_go: "去优化",
-    footer: "由 xTBloom 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。WebAssembly LP64 LAPACKE/CBLAS 兼容层由固定版本的 Eigen 5.0.1 支撑。仅供演示，非科学计算生产环境。",
+    footer: "由 xTBloom 驱动 —— 同一套 C ABI 的 GFN1-xTB/GFN2-xTB CPU 库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。WebAssembly LP64 LAPACKE/CBLAS 兼容层由固定版本的 Eigen 5.0.1 支撑。仅供演示，非科学计算生产环境。",
+    legal_web_demo: "网页演示",
+    legal_source: "源代码",
+    legal_more: "第三方许可与来源",
+    legal_notices: "第三方声明",
+    legal_permission: "附加许可",
     overlay_loading: "正在加载 WASM 引擎…",
     overlay_compute: "正在计算单点能…",
     overlay_opt: "正在几何优化（逐梯度迭代，可能需要几秒）…",
@@ -156,10 +170,12 @@ const I18N = {
     engine_call_fail: "引擎调用失败：",
     err_xyz_parse: "无法解析坐标：每行请提供「元素符号 x y z」，单位 Å",
     err_xyz_too_many: "原子数超过 512 上限",
+    err_xyz_element: "含无法识别的元素符号：{{sym}}",
     err_ctx: "计算上下文创建失败：{{e}}",
     err_alloc: "内存分配失败",
     err_init: "内部初始化失败",
     err_compute: "计算失败：{{e}}",
+    err_model: "不支持的计算方法。",
     err_scc_initial: "SCC / 特征求解失败（初始结构）",
     err_nan_initial: "初始能量为非有限值",
     err_nan_step: "优化中出现非有限能量",
@@ -174,17 +190,17 @@ const I18N = {
     smiles_err_fragments: "暂不支持用点号连接的盐或多片段 SMILES；其片段间相对位置没有定义。",
     smiles_err_atoms: "SMILES 没有生成有效原子。",
     smiles_err_too_many: "补氢后原子数超过 512 上限。",
-    smiles_err_element: "SMILES 含有 GFN2-xTB 不支持的元素。",
+    smiles_err_element: "SMILES 含有所选 GFN-xTB 方法不支持的元素。",
     smiles_err_radical: "自动流程不猜测自旋：自由基请改用 XYZ，并手动填写未配对电子数。",
     smiles_err_mmff: "MMFF94 预优化失败。",
     smiles_err_coords: "结构生成器返回了非有限坐标。",
     smiles_err_library: "SMILES 结构生成器尚未就绪。",
-    smiles_err_timeout: "SMILES 三维结构生成超时，请缩短分子或重试。",
+    smiles_err_timeout: "SMILES 三维结构生成超过两分钟；生成器正在自动恢复，请稍后重试。",
     smiles_err_unknown: "SMILES 三维结构生成失败。",
     err_unknown: "未知错误",
   },
   en: {
-    tagline: "Run GFN2-xTB in your browser—no install or uploads",
+    tagline: "Run GFN1-xTB or GFN2-xTB in your browser—no install or uploads",
     engine_loading: "engine loading…",
     panel_input: "Input",
     presets_label: "Preset molecules",
@@ -200,7 +216,7 @@ const I18N = {
     smiles_ready_status: "Structure generator ready. Explicit hydrogens and an MMFF94 pre-relaxation will be applied.",
     smiles_retry_button: "Retry download",
     smiles_generate_button: "Generating…",
-    smiles_generate_status: "Generating an explicit-hydrogen 3D conformer and running MMFF94 pre-relaxation…",
+    smiles_generate_status: "Generating an explicit-hydrogen 3D conformer and running MMFF94 pre-relaxation (up to about two minutes for complex molecules)…",
     smiles_generated: "Generated a {{n}}-atom 3D structure with formal charge {{q}}.",
     smiles_load_failed: "Could not load the SMILES structure generator: {{e}}",
     smiles_url_optimizing: "SMILES read from the URL; running automatic xTBloom geometry optimization…",
@@ -208,14 +224,19 @@ const I18N = {
     smiles_url_failed: "Automatic URL SMILES generation/optimization failed: {{e}}",
     smiles_go: "Generate",
     mol_title: "Molecule",
-    mol_hint: "Live view of the current coordinates; refreshes after compute, optimize, or applying optimized coordinates.",
+    mol_hint: "Valid coordinates preview live as you type; invalid input is flagged inline and the last valid structure stays.",
     mol_unavailable: "WebGL molecular visualization is not available in this browser.",
     opt_running: "Optimizing… step {{n}}/{{max}} · E = {{e}} Eh",
     opt_done: "done ✓",
     xyz_label: "Coordinates (XYZ, angstrom)",
     xyz_placeholder: "One atom per line: Symbol x y z (Å)",
+    method_label: "Method",
+    method_hint: "GFN2-xTB is the default; both methods use the single-threaded CPU/WASM engine.",
     charge_label: "Molecular charge q / e",
     unpaired_label: "Unpaired electrons",
+    advanced_settings: "Advanced settings",
+    scc_settings: "SCC settings",
+    optimizer_settings: "Optimizer settings",
     etemp_label: "Electronic temperature K",
     etemp_tip: "Electronic temperature is the k_B·T energy scale; 0 = exact 0 K (default)",
     maxiter_label: "Max SCC iterations",
@@ -248,7 +269,12 @@ const I18N = {
     tag_done: "supported",
     roadmap_opt_desc: "Built-in L-BFGS optimizer using analytic forces. Configure it in the left panel, then click “Optimize geometry”.",
     opt_go: "Try it",
-    footer: "Powered by xTBloom — the same native C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The WebAssembly LP64 LAPACKE/CBLAS compatibility layer is backed by pinned Eigen 5.0.1. Demo only, not a production scientific environment.",
+    footer: "Powered by xTBloom — the same GFN1-xTB/GFN2-xTB CPU C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The WebAssembly LP64 LAPACKE/CBLAS compatibility layer is backed by pinned Eigen 5.0.1. Demo only, not a production scientific environment.",
+    legal_web_demo: "Web demo",
+    legal_source: "Source",
+    legal_more: "Third-party licenses and provenance",
+    legal_notices: "Third-party notices",
+    legal_permission: "Additional permission",
     overlay_loading: "Loading the WASM engine…",
     overlay_compute: "Computing single point…",
     overlay_opt: "Optimizing geometry (gradient steps, may take a few seconds)…",
@@ -274,10 +300,12 @@ const I18N = {
     engine_call_fail: "Engine call failed: ",
     err_xyz_parse: "Cannot parse coordinates: each line must be “Symbol x y z” in A",
     err_xyz_too_many: "More than 512 atoms",
+    err_xyz_element: "Unknown element symbol: {{sym}}",
     err_ctx: "Context creation failed: {{e}}",
     err_alloc: "Out of memory",
     err_init: "Internal initialization failed",
     err_compute: "Compute failed: {{e}}",
+    err_model: "Unsupported calculation method.",
     err_scc_initial: "SCC / eigensolver failed (initial structure)",
     err_nan_initial: "Non-finite initial energy",
     err_nan_step: "Non-finite energy during optimization",
@@ -292,12 +320,12 @@ const I18N = {
     smiles_err_fragments: "Dot-disconnected salts or multi-fragment SMILES are not supported because their relative placement is undefined.",
     smiles_err_atoms: "The SMILES produced no valid atoms.",
     smiles_err_too_many: "The explicit-hydrogen structure exceeds the 512-atom limit.",
-    smiles_err_element: "The SMILES contains an element unsupported by GFN2-xTB.",
+    smiles_err_element: "The SMILES contains an element unsupported by the selected GFN-xTB method.",
     smiles_err_radical: "Spin is not guessed: use XYZ for radicals and enter the unpaired-electron count explicitly.",
     smiles_err_mmff: "MMFF94 pre-optimization failed.",
     smiles_err_coords: "The structure generator returned non-finite coordinates.",
     smiles_err_library: "The SMILES structure generator is not ready.",
-    smiles_err_timeout: "SMILES 3D generation timed out; use a smaller molecule or retry.",
+    smiles_err_timeout: "SMILES 3D generation exceeded two minutes; the generator is recovering automatically, so retry shortly.",
     smiles_err_unknown: "SMILES 3D generation failed.",
     err_unknown: "Unknown error",
   },
@@ -325,9 +353,31 @@ const t = (key, vars) => {
 
 function tf(key, vars) { return t(key, vars); }
 
+/* Desktop keeps expert/legal material directly visible. Native details
+ * elements start closed on phones, preserve their form state, and retain a
+ * user's explicit choice across language changes and viewport resizing. */
+function setupResponsiveDisclosure(id) {
+  const disclosure = $(id);
+  const summary = disclosure?.querySelector("summary");
+  if (!disclosure || !summary) return;
+  const phone = window.matchMedia("(max-width: 600px)");
+  let userChanged = false;
+  summary.addEventListener("click", () => { userChanged = true; });
+  const syncDefault = () => {
+    if (!userChanged) disclosure.open = !phone.matches;
+  };
+  phone.addEventListener("change", syncDefault);
+  syncDefault();
+}
+
+function setupResponsiveDisclosures() {
+  setupResponsiveDisclosure("advanced-settings");
+  setupResponsiveDisclosure("footer-legal");
+}
+
 function applyI18n() {
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-  document.title = lang === "zh" ? "xTBloom · 浏览器内运行 GFN2-xTB" : "xTBloom · Run GFN2-xTB in your browser";
+  document.title = lang === "zh" ? "xTBloom · 浏览器内运行 GFN-xTB" : "xTBloom · Run GFN-xTB in your browser";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     if (el.id === "engine-badge") return; /* state-managed separately */
     el.textContent = t(el.dataset.i18n);
@@ -347,8 +397,8 @@ $("lang-toggle").addEventListener("click", () => {
   try { localStorage.setItem("xtbloom-lang", lang); } catch { /* ignore */ }
   applyI18n();
   // re-render dynamic labels on the results panel
-  if (window.__lastMode === "compute" && window.__lastResult) renderCompute(window.__lastResult);
-  if (window.__lastMode === "optimize" && window.__lastResult) renderOptimize(window.__lastResult);
+  if (hasCurrentResult("compute")) renderCompute(window.__lastResult);
+  if (hasCurrentResult("optimize")) renderOptimize(window.__lastResult);
 });
 
 /* ------------------------------------------------------------------ */
@@ -365,23 +415,32 @@ let engineLoadController = null;
 
 /* The optional OpenChemLib worker has an independent lifecycle: its CDN
  * download or conformer search must never gate ordinary XYZ/xTBloom controls. */
-let smilesWorker = null;
+let smilesClient = null;
 let smilesResourceState = "loading"; /* loading | ready | error */
 let smilesBusy = false;
-let smilesMsgSeq = 0;
-const smilesPending = new Map();
-let smilesLoadTimer = null;
 let smilesStatusKey = "smiles_download_status";
 let smilesStatusVars = null;
 let smilesStatusTone = "";
 let urlSmiles = null;
 let urlSmilesStarted = false;
+const smilesWorkflow = createRevisionOwner();
 
 function setSmilesStatus(key, vars = null, tone = "") {
   smilesStatusKey = key;
   smilesStatusVars = vars;
   smilesStatusTone = tone;
   syncSmilesControls();
+}
+
+function clearSmilesStatus() {
+  smilesStatusKey = null;
+  smilesStatusVars = null;
+  smilesStatusTone = "";
+  const status = $("smiles-status");
+  if (status) {
+    status.textContent = "";
+    status.classList.remove("ok", "err");
+  }
 }
 
 function syncSmilesControls() {
@@ -410,110 +469,86 @@ function syncSmilesControls() {
   status.classList.toggle("err", smilesStatusTone === "err");
 }
 
-function rejectSmilesPending(error) {
-  for (const entry of smilesPending.values()) entry.reject(error);
-  smilesPending.clear();
+function supersededSmilesError() {
+  return new DOMException("SMILES workflow superseded", "AbortError");
 }
 
-function failSmilesWorker(error) {
-  if (smilesLoadTimer !== null) {
-    clearTimeout(smilesLoadTimer);
-    smilesLoadTimer = null;
-  }
-  if (smilesWorker) smilesWorker.terminate();
-  smilesWorker = null;
-  smilesResourceState = "error";
+function requireCurrentSmilesWorkflow(revision) {
+  if (!smilesWorkflow.isCurrent(revision)) throw supersededSmilesError();
+}
+
+/* Reset and input edits are publication boundaries. OpenChemLib performs one
+ * synchronous task per Worker, so cancelling also restarts the Worker to keep
+ * abandoned work from delaying the next request. */
+function invalidateSmilesWork() {
+  smilesWorkflow.advance();
+  urlSmiles = null;
+  urlSmilesStarted = true;
+  if (smilesClient) smilesClient.cancel(supersededSmilesError());
   smilesBusy = false;
-  rejectSmilesPending(error);
-  setSmilesStatus("smiles_load_failed", { e: error.message }, "err");
 }
 
-function handleSmilesWorkerMessage(message) {
-  if (message.type === "ready") {
-    if (smilesLoadTimer !== null) {
-      clearTimeout(smilesLoadTimer);
-      smilesLoadTimer = null;
-    }
+function handleSmilesClientState(event) {
+  if (event.state === "ready") {
     smilesResourceState = "ready";
-    setSmilesStatus("smiles_ready_status", null, "ok");
+    if (event.recoveryStatus) {
+      setSmilesStatus(
+        event.recoveryStatus.key,
+        event.recoveryStatus.vars || null,
+        event.recoveryStatus.tone || "",
+      );
+    } else {
+      setSmilesStatus("smiles_ready_status", null, "ok");
+    }
     void maybeRunUrlSmiles();
     return;
   }
-  if (message.type === "load-error") {
-    failSmilesWorker(new Error(String(message.error || "OpenChemLib load failed")));
+  if (event.state === "loading") {
+    smilesResourceState = "loading";
+    smilesBusy = false;
+    setSmilesStatus("smiles_download_status");
     return;
   }
-  if (message.type !== "result") return;
-  const entry = smilesPending.get(message.id);
-  if (!entry) return;
-  smilesPending.delete(message.id);
-  if (message.ok) {
-    entry.resolve(message.result);
-  } else {
-    const error = new Error(String(message.error || "SMILES generation failed"));
-    error.code = message.errorCode || "smiles_err_unknown";
-    entry.reject(error);
+  if (event.state === "error") {
+    smilesResourceState = "error";
+    smilesBusy = false;
+    setSmilesStatus("smiles_load_failed", { e: event.error.message }, "err");
   }
 }
 
 function startSmilesWorker() {
-  if (smilesLoadTimer !== null) clearTimeout(smilesLoadTimer);
-  if (smilesWorker) smilesWorker.terminate();
-  rejectSmilesPending(new Error("SMILES worker restarted"));
-  smilesResourceState = "loading";
-  smilesBusy = false;
-  setSmilesStatus("smiles_download_status");
-  try {
-    smilesWorker = new Worker(new URL("./smiles_worker.js", import.meta.url), { type: "module" });
-  } catch (error) {
-    failSmilesWorker(error instanceof Error ? error : new Error(String(error)));
-    return;
-  }
-  smilesWorker.onmessage = (event) => handleSmilesWorkerMessage(event.data);
-  smilesWorker.onerror = (event) => {
-    failSmilesWorker(new Error((event && event.message) || "SMILES worker error"));
-  };
-  smilesLoadTimer = setTimeout(() => {
-    failSmilesWorker(new Error("OpenChemLib resource download timed out"));
-  }, 60000);
-}
-
-function callSmilesWorker(smiles) {
-  return new Promise((resolve, reject) => {
-    if (
-      smilesResourceState !== "ready" || !smilesWorker ||
-      typeof smilesWorker.postMessage !== "function"
-    ) {
-      const error = new Error("OpenChemLib is not ready");
-      error.code = "smiles_err_library";
-      reject(error);
-      return;
-    }
-    const id = ++smilesMsgSeq;
-    smilesPending.set(id, { resolve, reject });
-    try {
-      smilesWorker.postMessage({ type: "generate", id, smiles });
-    } catch (error) {
-      smilesPending.delete(id);
-      reject(error);
-    }
-  });
-}
-
-async function requestSmilesGeometry(smiles) {
-  const GENERATION_TIMEOUT_MS = 30000;
-  try {
-    return await withTimeout(callSmilesWorker(smiles), GENERATION_TIMEOUT_MS, () => {
-      const error = new Error("SMILES generation timed out");
-      error.code = "smiles_err_timeout";
-      failSmilesWorker(error);
+  if (!smilesClient) {
+    smilesClient = createSmilesWorkerClient({
+      createWorker: () => {
+        /* The content version covers both this Worker and its dynamically
+         * imported helper; CDN routing parameters do not identify code. */
+        const workerUrl = new URL(smilesWorkerModuleUrl.href);
+        const providers = Array.isArray(globalThis.__XTBLOOM_CDN_PROVIDERS)
+          ? globalThis.__XTBLOOM_CDN_PROVIDERS
+          : [];
+        if (providers.length > 0) {
+          workerUrl.searchParams.set("xtbloom_cdn_providers", providers.join(","));
+        }
+        workerUrl.searchParams.set(
+          "xtbloom_cdn_region",
+          globalThis.__XTBLOOM_CDN_REGION === "mainland-china"
+            ? "mainland-china"
+            : "global",
+        );
+        return new Worker(workerUrl, { type: "module" });
+      },
+      onStateChange: handleSmilesClientState,
+      /* The adapter accepts up to 512 explicit-H atoms. Flexible molecules can
+       * legitimately exceed 30 seconds on phones, while two minutes still
+       * bounds a pathological conformer search. */
+      generationTimeoutMs: 120000,
     });
-  } catch (error) {
-    if (error instanceof Error && error.message === "TIME_OUT") {
-      error.code = "smiles_err_timeout";
-    }
-    throw error;
   }
+  smilesClient.start();
+}
+
+function requestSmilesGeometry(smiles) {
+  return smilesClient.request(smiles);
 }
 
 function smilesErrorText(error) {
@@ -524,10 +559,16 @@ function smilesErrorText(error) {
 }
 
 function syncEngineControls() {
+  /* Calculate/optimize require a currently valid structure: the live preview
+   * is the input-validation gate, independent of the compute path. */
   const enabled = engineState === "ready" && worker !== null &&
-    !engineBusy && !smilesBusy;
+    !engineBusy && !smilesBusy && previewState.status === "valid";
   $("run").disabled = !enabled;
   $("opt-run").disabled = !enabled;
+  /* Method changes are calculation-identity changes. Freeze the selector
+   * while either worker owns a user/URL workflow so an in-flight result cannot
+   * be mislabeled or published under a newer selection. */
+  $("method").disabled = engineBusy || smilesBusy;
 }
 
 function refreshBadge() {
@@ -609,10 +650,9 @@ function publishReadyEngine(candidate, ready) {
   $("ver-badge").textContent = "v" + ready.version;
   /* Preserve coordinates entered or generated while the WASM worker was
    * loading; only supply the water example when the editor is still empty. */
-  if (!$("xyz").value.trim()) $("xyz").value = PRESETS.water.xyz;
-  updateXyzHint();
+  if (!$("xyz").value.trim()) setCoordinateInput(PRESETS.water.xyz);
   initMoleculeViewer();
-  updateMoleculeViewer($("xyz").value);
+  refreshPreview();
   void maybeRunUrlSmiles();
 }
 
@@ -636,18 +676,6 @@ function handleStepMessage(m) {
   }
 }
 
-function getElementSymbols(xyz) {
-  const symbols = [];
-  for (const line of xyz.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t) continue;
-    const tok = t.split(/\s+/)[0];
-    const n = Number(tok);
-    symbols.push(Number.isInteger(n) && n >= 1 && n <= 103 ? (ELEMENT_SYMBOLS[n] || "?") : tok);
-  }
-  return symbols;
-}
-
 const overlayText = $("overlay-text");
 const overlay = $("overlay");
 function showOverlay(key) { overlayText.textContent = t(key); overlay.hidden = false; }
@@ -657,14 +685,6 @@ $("retry").addEventListener("click", () => { void startEngineLoad({ forceReload:
 function fmt(x, digits = 6) {
   if (x === null || x === undefined || Number.isNaN(x)) return "NaN";
   return Number(x).toFixed(digits);
-}
-
-function countAtoms(xyz) {
-  let n = 0;
-  for (const line of xyz.split(/\r?\n/)) {
-    if (line.trim()) n++;
-  }
-  return n;
 }
 
 let __loadingPct = 0;
@@ -722,7 +742,12 @@ async function loadEngineManifest(attempt, forceReload, signal) {
 }
 
 function validateManifestForLoadedApp(rawManifest) {
-  const manifest = validateEngineManifest(rawManifest, ["app", ...ENGINE_ASSET_IDS]);
+  const manifest = validateEngineManifest(rawManifest, [
+    "app",
+    "smiles_worker",
+    "smiles_helpers",
+    ...ENGINE_ASSET_IDS,
+  ]);
   // A deployment may finish between retry attempts. Never combine an already
   // evaluated app/helper graph with a newer Worker/WASM/data generation.
   if (appContentVersion && manifest.version !== appContentVersion) {
@@ -791,11 +816,132 @@ function setLoaderRetrying({ nextAttempt, maxAttempts, waitMs }) {
   });
 }
 
+/* ---- input validation and live 3D preview ---- */
+/* The preview is input validation and must stay independent of the compute
+ * path: a valid structure renders before any xTB calculation starts, an
+ * invalid edit keeps the last valid viewer content, and the calculate actions
+ * are gated on the current structure being valid (see syncEngineControls). */
+const PREVIEW_DEBOUNCE_MS = 400;
+let previewState = { status: "empty", atomCount: 0, canonicalXyz: "", messageKey: null, messageVars: null };
+const coordinateRevisions = createRevisionOwner();
+const previewPublisher = createDebouncedPublisher((canonicalXyz) => {
+  if (molViewer && !molUnavailable) updateMoleculeViewer(canonicalXyz);
+}, { delayMs: PREVIEW_DEBOUNCE_MS });
+
+function hasCurrentResult(mode = null) {
+  return Boolean(window.__lastResult) &&
+    window.__lastCoordinateRevision === coordinateRevisions.capture() &&
+    (mode === null || window.__lastMode === mode);
+}
+
+function invalidateRenderedResult() {
+  /* A method or coordinate change invalidates the scientific identity of every
+   * visible value. Restore neutral placeholders rather than leaving old
+   * numbers on screen after their ownership metadata has been discarded. */
+  window.__lastResult = null;
+  window.__lastMode = null;
+  window.__lastCoordinateRevision = null;
+  $("energy").textContent = "—";
+  $("energy-ev").textContent = "—";
+  $("energy-kcal").textContent = "—";
+  $("stat-atoms").textContent = "–";
+  $("stat-iter").textContent = "–";
+  $("stat-iter-label").textContent = t("stat_iter");
+  $("stat-conv").textContent = "–";
+  $("stat-ms").textContent = "–";
+  $("atom-table").querySelector("tbody").replaceChildren();
+  $("table-wrap").hidden = true;
+  $("traj-svg").replaceChildren();
+  $("traj").hidden = true;
+  $("output-tools").hidden = true;
+  $("opt-apply").hidden = true;
+  $("copy-done").hidden = true;
+  $("result-method").hidden = true;
+}
+
+function supersededCoordinateError() {
+  return new DOMException("Coordinates superseded", "AbortError");
+}
+
+/* Every programmatic editor replacement must advance the same revision used
+ * by manual input. Async calculations capture this value and may publish UI
+ * state only while it still names the current coordinates. */
+function setCoordinateInput(xyz, { preserveOptimization = false } = {}) {
+  previewPublisher.cancel();
+  coordinateRevisions.advance();
+  $("xyz").value = xyz;
+  if (preserveOptimization && window.__lastResult) {
+    /* Applying the geometry owned by the visible optimization keeps that
+     * result current across the programmatic editor revision. */
+    window.__lastCoordinateRevision = coordinateRevisions.capture();
+  } else {
+    invalidateRenderedResult();
+    stopReplay();
+    optFrames = [];
+    $("replay").hidden = true;
+  }
+}
+
+function renderXyzHint() {
+  const el = $("xyz-hint");
+  el.classList.remove("ok", "err");
+  if (previewState.status === "valid") {
+    el.textContent = lang === "zh"
+      ? `已识别的原子数：${previewState.atomCount}`
+      : `Recognized atoms: ${previewState.atomCount}`;
+    el.classList.add("ok");
+  } else if (previewState.status === "empty") {
+    /* Nothing entered yet: a muted nudge, not an error. */
+    el.textContent = t("no_xyz");
+  } else {
+    el.textContent = t(previewState.messageKey || "err_xyz_parse", previewState.messageVars || undefined);
+    el.classList.add("err");
+  }
+}
+
 function updateXyzHint() {
-  $("xyz-hint").textContent =
-    lang === "zh"
-      ? `已识别的原子数：${countAtoms($("xyz").value)}`
-      : `Recognized atoms: ${countAtoms($("xyz").value)}`;
+  renderXyzHint();
+}
+
+function refreshPreview({ renderViewer = true } = {}) {
+  const parsed = parseXyzCoordinates($("xyz").value);
+  if (parsed.ok) {
+    previewState.status = "valid";
+    previewState.atomCount = parsed.atomCount;
+    previewState.canonicalXyz = xyzAtomsToText(parsed.atoms);
+    previewState.messageKey = null;
+    previewState.messageVars = null;
+    if (renderViewer && molViewer && !molUnavailable) {
+      updateMoleculeViewer(previewState.canonicalXyz);
+    }
+  } else {
+    /* Malformed input never replaces the last valid preview. */
+    previewState.status = parsed.errorCode === "no_xyz" ? "empty" : "error";
+    previewState.atomCount = 0;
+    previewState.canonicalXyz = "";
+    previewState.messageKey = parsed.errorCode;
+    previewState.messageVars = parsed.messageVars || null;
+  }
+  renderXyzHint();
+  refreshBadge();
+  return parsed;
+}
+
+function schedulePreviewUpdate() {
+  coordinateRevisions.advance();
+  invalidateRenderedResult();
+  stopReplay();
+  optFrames = [];
+  $("replay").hidden = true;
+  $("opt-apply").hidden = true;
+  /* Parse synchronously so invalid input disables calculation immediately.
+   * Only the comparatively expensive 3D viewer publication is debounced. */
+  const parsed = refreshPreview({ renderViewer: false });
+  if (!parsed.ok) {
+    previewPublisher.cancel();
+    return;
+  }
+  previewPublisher.schedule(previewState.canonicalXyz);
 }
 
 function setError(msg) {
@@ -806,6 +952,19 @@ function setError(msg) {
   } else {
     el.hidden = true;
   }
+}
+
+function revealResultPanelAfterUserAction() {
+  if (!window.matchMedia("(max-width: 600px)").matches) return;
+  const panel = $("result-panel");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  requestAnimationFrame(() => {
+    panel.focus({ preventScroll: true });
+    panel.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "start",
+    });
+  });
 }
 
 function errorText(d) {
@@ -819,8 +978,16 @@ function energyParts(eh) {
   return { eh, ev: eh * EH2EV, kcal: eh * EH2KCAL };
 }
 
+function renderResultMethod(d) {
+  const model = Number(d.model);
+  const name = d.method || (model === MODEL_GFN1_XTB ? "GFN1-xTB" : "GFN2-xTB");
+  $("result-method").textContent = name;
+  $("result-method").hidden = false;
+}
+
 function renderCompute(d) {
   setError(null);
+  renderResultMethod(d);
   const e = energyParts(d.energy_Eh);
   $("energy").textContent = fmt(e.eh, 10) + " Eh";
   $("energy-ev").textContent = fmt(e.ev, 6) + " eV";
@@ -848,10 +1015,12 @@ function renderCompute(d) {
   $("output-tools").hidden = false;
   window.__lastResult = d;
   window.__lastMode = "compute";
+  window.__lastCoordinateRevision = coordinateRevisions.capture();
 }
 
 function renderOptimize(d) {
   setError(null);
+  renderResultMethod(d);
   const e0 = energyParts(d.energy_initial_Eh);
   const e1 = energyParts(d.energy_final_Eh);
   $("energy").textContent = fmt(e1.eh, 10) + " Eh";
@@ -888,6 +1057,7 @@ function renderOptimize(d) {
   renderTrajectory(d);
   window.__lastResult = d;
   window.__lastMode = "optimize";
+  window.__lastCoordinateRevision = coordinateRevisions.capture();
 }
 
 function renderTrajectory(d) {
@@ -921,13 +1091,67 @@ function renderTrajectory(d) {
 /* ---- 3Dmol molecular viewer ---- */
 let molViewer = null;
 let molUnavailable = false;
+let molLoaderObserved = false;
+let molLoaderSettled = false;
 
 function xyzTo3Dmol(xyz) {
   const lines = xyz.split(/\r?\n/).filter((l) => l.trim());
   return lines.length + "\n" + "xTBloom\n" + lines.join("\n") + "\n";
 }
 
+function markMoleculeViewerUnavailable() {
+  molLoaderSettled = true;
+  molUnavailable = true;
+  $("mol").innerHTML = `<div class="mol-placeholder">${t("mol_unavailable")}</div>`;
+}
+
 function initMoleculeViewer() {
+  if (typeof window.$3Dmol === "undefined" && !molLoaderSettled) {
+    const ready = globalThis.__XTBLOOM_3DMOL_READY;
+    const routing = globalThis.__XTBLOOM_CDN_ROUTING;
+    if (
+      !ready &&
+      routing &&
+      typeof routing.then === "function"
+    ) {
+      if (!molLoaderObserved) {
+        molLoaderObserved = true;
+        void routing.then(
+          () => {
+            molLoaderObserved = false;
+            initMoleculeViewer();
+          },
+          () => {
+            molLoaderObserved = false;
+            markMoleculeViewerUnavailable();
+          },
+        );
+      }
+      return;
+    }
+    if (ready && typeof ready.then === "function") {
+      if (!molLoaderObserved) {
+        molLoaderObserved = true;
+        void ready.then((result) => {
+          molLoaderSettled = true;
+          if (!result?.ok || typeof window.$3Dmol === "undefined") {
+            markMoleculeViewerUnavailable();
+            return;
+          }
+          molUnavailable = false;
+          initMoleculeViewer();
+          if (previewState.status === "valid") {
+            updateMoleculeViewer(previewState.canonicalXyz);
+          }
+        });
+      }
+      return;
+    }
+    /* A verified app normally receives both globals from bootstrap. Preserve a
+     * useful failure state if app.js is embedded or launched without it. */
+    markMoleculeViewerUnavailable();
+    return;
+  }
   if (typeof window.$3Dmol === "undefined") { molUnavailable = true; }
   if (molUnavailable) return;
   try {
@@ -1021,41 +1245,55 @@ Object.entries(PRESETS).forEach(([key, p]) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
     btn.classList.add("active");
-    $("xyz").value = p.xyz;
+    setCoordinateInput(p.xyz);
     $("charge").value = p.charge;
     $("unpaired").value = p.unpaired;
-    updateXyzHint();
-    updateMoleculeViewer(p.xyz);
+    refreshPreview();
     setError(null);
   });
 });
 
-$("xyz").addEventListener("input", updateXyzHint);
+$("xyz").addEventListener("input", schedulePreviewUpdate);
+
+$("method").addEventListener("change", () => {
+  /* Model identity is part of the calculation input even though coordinates
+   * and the live molecular preview do not change. */
+  coordinateRevisions.advance();
+  invalidateRenderedResult();
+  stopReplay();
+  optFrames = [];
+  $("replay").hidden = true;
+  setError(null);
+  syncEngineControls();
+});
 
 function applyGeneratedGeometry(result) {
   document.querySelectorAll(".chip").forEach((chip) => chip.classList.remove("active"));
-  $("xyz").value = result.xyz;
+  setCoordinateInput(result.xyz);
   $("charge").value = String(result.formalCharge);
   /* Radical SMILES are rejected by the helper, so zero is the only supported
    * automatic spin state. Users retain the explicit XYZ route for radicals. */
   $("unpaired").value = "0";
-  updateXyzHint();
-  updateMoleculeViewer(result.xyz);
+  refreshPreview();
   setError(null);
 }
 
-async function generateSmilesGeometry() {
+async function generateSmilesGeometry(workflowRevision = smilesWorkflow.capture()) {
+  requireCurrentSmilesWorkflow(workflowRevision);
   const smiles = $("smiles").value.trim();
   if (!smiles) {
     const error = new Error("SMILES is empty");
     error.code = "smiles_err_empty";
     throw error;
   }
+  if (!smilesWorkflow.claim(workflowRevision)) throw supersededSmilesError();
   smilesBusy = true;
   setSmilesStatus("smiles_generate_status");
   syncEngineControls();
   try {
     const result = await requestSmilesGeometry(smiles);
+    requireCurrentSmilesWorkflow(workflowRevision);
+    if ($("smiles").value.trim() !== smiles) throw supersededSmilesError();
     applyGeneratedGeometry(result);
     setSmilesStatus(
       "smiles_generated",
@@ -1064,10 +1302,14 @@ async function generateSmilesGeometry() {
     );
     return result;
   } finally {
-    smilesBusy = false;
-    syncSmilesControls();
-    syncEngineControls();
-    queueMicrotask(() => void maybeRunUrlSmiles());
+    /* An invalidated older request must not clear the busy state of a newer
+     * generation or revive the one-shot URL workflow after Reset. */
+    if (smilesWorkflow.release(workflowRevision)) {
+      smilesBusy = false;
+      syncSmilesControls();
+      syncEngineControls();
+      queueMicrotask(() => void maybeRunUrlSmiles());
+    }
   }
 }
 
@@ -1079,6 +1321,7 @@ async function handleManualSmiles() {
   try {
     await generateSmilesGeometry();
   } catch (error) {
+    if (error && error.name === "AbortError") return;
     setSmilesStatus(
       error && error.code ? error.code : "smiles_err_unknown",
       { e: error && error.message ? error.message : "" },
@@ -1098,26 +1341,39 @@ async function maybeRunUrlSmiles() {
   })) {
     return;
   }
+  const workflowRevision = smilesWorkflow.capture();
   urlSmilesStarted = true;
   $("smiles").value = urlSmiles;
   syncSmilesControls();
   try {
-    await generateSmilesGeometry();
+    await generateSmilesGeometry(workflowRevision);
+    requireCurrentSmilesWorkflow(workflowRevision);
     setSmilesStatus("smiles_url_optimizing");
     const optimized = await withPending(() => runOptimize({
       applyFinalGeometry: true,
       throwOnFailure: true,
+      canPublish: () => smilesWorkflow.isCurrent(workflowRevision),
     }));
+    requireCurrentSmilesWorkflow(workflowRevision);
     if (!optimized) throw new Error("xTBloom geometry optimization failed");
     setSmilesStatus("smiles_url_done", null, "ok");
   } catch (error) {
+    if (!smilesWorkflow.isCurrent(workflowRevision) || error?.name === "AbortError") return;
     const detail = smilesErrorText(error);
     setSmilesStatus("smiles_url_failed", { e: detail }, "err");
     setError(t("smiles_url_failed", { e: detail }));
   }
 }
 
-$("smiles").addEventListener("input", syncSmilesControls);
+$("smiles").addEventListener("input", () => {
+  /* User edits supersede both conformer generation and the longer URL-driven
+   * workflow, including an xTBloom optimization that starts after generation
+   * has released smilesBusy. cancel() is intentionally a no-op when no
+   * OpenChemLib request is pending. */
+  invalidateSmilesWork();
+  syncEngineControls();
+  syncSmilesControls();
+});
 $("smiles").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !$("smiles-generate").disabled) {
     event.preventDefault();
@@ -1128,6 +1384,7 @@ $("smiles-generate").addEventListener("click", () => void handleManualSmiles());
 
 function collectOptions() {
   return {
+    model: parseInt($("method").value, 10) || MODEL_GFN2_XTB,
     charge: parseFloat($("charge").value) || 0,
     unpaired: parseInt($("unpaired").value, 10) || 0,
     etempK: parseFloat($("etemp").value) || 0,
@@ -1152,23 +1409,42 @@ async function withPending(fn) {
   }
 }
 
-async function runCompute() {
-  const xyz = $("xyz").value;
-  if (!xyz.trim()) { setError(t("no_xyz")); return; }
+async function runCompute({ revealOutcome = false } = {}) {
+  /* Re-validate at call time so a change made inside the preview debounce
+   * window can never reach the engine as an invalid structure. */
+  const parsed = parseXyzCoordinates($("xyz").value);
+  if (!parsed.ok) {
+    setError(t(parsed.errorCode, parsed.messageVars || undefined));
+    if (revealOutcome) revealResultPanelAfterUserAction();
+    return;
+  }
+  const requestRevision = coordinateRevisions.capture();
+  /* Submit the canonical parsed form. The preview intentionally accepts
+   * surrounding whitespace that the C line scanner does not accept raw. */
+  const xyz = xyzAtomsToText(parsed.atoms);
   const o = collectOptions();
   showOverlay("overlay_compute");
   try {
     const t0 = performance.now();
     const m = await callWorker("compute",
-      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, o.forces ? 1 : 0]);
+      [xyz, o.model, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, o.forces ? 1 : 0]);
     const dt = performance.now() - t0;
+    if (!coordinateRevisions.isCurrent(requestRevision)) return;
     const d = JSON.parse(m.raw);
-    if (!d.ok) { setError(errorText(d)); return; }
+    if (!d.ok) {
+      setError(errorText(d));
+      if (revealOutcome) revealResultPanelAfterUserAction();
+      return;
+    }
     renderCompute(d);
-    updateMoleculeViewer(xyz);
+    updateMoleculeViewer(xyzAtomsToText(parsed.atoms));
     $("stat-ms").textContent = fmt(dt, 1);
+    if (revealOutcome) revealResultPanelAfterUserAction();
   } catch (e) {
-    setError(t("engine_call_fail") + e.message);
+    if (coordinateRevisions.isCurrent(requestRevision)) {
+      setError(t("engine_call_fail") + e.message);
+      if (revealOutcome) revealResultPanelAfterUserAction();
+    }
   } finally {
     hideOverlay();
   }
@@ -1177,21 +1453,26 @@ async function runCompute() {
 async function runOptimize({
   applyFinalGeometry = false,
   throwOnFailure = false,
+  canPublish = () => true,
+  revealOutcome = false,
 } = {}) {
-  const xyz = $("xyz").value;
-  if (!xyz.trim()) {
-    const error = new Error(t("no_xyz"));
+  const parsed = parseXyzCoordinates($("xyz").value);
+  if (!parsed.ok) {
+    const error = new Error(t(parsed.errorCode, parsed.messageVars || undefined));
     if (throwOnFailure) throw error;
     setError(error.message);
+    if (revealOutcome) revealResultPanelAfterUserAction();
     return null;
   }
+  const requestRevision = coordinateRevisions.capture();
+  const xyz = xyzAtomsToText(parsed.atoms);
   const o = collectOptions();
   const optMax = parseInt($("opt-maxiter").value, 10) || 200;
   const gradTol = parseFloat($("opt-gradtol").value) || 4.5e-4;
   const maxMoveAngstrom = parseFloat($("opt-maxmove").value) || 0.4;
   /* No blocking overlay: the engine runs in the worker, so the page stays
    * responsive and the 3Dmol viewer animates each accepted step. */
-  const symbols = getElementSymbols(xyz);
+  const symbols = parsed.atoms.map((atom) => atom.symbol);
   optFrames = [];
   optSymbols = symbols;
   stopReplay();
@@ -1203,8 +1484,9 @@ async function runOptimize({
   try {
     const t0 = performance.now();
     const m = await callWorker("optimize",
-      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, angstromToBohr(maxMoveAngstrom)],
+      [xyz, o.model, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, angstromToBohr(maxMoveAngstrom)],
       (step) => {
+        if (!coordinateRevisions.isCurrent(requestRevision) || !canPublish()) return;
         $("mol-status").textContent = tf("opt_running", { n: step.iter, max: optMax, e: fmt(step.energy, 6) });
         const frame = { iter: step.iter, natoms: step.natoms, coords: step.coords, energy: step.energy, fmax: step.fmax, symbols };
         optFrames.push(frame);
@@ -1214,12 +1496,16 @@ async function runOptimize({
         renderOptFrame(frame);
       });
     const dt = performance.now() - t0;
+    if (!coordinateRevisions.isCurrent(requestRevision) || !canPublish()) {
+      throw supersededCoordinateError();
+    }
     const d = JSON.parse(m.raw);
     if (!d.ok) {
       const error = new Error(errorText(d));
       error.code = d.error_code || "err_opt";
       if (throwOnFailure) throw error;
       setError(error.message);
+      if (revealOutcome) revealResultPanelAfterUserAction();
       return null;
     }
     renderOptimize(d);
@@ -1230,18 +1516,26 @@ async function runOptimize({
     if (applyFinalGeometry) {
       /* URL-triggered optimization is a complete import operation: publish
        * the converged geometry back to the canonical XYZ editor immediately. */
-      $("xyz").value = d.geometry;
-      updateXyzHint();
-      updateMoleculeViewer(d.geometry);
+      setCoordinateInput(d.geometry, { preserveOptimization: true });
+      refreshPreview();
       $("opt-apply").hidden = true;
     }
+    if (revealOutcome) revealResultPanelAfterUserAction();
     return d;
   } catch (e) {
+    if (
+      e?.name === "AbortError" || !coordinateRevisions.isCurrent(requestRevision) ||
+      !canPublish()
+    ) {
+      if (throwOnFailure) throw (e?.name === "AbortError" ? e : supersededCoordinateError());
+      return null;
+    }
     const error = e && e.code
       ? e
       : new Error(t("engine_call_fail") + (e && e.message ? e.message : String(e)));
     if (throwOnFailure) throw error;
     setError(error.message);
+    if (revealOutcome) revealResultPanelAfterUserAction();
     return null;
   } finally {
     $("mol-hint").textContent = t("mol_hint");
@@ -1253,21 +1547,24 @@ async function runOptimize({
   }
 }
 
-$("run").addEventListener("click", () => withPending(runCompute));
-$("opt-run").addEventListener("click", () => withPending(runOptimize));
+$("run").addEventListener("click", () => withPending(() => runCompute({ revealOutcome: true })));
+$("opt-run").addEventListener("click", () => withPending(() => runOptimize({ revealOutcome: true })));
 $("opt-apply").addEventListener("click", () => {
   const d = window.__lastResult;
-  if (d && d.geometry) {
-    $("xyz").value = d.geometry;
-    updateXyzHint();
-    updateMoleculeViewer(d.geometry);
+  if (hasCurrentResult("optimize") && d.geometry) {
+    setCoordinateInput(d.geometry, { preserveOptimization: true });
+    refreshPreview();
     setError(t("opt_apply_done"));
     $("opt-apply").hidden = true;
   }
 });
 $("reset").addEventListener("click", () => {
   document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
-  $("xyz").value = PRESETS.water.xyz;
+  invalidateSmilesWork();
+  $("smiles").value = "";
+  clearSmilesStatus();
+  setCoordinateInput(PRESETS.water.xyz);
+  $("method").value = String(MODEL_GFN2_XTB);
   $("charge").value = 0;
   $("unpaired").value = 0;
   $("etemp").value = 0;
@@ -1275,24 +1572,18 @@ $("reset").addEventListener("click", () => {
   $("etol").value = "1e-8";
   $("qtol").value = "1e-5";
   $("forces").checked = true;
-  updateXyzHint();
-  updateMoleculeViewer(PRESETS.water.xyz);
+  refreshPreview();
+  syncSmilesControls();
   stopReplay();
   optFrames = [];
   $("replay").hidden = true;
+  $("mol-status").hidden = true;
   setError(null);
-  $("energy").textContent = "—";
-  $("energy-ev").textContent = "—";
-  $("energy-kcal").textContent = "—";
-  $("table-wrap").hidden = true;
-  $("output-tools").hidden = true;
-  $("opt-apply").hidden = true;
-  window.__lastResult = null;
-  window.__lastMode = null;
+  invalidateRenderedResult();
 });
 
 $("copy-json").addEventListener("click", async () => {
-  if (!window.__lastResult) return;
+  if (!hasCurrentResult()) return;
   try {
     await navigator.clipboard.writeText(JSON.stringify(window.__lastResult, null, 2));
     $("copy-done").hidden = false;
@@ -1436,9 +1727,14 @@ async function startEngineLoad({ forceReload = false } = {}) {
 
 /* ---- bootstrap ---- */
 (async () => {
+  setupResponsiveDisclosures();
   applyI18n();
-  /* Start the optional CDN dependency immediately, but never await it here:
-   * wasm32 startup and the ordinary XYZ workflow remain independent. */
+  /* Begin the required engine fetch first so the optional multi-megabyte
+   * OpenChemLib pair cannot take network priority ahead of core XYZ startup. */
+  const engineLoad = startEngineLoad();
+  /* OpenChemLib starts eagerly in its own Worker. Regional defaults are read
+   * synchronously, so neither 3Dmol fallback selection nor engine startup can
+   * hold this optional download on the main thread's critical path. */
   startSmilesWorker();
   try {
     urlSmiles = readSmilesQuery(window.location.href);
@@ -1452,5 +1748,5 @@ async function startEngineLoad({ forceReload = false } = {}) {
     setSmilesStatus("smiles_url_failed", { e: detail }, "err");
     setError(t("smiles_url_failed", { e: detail }));
   }
-  await startEngineLoad();
+  await engineLoad;
 })();

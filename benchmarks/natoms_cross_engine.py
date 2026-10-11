@@ -766,6 +766,7 @@ def timing_summary(samples_ms: Sequence[float], batch_size: int) -> dict[str, An
         "samples_ms": list(samples_ms),
         "count": len(samples_ms),
         "min_ms": min(samples_ms),
+        "max_ms": max(samples_ms),
         "median_ms": statistics.median(samples_ms),
         "mean_ms": statistics.fmean(samples_ms),
         "p95_ms": percentile(samples_ms, 0.95),
@@ -1706,6 +1707,42 @@ def apply_cross_engine_reference(
     return failed
 
 
+def validate_reference_revision_policy(
+    reference: ReferenceArtifact,
+    runner_commit: str,
+    allow_historical_reference: bool,
+) -> None:
+    """Permit an older clean reference only when its workload is identical."""
+    reference_commit = (reference.metadata.get("commit") or {}).get("head")
+    if reference_commit == runner_commit:
+        return
+    if not allow_historical_reference:
+        raise BenchmarkError(
+            "reference artifact and current runner must use the same clean HEAD"
+        )
+
+    protocol = reference.metadata.get("protocol") or {}
+    if protocol.get("perturb_sigma_bohr") != PERTURB_SIGMA_BOHR:
+        raise BenchmarkError(
+            "historical reference artifact uses a different workload perturbation"
+        )
+    for index, row in enumerate(reference.rows.values()):
+        natoms = row["natoms"]
+        batch_size = row["batch_size"]
+        if row.get("workload_seed") != natoms * 1000 + batch_size:
+            raise BenchmarkError(
+                f"historical reference row {index} uses a different workload seed"
+            )
+        if row.get("requested_properties") != ["energy", "forces"]:
+            raise BenchmarkError(
+                f"historical reference row {index} uses different requested properties"
+            )
+        if row.get("total_atoms_in_batch") != natoms * batch_size:
+            raise BenchmarkError(
+                f"historical reference row {index} uses a different batch extent"
+            )
+
+
 def run_cell(
     cell: Cell,
     library: Path,
@@ -2023,6 +2060,14 @@ def environment_metadata(
     """Capture the exact revisions, hardware, runtime, and thread environment."""
     repository_state = git_state(REPOSITORY_ROOT)
     dxtb_threads = args.dxtb_cpu_threads or args.cpu_threads
+    reference_commit = (
+        (reference.metadata.get("commit") or {}).get("head")
+        if reference is not None
+        else None
+    )
+    historical_reference = bool(
+        reference_commit and reference_commit != repository_state.get("head")
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -2047,6 +2092,14 @@ def environment_metadata(
             ),
             "artifact": str(reference.path) if reference is not None else None,
             "artifact_sha256": reference.sha256 if reference is not None else None,
+            "artifact_commit": reference_commit,
+            "revision_policy": (
+                "explicit_historical_clean_reference"
+                if historical_reference
+                else "same_clean_head"
+                if reference is not None
+                else None
+            ),
         },
         "runner": {
             "python": sys.version,
@@ -2236,6 +2289,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "mean_ms",
         "p95_ms",
         "min_ms",
+        "max_ms",
         "systems_per_second_at_median",
         "correctness_status",
         "cross_engine_status",
@@ -2257,6 +2311,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             flat["mean_ms"] = timing.get("mean_ms")
             flat["p95_ms"] = timing.get("p95_ms")
             flat["min_ms"] = timing.get("min_ms")
+            flat["max_ms"] = timing.get("max_ms")
             flat["systems_per_second_at_median"] = timing.get(
                 "systems_per_second_at_median"
             )
@@ -2343,6 +2398,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "designate this single-engine panel-matched xTB/tblite run as the "
             "independent output reference"
+        ),
+    )
+    parser.add_argument(
+        "--allow-historical-reference",
+        action="store_true",
+        help=(
+            "permit a clean reference from an older revision after verifying "
+            "the complete publication and workload contract"
         ),
     )
     parser.add_argument("--output-json", type=Path, required=True)
@@ -2463,6 +2526,8 @@ def validate_arguments(args: argparse.Namespace) -> None:
     for engine in args.engines:
         if engine not in SUPPORTED_ENGINES:
             raise BenchmarkError(f"unsupported engine: {engine}")
+    if args.allow_historical_reference and args.reference_json is None:
+        raise BenchmarkError("--allow-historical-reference requires --reference-json")
     if args.make_reference:
         if args.reference_json is not None:
             raise BenchmarkError("--make-reference cannot use --reference-json")
@@ -2698,11 +2763,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         )
         if reference is not None:
-            reference_commit = (reference.metadata.get("commit") or {}).get("head")
-            if reference_commit != repository_state["head"]:
-                raise BenchmarkError(
-                    "reference artifact and current runner must use the same clean HEAD"
-                )
+            validate_reference_revision_policy(
+                reference,
+                repository_state["head"],
+                args.allow_historical_reference,
+            )
             reference_protocol = reference.metadata.get("protocol") or {}
             for name, expected in (
                 ("warmups", args.warmups),

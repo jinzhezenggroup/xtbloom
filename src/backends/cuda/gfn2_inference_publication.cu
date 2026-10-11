@@ -20,7 +20,8 @@ constexpr std::uint32_t kKnownProperties =
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_FORCES) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES) |
-    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES);
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) |
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS);
 
 using PlanError = Gfn2InferencePublicationPlanError;
 using SystemError = Gfn2InferencePublicationSystemError;
@@ -120,6 +121,7 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
   const bool forces = property_requested(plan, XTBLOOM_COMPUTE_FORCES);
   const bool charges = property_requested(plan, XTBLOOM_COMPUTE_ATOMIC_CHARGES);
   const bool point_forces = property_requested(plan, XTBLOOM_COMPUTE_POINT_CHARGE_FORCES);
+  const bool dipoles = property_requested(plan, XTBLOOM_COMPUTE_DIPOLE_MOMENTS);
   if (plan.abi_version != kGfn2InferencePublicationAbiVersion || plan.plan_token == 0u ||
       plan.requested_properties == 0u || (plan.requested_properties & ~kKnownProperties) != 0u ||
       plan.maximum_iterations == 0u ||
@@ -136,6 +138,10 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
       plan.generation_elements != plan.batch_size ||
       !aligned(plan.committed_generations, alignof(std::uint64_t)) ||
       input.plan_token != plan.plan_token || input.eligible_elements != plan.batch_size ||
+      (input.admission.error == nullptr
+           ? input.admission.error_elements != 0 || input.admission.plan_token != 0u
+           : input.admission.error_elements != 1 || input.admission.plan_token != plan.plan_token ||
+                 !aligned(input.admission.error, alignof(std::uint32_t))) ||
       !aligned(input.eligible_mask, alignof(std::uint8_t)) ||
       input.scc_elements != plan.batch_size || !aligned(input.iterations, alignof(std::uint64_t)) ||
       !aligned(input.converged, alignof(std::uint8_t)) ||
@@ -144,8 +150,8 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
       input.energy_elements != (energy ? plan.batch_size : 0) ||
       !canonical_pointer(input.qm_forces, forces ? atom_coordinates : 0) ||
       input.qm_force_elements != (forces ? atom_coordinates : 0) ||
-      !canonical_pointer(input.atomic_charges, charges ? plan.total_atoms : 0) ||
-      input.atomic_charge_elements != (charges ? plan.total_atoms : 0) ||
+      !canonical_pointer(input.atomic_charges, (charges || dipoles) ? plan.total_atoms : 0) ||
+      input.atomic_charge_elements != ((charges || dipoles) ? plan.total_atoms : 0) ||
       !canonical_pointer(input.point_forces, point_forces ? point_coordinates : 0) ||
       input.point_force_elements != (point_forces ? point_coordinates : 0) ||
       input.terminal_system_error_elements != plan.batch_size ||
@@ -154,6 +160,10 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
       input.execution_system_error_elements != plan.batch_size ||
       !aligned(input.execution_system_errors, alignof(std::uint32_t)) ||
       !aligned(input.execution_plan_error, alignof(std::uint32_t)) ||
+      !canonical_pointer(input.positions, dipoles ? atom_coordinates : 0) ||
+      input.position_elements != (dipoles ? atom_coordinates : 0) ||
+      !canonical_pointer(input.atomic_dipoles, dipoles ? atom_coordinates : 0) ||
+      input.atomic_dipole_elements != (dipoles ? atom_coordinates : 0) ||
       results.plan_token != plan.plan_token || results.batch_elements != plan.batch_size ||
       !canonical_pointer(results.energies, energy ? plan.batch_size : 0) ||
       results.energy_elements != (energy ? plan.batch_size : 0) ||
@@ -163,6 +173,8 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
       results.atomic_charge_elements != (charges ? plan.total_atoms : 0) ||
       !canonical_pointer(results.point_forces, point_forces ? point_coordinates : 0) ||
       results.point_force_elements != (point_forces ? point_coordinates : 0) ||
+      !canonical_pointer(results.dipole_moments, dipoles ? 3 * plan.batch_size : 0) ||
+      results.dipole_moment_elements != (dipoles ? 3 * plan.batch_size : 0) ||
       !aligned(results.iterations, alignof(std::int32_t)) ||
       !aligned(results.converged, alignof(std::uint8_t)) ||
       !aligned(results.system_statuses, alignof(xtbloom_status_t)) ||
@@ -176,29 +188,33 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
     return false;
   }
 
-  RangeList<24> reads;
-  RangeList<12> writes;
+  RangeList<28> reads;
+  RangeList<14> writes;
   const bool ranges_valid =
       reads.add(plan.atom_offsets, plan.batch_size + 1) &&
       reads.add(plan.point_charge_offsets,
                 plan.total_point_charges == 0 ? 0 : plan.batch_size + 1) &&
       reads.add(plan.geometry_epoch.value, 1) &&
       reads.add(plan.committed_generations, plan.batch_size) &&
+      reads.add(input.admission.error, input.admission.error_elements) &&
       reads.add(input.eligible_mask, plan.batch_size) &&
       reads.add(input.iterations, plan.batch_size) && reads.add(input.converged, plan.batch_size) &&
       reads.add(input.system_statuses, plan.batch_size) &&
       reads.add(input.energies, energy ? plan.batch_size : 0) &&
       reads.add(input.qm_forces, forces ? atom_coordinates : 0) &&
-      reads.add(input.atomic_charges, charges ? plan.total_atoms : 0) &&
+      reads.add(input.atomic_charges, (charges || dipoles) ? plan.total_atoms : 0) &&
       reads.add(input.point_forces, point_forces ? point_coordinates : 0) &&
       reads.add(input.terminal_system_errors, plan.batch_size) &&
       reads.add(input.terminal_plan_error, 1) &&
       reads.add(input.execution_system_errors, plan.batch_size) &&
       reads.add(input.execution_plan_error, 1) &&
+      reads.add(input.positions, dipoles ? atom_coordinates : 0) &&
+      reads.add(input.atomic_dipoles, dipoles ? atom_coordinates : 0) &&
       writes.add(results.energies, energy ? plan.batch_size : 0) &&
       writes.add(results.qm_forces, forces ? atom_coordinates : 0) &&
       writes.add(results.atomic_charges, charges ? plan.total_atoms : 0) &&
       writes.add(results.point_forces, point_forces ? point_coordinates : 0) &&
+      writes.add(results.dipole_moments, dipoles ? 3 * plan.batch_size : 0) &&
       writes.add(results.iterations, plan.batch_size) &&
       writes.add(results.converged, plan.batch_size) &&
       writes.add(results.system_statuses, plan.batch_size) &&
@@ -227,6 +243,7 @@ __global__ void publication_plan_preflight_kernel(
     Gfn2InferencePublicationDeviceWorkspace workspace,
     Gfn2InferencePublicationDeviceDiagnostics diagnostics) {
   __shared__ int offsets_valid;
+  if (!gfn2_request_admitted(input.admission)) return;
   if (threadIdx.x == 0) {
     offsets_valid = 1;
     const std::uint64_t epoch =
@@ -278,12 +295,14 @@ __global__ void publish_inference_results_kernel(
     Gfn2InferencePublicationDeviceWorkspace workspace,
     Gfn2InferencePublicationDeviceDiagnostics diagnostics) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!gfn2_request_admitted(input.admission)) return;
   if (system >= plan.batch_size || atomicAdd(diagnostics.plan_error, 0u) != 0u) return;
 
   __shared__ int finite_results;
   __shared__ xtbloom_status_t final_status;
   __shared__ std::uint32_t final_error;
   __shared__ std::int32_t public_iterations;
+  __shared__ double molecular_dipole[3];
   if (threadIdx.x == 0) {
     finite_results = 1;
     final_status = input.system_statuses[system];
@@ -332,6 +351,7 @@ __global__ void publish_inference_results_kernel(
   const bool forces = (plan.requested_properties & XTBLOOM_COMPUTE_FORCES) != 0u;
   const bool charges = (plan.requested_properties & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u;
   const bool point_forces = (plan.requested_properties & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u;
+  const bool dipoles = (plan.requested_properties & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u;
   const std::int64_t atom_begin = plan.atom_offsets[system];
   const std::int64_t atom_end = plan.atom_offsets[system + 1];
   const std::int64_t point_begin =
@@ -359,6 +379,22 @@ __global__ void publish_inference_results_kernel(
            element += blockDim.x) {
         if (!isfinite(input.point_forces[element])) atomicExch(&finite_results, 0);
       }
+    }
+    if (dipoles && threadIdx.x < 3) {
+      const std::int64_t component = threadIdx.x;
+      double sum = 0.0;
+      for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+        const double charge = input.atomic_charges[atom];
+        const double position = input.positions[3 * atom + component];
+        const double atomic_dipole = input.atomic_dipoles[3 * atom + component];
+        if (!isfinite(charge) || !isfinite(position) || !isfinite(atomic_dipole)) {
+          atomicExch(&finite_results, 0);
+        } else {
+          sum += position * charge + atomic_dipole;
+        }
+      }
+      molecular_dipole[component] = sum;
+      if (!isfinite(sum)) atomicExch(&finite_results, 0);
     }
   }
   __syncthreads();
@@ -391,6 +427,10 @@ __global__ void publish_inference_results_kernel(
          element += blockDim.x) {
       results.point_forces[element] = publish_success ? input.point_forces[element] : failed_value;
     }
+  }
+  if (dipoles && threadIdx.x < 3) {
+    results.dipole_moments[3 * system + threadIdx.x] =
+        publish_success ? molecular_dipole[threadIdx.x] : failed_value;
   }
   if (threadIdx.x == 0) {
     results.iterations[system] = public_iterations;

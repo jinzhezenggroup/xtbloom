@@ -123,7 +123,7 @@ self.onmessage = async (event) => {
       if (msg.cmd === "compute") {
         raw = Module.ccall(
           "xtbloom_web_compute", "string",
-          ["string", "number", "number", "number", "number", "number", "number", "number"],
+          ["string", "number", "number", "number", "number", "number", "number", "number", "number"],
           msg.args,
         );
       } else if (msg.cmd === "optimize") {
@@ -134,7 +134,7 @@ self.onmessage = async (event) => {
         try {
           raw = Module.ccall(
             "xtbloom_web_optimize", "string",
-            ["string", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
+            ["string", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
             msg.args,
           );
         } finally {

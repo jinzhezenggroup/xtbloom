@@ -1,0 +1,40 @@
+source_revision=56afcad36d05aa4ac6f3c721d78f09e39c56069b
+request_profile_iterations=10
+profile_binary_sha256=472938cc9660762b23fd955f9b66f1ee84c679925f90e4e659eb9694e3b4125f
+profile_library_sha256=6e1b9f3558199627eab29766ad410bf1180b9a30dbabf93ab93a77da773c9f5a
+
+observed_cuda_api_counts:
+cudaEventSynchronize=10
+cudaStreamWaitEvent=10
+cudaEventRecord=20
+cudaGraphLaunch_v10000=10
+cudaLaunchKernel=2650
+cudaMemsetAsync=830
+cudaMemcpyAsync=30
+cudaStreamIsCapturing_v10000=30
+cudaStreamGetDevice_v12080=10
+
+required_zero_counts_from_cuda_api_summary:
+cudaDeviceSynchronize=0
+cudaStreamSynchronize=0
+cudaEventQuery=0
+cudaStreamQuery=0
+cudaMalloc_and_variants=0
+cudaFree_and_variants=0
+cudaHostAlloc=0
+cudaEventCreate_and_destroy=0
+cudaStreamCreate_and_destroy=0
+cudaGraphCreate_destroy_instantiate=0
+
+observed_cuda_memory_operations:
+device_to_device_count=10
+device_to_device_total_mb=12.032
+device_to_host_count=20
+host_to_device_count=0
+memset_count=830
+
+stable_addresses_and_graph_reuse=PASS (production fixed-plan/request assertions and exact-head runtime Graph/cache tests)
+topology_resource_rebuild=0 (no allocation or Graph/resource construction APIs in capture)
+host_progress_polling=0
+device_wide_synchronization=0
+conclusion=PASS: ten persistent request reuses wait on ten exact completion events with no steady-state allocation, resource churn, host progress polling, stream synchronization, or device-wide synchronization.

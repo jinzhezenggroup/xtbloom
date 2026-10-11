@@ -4,10 +4,17 @@ For input/output responsibilities and Python/native usage, start with the
 [QM/MM user guide](../user-guide/qmmm.md). This page records the equations,
 reference sources, and pinned numerical evidence.
 
-xTBloom follows the external-charge model implemented by xTB 6.7.1. The
-reference interaction is a softened Coulomb potential acting directly on GFN2
-shell monopoles. It does not add a point-charge electric field or field
-gradient directly to the GFN2 atomic dipole or quadrupole potentials.
+xTBloom follows the model-specific external-charge paths implemented by xTB
+6.7.1. Both are softened Coulomb potentials on shell monopoles, but their
+hardness combination differs. Neither adds a direct point-charge field or field
+gradient to GFN2 atomic dipole or quadrupole potentials.
+
+For GFN1 shell harmonic hardness $g_s$ and point-site hardness $g_p$, define
+$x_{sp}=2/(1/g_s+1/g_p)$ and
+$K_{sp}=(\lVert\mathbf R_A-\mathbf R_p\rVert^2+x_{sp}^{-2})^{-1/2}$.
+The published GFN1 implementation and oracle fixtures use this equation.
+
+For GFN2, the shell-scaled hardness convention is:
 
 For shell $s$ on atom $A$ and external point charge $p$, define
 
@@ -21,7 +28,7 @@ V_s^{\mathrm{PC}} &= \sum_p Q_p K_{sp}.
 \end{aligned}
 ```
 
-$\gamma_A^{\mathrm{element}}$ is the element hardness and $h_s$ is the shell
+$\gamma_A^{\mathrm{element}}$ is the GFN2 element hardness and $h_s$ is the shell
 Hubbard scaling factor. $\gamma_p$ is an explicit positive input in the
 low-level C API. The potential $V_s^{\mathrm{PC}}$ is geometry dependent but
 SCC-iteration independent, so backends compute one value per shell before SCC
@@ -35,10 +42,12 @@ The converged explicit embedding energy is
 E_{\mathrm{PC}} = \sum_s q_s V_s^{\mathrm{PC}}.
 ```
 
-where $q_s$ is the net shell charge. xTBloom does not compute point-charge to
-point-charge interactions. For
-$\mathbf d_{Ap} = \mathbf R_A - \mathbf R_p$ and
-$D_{sp} = \lVert\mathbf d_{Ap}\rVert^2 + a_{sp}^2$, the coordinate gradients are
+where $q_s$ is the net shell charge and $K_{sp}$ is the appropriate GFN1 or
+GFN2 kernel above. xTBloom does not compute point-charge to point-charge
+interactions. For $\mathbf d_{Ap} = \mathbf R_A - \mathbf R_p$, define
+$D_{sp}=\lVert\mathbf d_{Ap}\rVert^2+x_{sp}^{-2}$ for GFN1 and
+$D_{sp}=\lVert\mathbf d_{Ap}\rVert^2+a_{sp}^2$ for GFN2. The coordinate
+gradients are
 
 ```math
 \begin{aligned}

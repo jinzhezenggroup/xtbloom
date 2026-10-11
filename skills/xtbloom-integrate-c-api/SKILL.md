@@ -51,7 +51,8 @@ route it to the matching Python skill and use its ephemeral `uv run` guidance.
 
 ## Non-negotiable boundaries
 
-- Use GFN2-xTB only. GFN1-xTB and ROCm values are reserved, not supported.
+- Use GFN1-xTB only with a CPU context. GFN2-xTB supports CPU and CUDA; ROCm
+  remains reserved and unsupported.
 - Use binary64 and atomic units: bohr, Hartree, Hartree/bohr, and `k_B T` in
   Hartree at the C boundary.
 - Never omit `scc_iterations`, `scc_converged`, or `per_system_status` for a

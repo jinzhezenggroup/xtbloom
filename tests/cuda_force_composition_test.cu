@@ -399,6 +399,90 @@ int test_invalid_request_and_peer_overflow() {
   return 0;
 }
 
+int test_electric_field_force_and_peer_isolation() {
+  HostCase host = make_case(3u);
+  const std::vector<double> fields{0.25, -0.5, 0.75, -0.3, 0.2, 0.4, 0.1, 0.2, -0.6};
+  std::vector<double> charges(static_cast<std::size_t>(host.atom_offsets.back()));
+  for (std::size_t atom = 0; atom < charges.size(); ++atom) {
+    charges[atom] = atom % 2u == 0u ? 0.4 + 0.1 * static_cast<double>(atom)
+                                    : -0.2 - 0.05 * static_cast<double>(atom);
+  }
+
+  DeviceCase device(host);
+  DeviceBuffer<double> device_fields;
+  DeviceBuffer<double> device_charges;
+  CUDA_CHECK(device_fields.allocate(fields.size()));
+  CUDA_CHECK(device_charges.allocate(charges.size()));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  CUDA_CHECK(device.upload(host, stream));
+  CUDA_CHECK(device_fields.upload(fields, stream));
+  CUDA_CHECK(device_charges.upload(charges, stream));
+  device.input.electric_field_vectors = device_fields.get();
+  device.input.electric_field_vector_elements = static_cast<std::int64_t>(fields.size());
+  device.input.atomic_charges = device_charges.get();
+  device.input.atomic_charge_elements = static_cast<std::int64_t>(charges.size());
+  CUDA_CHECK(reset_gfn2_force_composition_device_errors_cuda(
+      device.batch.batch_size, device.system_errors.get(), device.plan_error.get(), stream));
+  CUDA_CHECK(compose_gfn2_forces_cuda(device.batch, device.activity, device.input, device.output,
+                                      device.workspace, device.system_errors.get(),
+                                      device.plan_error.get(), stream));
+  std::vector<double> qm;
+  std::vector<std::uint32_t> errors;
+  CUDA_CHECK(device.qm_output.download(qm, stream));
+  CUDA_CHECK(device.system_errors.download(errors, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (std::size_t system = 0; system < host.requested.size(); ++system) {
+    for (std::int64_t atom = host.atom_offsets[system]; atom < host.atom_offsets[system + 1u];
+         ++atom) {
+      for (std::int64_t axis = 0; axis < 3; ++axis) {
+        const std::size_t coordinate = static_cast<std::size_t>(atom * 3 + axis);
+        const double expected =
+            host.expected_qm[coordinate] + charges[static_cast<std::size_t>(atom)] *
+                                               fields[system * 3u + static_cast<std::size_t>(axis)];
+        CHECK(qm[coordinate] == expected);
+      }
+    }
+    CHECK(errors[system] == 0u);
+  }
+
+  /* A non-finite field is peer-local and the failed system publishes no
+   * partial force slice, while healthy peers remain bitwise unchanged. */
+  std::vector<double> bad_fields = fields;
+  bad_fields[3] = std::numeric_limits<double>::quiet_NaN();
+  CUDA_CHECK(device_fields.upload(bad_fields, stream));
+  CUDA_CHECK(device.qm_output.upload(std::vector<double>(qm.size(), kSentinel), stream));
+  CUDA_CHECK(reset_gfn2_force_composition_device_errors_cuda(
+      device.batch.batch_size, device.system_errors.get(), device.plan_error.get(), stream));
+  CUDA_CHECK(compose_gfn2_forces_cuda(device.batch, device.activity, device.input, device.output,
+                                      device.workspace, device.system_errors.get(),
+                                      device.plan_error.get(), stream));
+  CUDA_CHECK(device.qm_output.download(qm, stream));
+  CUDA_CHECK(device.system_errors.download(errors, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (std::size_t system = 0; system < host.requested.size(); ++system) {
+    for (std::int64_t atom = host.atom_offsets[system]; atom < host.atom_offsets[system + 1u];
+         ++atom) {
+      for (std::int64_t axis = 0; axis < 3; ++axis) {
+        const std::size_t coordinate = static_cast<std::size_t>(atom * 3 + axis);
+        if (system == 1u) {
+          CHECK(qm[coordinate] == kSentinel);
+        } else {
+          const double expected = host.expected_qm[coordinate] +
+                                  charges[static_cast<std::size_t>(atom)] *
+                                      fields[system * 3u + static_cast<std::size_t>(axis)];
+          CHECK(qm[coordinate] == expected);
+        }
+      }
+    }
+  }
+  CHECK(errors[0] == 0u && errors[2] == 0u);
+  CHECK(errors[1] ==
+        static_cast<std::uint32_t>(Gfn2ForceCompositionDeviceError::kNonfiniteElectricFieldForce));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_plan_failure_is_whole_call_atomic() {
   HostCase host = make_case(8u);
   DeviceCase device(host);
@@ -502,6 +586,7 @@ int main() {
   CHECK(test_batch_matrix() == 0);
   CHECK(test_terminal_gate_and_transactionality() == 0);
   CHECK(test_invalid_request_and_peer_overflow() == 0);
+  CHECK(test_electric_field_force_and_peer_isolation() == 0);
   CHECK(test_plan_failure_is_whole_call_atomic() == 0);
   CHECK(test_changed_input_graph_replay() == 0);
   CHECK(test_host_validation() == 0);

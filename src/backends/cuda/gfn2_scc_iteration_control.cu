@@ -176,12 +176,30 @@ __global__ void derive_activity_kernel(Gfn2SccIterationDevicePolicy policy,
                                        Gfn2SccIterationDeviceStateInput state,
                                        Gfn2SccIterationDeviceProvenance provenance,
                                        Gfn2GeometryEpochConsumerDevice geometry, int dynamic_epoch,
-                                       Gfn2SccIterationDeviceLedger ledger) {
+                                       Gfn2SccIterationDeviceLedger ledger,
+                                       Gfn2DeviceAdmission admission) {
   __shared__ int invalid_state;
   __shared__ int invalid_geometry;
   __shared__ int any_active;
   __shared__ unsigned long long plan_record;
   __shared__ unsigned long long expected_generation;
+
+  /* A disabled admission descriptor is represented by all-zero fields. Do
+   * not dereference its null error pointer while evaluating legacy leaf calls.
+   *
+   * A rejected request must nevertheless fail-close the canonical activity
+   * ledger. The bounded fallback has already submitted every iteration in the
+   * configured limit, so merely returning here would let a stale active mask
+   * from the preceding request admit the numerical body. Preserve diagnostic
+   * and result state for transactional rejection; only the activity controls
+   * that authorize later mutation are cleared. */
+  if (admission.error != nullptr && !gfn2_request_admitted(admission)) {
+    if (threadIdx.x == 0) *ledger.sequence_active = 0u;
+    for (std::int64_t system = threadIdx.x; system < policy.batch_size; system += blockDim.x) {
+      ledger.active_mask[system] = 0u;
+    }
+    return;
+  }
 
   if (threadIdx.x == 0) {
     invalid_state = 0;
@@ -454,6 +472,7 @@ static cudaError_t derive_activity_impl(const Gfn2SccIterationDevicePolicy& poli
                                         const Gfn2SccIterationDeviceProvenance& provenance,
                                         const Gfn2GeometryEpochConsumerDevice* geometry,
                                         const Gfn2SccIterationDeviceLedger& ledger,
+                                        const Gfn2DeviceAdmission& admission,
                                         cudaStream_t stream) noexcept {
   const bool dynamic_epoch = geometry != nullptr;
   if (policy.batch_size <= 0 || policy.maximum_iterations == 0u || policy.plan_token == 0u ||
@@ -485,6 +504,13 @@ static cudaError_t derive_activity_impl(const Gfn2SccIterationDevicePolicy& poli
     return cudaErrorInvalidValue;
   }
 
+  const bool admission_disabled =
+      admission.error == nullptr && admission.error_elements == 0 && admission.plan_token == 0u;
+  const bool admission_enabled = admission.error_elements == 1 &&
+                                 admission.plan_token == policy.plan_token &&
+                                 is_aligned(admission.error, alignof(std::uint32_t));
+  if (!admission_disabled && !admission_enabled) return cudaErrorInvalidValue;
+
   AddressRange writes[5];
   if (!valid_ledger(ledger, policy.batch_size, policy.plan_token, writes)) {
     return cudaErrorInvalidValue;
@@ -503,6 +529,12 @@ static cudaError_t derive_activity_impl(const Gfn2SccIterationDevicePolicy& poli
     if (overlaps_any(read, writes, 5u)) {
       return cudaErrorInvalidValue;
     }
+  }
+  AddressRange admission_read{};
+  if (!make_range(admission.error, admission.error_elements, sizeof(std::uint32_t),
+                  &admission_read) ||
+      overlaps_any(admission_read, writes, 5u)) {
+    return cudaErrorInvalidValue;
   }
 
   if (dynamic_epoch) {
@@ -528,8 +560,8 @@ static cudaError_t derive_activity_impl(const Gfn2SccIterationDevicePolicy& poli
 
   const Gfn2GeometryEpochConsumerDevice consumer =
       dynamic_epoch ? *geometry : Gfn2GeometryEpochConsumerDevice{};
-  derive_activity_kernel<<<1, kThreadsPerBlock, 0, stream>>>(policy, state, provenance, consumer,
-                                                             dynamic_epoch ? 1 : 0, ledger);
+  derive_activity_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      policy, state, provenance, consumer, dynamic_epoch ? 1 : 0, ledger, admission);
   return cudaPeekAtLastError();
 }
 
@@ -537,7 +569,16 @@ cudaError_t derive_gfn2_scc_iteration_activity_cuda(
     const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
     const Gfn2SccIterationDeviceProvenance& provenance, const Gfn2SccIterationDeviceLedger& ledger,
     cudaStream_t stream) noexcept {
-  return derive_activity_impl(policy, state, provenance, nullptr, ledger, stream);
+  return derive_activity_impl(policy, state, provenance, nullptr, ledger, Gfn2DeviceAdmission{},
+                              stream);
+}
+
+cudaError_t derive_gfn2_scc_iteration_activity_cuda(
+    const Gfn2SccIterationDevicePolicy& policy, const Gfn2SccIterationDeviceStateInput& state,
+    const Gfn2SccIterationDeviceProvenance& provenance,
+    const Gfn2GeometryEpochConsumerDevice& geometry, const Gfn2SccIterationDeviceLedger& ledger,
+    const Gfn2DeviceAdmission& admission, cudaStream_t stream) noexcept {
+  return derive_activity_impl(policy, state, provenance, &geometry, ledger, admission, stream);
 }
 
 cudaError_t derive_gfn2_scc_iteration_activity_cuda(
@@ -545,7 +586,8 @@ cudaError_t derive_gfn2_scc_iteration_activity_cuda(
     const Gfn2SccIterationDeviceProvenance& provenance,
     const Gfn2GeometryEpochConsumerDevice& geometry, const Gfn2SccIterationDeviceLedger& ledger,
     cudaStream_t stream) noexcept {
-  return derive_activity_impl(policy, state, provenance, &geometry, ledger, stream);
+  return derive_activity_impl(policy, state, provenance, &geometry, ledger, Gfn2DeviceAdmission{},
+                              stream);
 }
 
 cudaError_t normalize_gfn2_scc_stage_cuda(const Gfn2SccStageDeviceReport& report,

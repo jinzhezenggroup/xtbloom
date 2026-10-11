@@ -7,12 +7,25 @@ xTBloom supports two external electrostatic inputs that can be used together:
 
 Both enter the SCC problem. They are not post-processing corrections.
 
+## Real-world application
+
+[LAMMPS-DPRc](https://github.com/jinzhezenggroup/lammps-dprc) is a
+real-world application of this interface. It uses xTBloom as the batched
+GFN2-xTB QM engine for QM/MM umbrella-sampling workloads and can optionally
+apply a DPA4c
+[DPRc](https://docs.deepmodeling.com/projects/deepmd/en/stable/model/dprc.html)
+correction. LAMMPS-DPRc owns the LAMMPS-specific plugins, multi-window
+batching, periodic electrostatics, and end-to-end workflow; xTBloom remains
+the scientific engine behind its stable public C ABI.
+
 ## Explicit point charges
 
 For each point charge provide a position, charge value, and positive screening
-parameter `gamma`. xTBloom computes its interaction with the GFN2 shell
-monopoles, includes that potential in every SCC iteration, and returns analytic
-forces on both the QM atoms and point charges when requested.
+parameter `gamma`. Both models include the potential in every SCC iteration and
+return analytic forces on QM atoms and point charges. The screening is
+model-specific: GFN2 combines each shell hardness with the point-site gamma,
+while GFN1 combines the GFN1 shell harmonic hardness with the point-site
+hardness. Do not reuse one model's hardness table for the other.
 
 The caller remains responsible for:
 

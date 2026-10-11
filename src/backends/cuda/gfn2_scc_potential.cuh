@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -53,6 +54,7 @@ enum class Gfn2SccPotentialDeviceError : std::uint32_t {
   kNonfiniteAtomicPotentialArithmetic = 15u,
   kInvalidSpinLayout = 16u,
   kNonfiniteSpinPotential = 17u,
+  kNonfiniteElectricFieldPotential = 18u,
 };
 
 /*
@@ -81,6 +83,10 @@ struct Gfn2SccPotentialDeviceBatch {
   const std::int64_t* dipole_offsets = nullptr;
   const std::int64_t* quadrupole_offsets = nullptr;
   const std::int64_t* shell_to_atom = nullptr;
+
+  /* The model selects whether dipole/quadrupole offsets and buffers carry the
+   * GFN2 3/6-component layout or the canonical scalar-only GFN1 layout. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 struct Gfn2SccPotentialDeviceActivity {
@@ -133,6 +139,12 @@ struct Gfn2SccPotentialDeviceComponents {
   const double* periodic_atomic = nullptr;
   std::int64_t periodic_atomic_elements = 0;
   std::uint64_t plan_token = 0u;
+  /* Optional normalized uniform-field potentials. Both views are absent for
+   * legacy field-free bindings or present together for fixed runtime plans. */
+  const double* electric_field_atomic = nullptr;
+  std::int64_t electric_field_atomic_elements = 0;
+  const double* electric_field_dipole = nullptr;
+  std::int64_t electric_field_dipole_elements = 0;
 };
 
 /* Spin-polarization shell potential in WavefunctionLayout charge/magnetization
@@ -234,7 +246,9 @@ cudaError_t reduce_gfn2_scc_spin_atomic_charges_cuda(
 /*
  * Compose component potentials in CPU order and map topology-major arrays back
  * to field layouts. Shell order is ES2, ES3, explicit-PC; atomic order is AES2,
- * periodic, D4. Disabled components require null+zero extents and publish zero.
+ * periodic, D4, electric field. Disabled components require null+zero extents
+ * and publish zero. Field views are mask-independent because attachment
+ * presence is numerical, not fixed topology; absent peers carry zero values.
  */
 cudaError_t compose_gfn2_scc_potentials_cuda(
     const Gfn2SccPotentialDeviceBatch& batch, const Gfn2SccPotentialDeviceComponents& components,

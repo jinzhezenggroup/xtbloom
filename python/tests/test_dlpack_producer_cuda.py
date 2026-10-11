@@ -364,6 +364,28 @@ def test_device_producer_out_precedence_mixed(tmp_path: object) -> None:
 
 
 @pytest.mark.cuda
+def test_none_out_uses_cuda_result_policy() -> None:
+    """A ``None`` entry leaves allocation to the CUDA result arena."""
+    skip = _device_ready()
+    if skip is not None:
+        pytest.skip(skip)
+
+    packed = {
+        name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
+    }
+    batch = ArrayBatch(**packed, backend="cuda", stream=1)
+    result = batch.compute(result_memory="cuda", out={"energies": None})
+
+    assert isinstance(result.energies, dlpack.DLPackResultBuffer)
+    assert result.energies.__dlpack_device__() == (
+        dlpack._DLPACK_DEVICE_CUDA,
+        batch.context.device_id,
+    )
+    result.close()
+    batch.close()
+
+
+@pytest.mark.cuda
 def test_device_producer_all_outputs_supplied_does_not_allocate_arena(
     tmp_path: object,
 ) -> None:

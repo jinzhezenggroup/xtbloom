@@ -1,0 +1,9 @@
+engine,hessian_batch_size,availability,whole_batch_ms,amortized_ms_per_hessian,hessians_per_hour,sample_count,correctness
+xtb,1,available,2858.988247,2858.988247,1259.1867083670456,3,pass
+xtb,128,unavailable,,,,0,
+xtbloom-cpu,1,available,1372.832676,1372.832676,2622.315204857493,3,pass
+xtbloom-cpu,128,available,145630.304263,1137.7367520546875,3164.1765931342256,1,pass
+xtbloom-cuda,1,available,2338.675981,2338.675981,1539.3325237216777,3,pass
+xtbloom-cuda,128,available,105840.64977999999,826.8800764062499,4353.71476798203,1,pass
+dxtb-cpu-ad,1,available,96169.75266299999,96169.75266299999,37.43380741151736,1,pass
+dxtb-cpu-ad,128,unavailable,,,,0,

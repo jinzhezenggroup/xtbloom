@@ -24,6 +24,9 @@ namespace {
 using xtbloom::detail::Gfn2AtomPair;
 using xtbloom::detail::Gfn2GenerationScope;
 using xtbloom::detail::Gfn2GeometryCacheProvenanceView;
+using xtbloom::detail::Gfn2PairListConsumerView;
+using xtbloom::detail::Gfn2PairListRole;
+using xtbloom::detail::Gfn2PairListState;
 using xtbloom::detail::Gfn2PairMapKind;
 using xtbloom::detail::Gfn2PlanMemorySpace;
 using xtbloom::detail::Gfn2PlanSchemaDiagnostic;
@@ -249,6 +252,72 @@ struct DeviceCase {
     BIND_FIELD(bucket_systems, bucket_system_count)
     BIND_FIELD(bucket_orbital_counts, bucket_orbital_count)
 #undef BIND_FIELD
+    return result;
+  }
+};
+
+struct DevicePairListLease {
+  DeviceBuffer<std::int64_t> pair_offsets;
+  DeviceBuffer<Gfn2AtomPair> pairs;
+  DeviceBuffer<std::int64_t> pair_counts;
+  DeviceBuffer<std::int64_t> neighbor_offsets;
+  DeviceBuffer<std::int64_t> neighbors;
+  DeviceBuffer<std::int64_t> neighbor_counts;
+  DeviceBuffer<std::uint64_t> committed_generations;
+  DeviceBuffer<std::uint8_t> eligible_mask;
+  DeviceBuffer<std::uint8_t> active_mask;
+
+  cudaError_t allocate(const Gfn2RaggedTopologyView& topology) {
+    constexpr std::int64_t kPairCapacity = 10;
+    constexpr std::int64_t kNeighborCapacity = 10;
+    cudaError_t status = pair_offsets.allocate(static_cast<std::size_t>(topology.batch_size + 1));
+#define ALLOCATE_FIELD(field, count)                          \
+  if (status == cudaSuccess) {                                \
+    status = field.allocate(static_cast<std::size_t>(count)); \
+  }
+    ALLOCATE_FIELD(pairs, topology.batch_size * kPairCapacity)
+    ALLOCATE_FIELD(pair_counts, topology.batch_size)
+    ALLOCATE_FIELD(neighbor_offsets, topology.total_atoms + 1)
+    ALLOCATE_FIELD(neighbors, topology.total_atoms * kNeighborCapacity)
+    ALLOCATE_FIELD(neighbor_counts, topology.total_atoms)
+    ALLOCATE_FIELD(committed_generations, topology.batch_size)
+    ALLOCATE_FIELD(eligible_mask, topology.batch_size)
+    ALLOCATE_FIELD(active_mask, topology.batch_size)
+#undef ALLOCATE_FIELD
+    return status;
+  }
+
+  Gfn2PairListConsumerView view(const Gfn2RaggedTopologyView& topology) const {
+    Gfn2PairListConsumerView result{};
+    result.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+    result.state = Gfn2PairListState::kCommitted;
+    result.role = Gfn2PairListRole::kCoordination;
+    result.pair_map_kind = Gfn2PairMapKind::kExplicit;
+    result.plan_token = topology.plan_token;
+    result.cutoff_bohr = 25.0;
+    result.list_builder_cutoff_bohr = 50.0;
+    result.batch_size = topology.batch_size;
+    result.total_atoms = topology.total_atoms;
+    result.max_pairs_per_system = 10;
+    result.max_neighbors_per_atom = 10;
+    result.pair_offset_count = static_cast<std::int64_t>(pair_offsets.size());
+    result.neighbor_offset_count = static_cast<std::int64_t>(neighbor_offsets.size());
+    result.pair_count = static_cast<std::int64_t>(pairs.size());
+    result.neighbor_count = static_cast<std::int64_t>(neighbors.size());
+    result.pair_offsets = pair_offsets.get();
+    result.pairs = pairs.get();
+    result.pair_count_elements = static_cast<std::int64_t>(pair_counts.size());
+    result.neighbor_count_elements = static_cast<std::int64_t>(neighbor_counts.size());
+    result.pair_counts = pair_counts.get();
+    result.neighbor_counts = neighbor_counts.get();
+    result.neighbor_offsets = neighbor_offsets.get();
+    result.neighbors = neighbors.get();
+    result.committed_generation_count = static_cast<std::int64_t>(committed_generations.size());
+    result.eligible_mask_count = static_cast<std::int64_t>(eligible_mask.size());
+    result.active_mask_count = static_cast<std::int64_t>(active_mask.size());
+    result.committed_generations = committed_generations.get();
+    result.eligible_mask = eligible_mask.get();
+    result.active_mask = active_mask.get();
     return result;
   }
 };
@@ -814,6 +883,85 @@ int test_device_projections() {
   return 0;
 }
 
+int test_device_pair_list_role_projection() {
+  const HostCase host = make_case(8);
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreate(&stream));
+  DeviceCase device;
+  CUDA_CHECK(device.upload(host, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  const Gfn2RaggedTopologyView topology = device.view(host);
+  DevicePairListLease lease;
+  CUDA_CHECK(lease.allocate(topology));
+  const Gfn2PairListConsumerView source = lease.view(topology);
+
+  struct RoleCutoffCase {
+    Gfn2PairListRole role;
+    double cutoff;
+  };
+  for (const RoleCutoffCase& role_case : {
+           RoleCutoffCase{Gfn2PairListRole::kCoordination, 25.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4Coordination, 30.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4TwoBody, 50.0},
+           RoleCutoffCase{Gfn2PairListRole::kD4Atm, 25.0},
+       }) {
+    Gfn2PairListConsumerView projection{};
+    CHECK(xtbloom::detail::project_gfn2_pair_list_role_binding(
+              topology, source, role_case.role, Gfn2PlanMemorySpace::kCudaDevice, projection)
+              .error == Gfn2PlanSchemaError::kSuccess);
+    CHECK(projection.role == role_case.role && projection.cutoff_bohr == role_case.cutoff);
+    CHECK(projection.plan_token == source.plan_token);
+    CHECK(projection.batch_size == source.batch_size &&
+          projection.total_atoms == source.total_atoms);
+    CHECK(projection.max_pairs_per_system == source.max_pairs_per_system &&
+          projection.max_neighbors_per_atom == source.max_neighbors_per_atom);
+    CHECK(projection.pair_offset_count == source.pair_offset_count &&
+          projection.neighbor_offset_count == source.neighbor_offset_count &&
+          projection.pair_count == source.pair_count &&
+          projection.neighbor_count == source.neighbor_count);
+    CHECK(projection.pair_count_elements == source.pair_count_elements &&
+          projection.neighbor_count_elements == source.neighbor_count_elements);
+    CHECK(projection.committed_generation_count == source.committed_generation_count &&
+          projection.eligible_mask_count == source.eligible_mask_count &&
+          projection.active_mask_count == source.active_mask_count);
+    CHECK(projection.pair_offsets == source.pair_offsets && projection.pairs == source.pairs &&
+          projection.pair_counts == source.pair_counts &&
+          projection.neighbor_offsets == source.neighbor_offsets &&
+          projection.neighbors == source.neighbors &&
+          projection.neighbor_counts == source.neighbor_counts);
+    CHECK(projection.committed_generations == source.committed_generations &&
+          projection.eligible_mask == source.eligible_mask &&
+          projection.active_mask == source.active_mask);
+  }
+
+  Gfn2PairListConsumerView projection = source;
+  Gfn2PairListConsumerView invalid = source;
+  invalid.plan_token += 1u;
+  CHECK(
+      xtbloom::detail::project_gfn2_pair_list_role_binding(
+          topology, invalid, Gfn2PairListRole::kD4Atm, Gfn2PlanMemorySpace::kCudaDevice, projection)
+          .error == Gfn2PlanSchemaError::kCrossPlan);
+  CHECK(projection.plan_token == 0u && projection.pairs == nullptr);
+
+  invalid = source;
+  invalid.state = Gfn2PairListState::kCandidate;
+  CHECK(xtbloom::detail::project_gfn2_pair_list_role_binding(
+            topology, invalid, Gfn2PairListRole::kCoordination, Gfn2PlanMemorySpace::kCudaDevice,
+            projection)
+            .error == Gfn2PlanSchemaError::kInvalidPairListState);
+  CHECK(projection.plan_token == 0u && projection.committed_generations == nullptr);
+
+  invalid = source;
+  invalid.list_builder_cutoff_bohr = 30.0;
+  CHECK(xtbloom::detail::project_gfn2_pair_list_role_binding(
+            topology, invalid, Gfn2PairListRole::kD4TwoBody, Gfn2PlanMemorySpace::kCudaDevice,
+            projection)
+            .error == Gfn2PlanSchemaError::kInsufficientPairListCutoff);
+  CHECK(projection.plan_token == 0u && projection.active_mask == nullptr);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -827,6 +975,9 @@ int main() {
   }
   if (status == 0) {
     status = test_device_projections();
+  }
+  if (status == 0) {
+    status = test_device_pair_list_role_projection();
   }
   return status;
 }

@@ -165,6 +165,31 @@ CUDA_REPLAY_V1 = CompareProfile(
     },
 )
 
+# Version 2 unrestricted profiles initially retain the proven v1 magnitudes.
+# Their separate identifiers prevent future spin-specific evidence from
+# silently changing the restricted comparison policy.
+CPU_CLOSED_LOOP_V2 = CompareProfile(
+    name="cpu_closed_loop",
+    version=2,
+    atol=CPU_CLOSED_LOOP_V1.atol,
+    rtol=CPU_CLOSED_LOOP_V1.rtol,
+    per_field=CPU_CLOSED_LOOP_V1.per_field,
+)
+CPU_REPLAY_V2 = CompareProfile(
+    name="cpu_replay",
+    version=2,
+    atol=CPU_REPLAY_V1.atol,
+    rtol=CPU_REPLAY_V1.rtol,
+    per_field=CPU_REPLAY_V1.per_field,
+)
+CUDA_REPLAY_V2 = CompareProfile(
+    name="cuda_replay",
+    version=2,
+    atol=CUDA_REPLAY_V1.atol,
+    rtol=CUDA_REPLAY_V1.rtol,
+    per_field=CUDA_REPLAY_V1.per_field,
+)
+
 # Compatibility constants retain the original import names while diagnostics
 # and CLI arguments always expose the versioned identifiers.
 CPU_CLOSED_LOOP = CPU_CLOSED_LOOP_V1
@@ -175,6 +200,9 @@ _PROFILES = {
     CPU_CLOSED_LOOP_V1.identifier: CPU_CLOSED_LOOP_V1,
     CPU_REPLAY_V1.identifier: CPU_REPLAY_V1,
     CUDA_REPLAY_V1.identifier: CUDA_REPLAY_V1,
+    CPU_CLOSED_LOOP_V2.identifier: CPU_CLOSED_LOOP_V2,
+    CPU_REPLAY_V2.identifier: CPU_REPLAY_V2,
+    CUDA_REPLAY_V2.identifier: CUDA_REPLAY_V2,
 }
 
 # Normalized dotted paths whose complete subtrees are exact.  Sequence indices
@@ -234,6 +262,7 @@ class TraceCompareResult:
 
     mismatches: tuple[Mismatch, ...]
     profile: str
+    trace_format: str = FORMAT
 
     @property
     def matches(self) -> bool:
@@ -245,7 +274,8 @@ class TraceCompareResult:
         if max_reported <= 0:
             raise TraceCompareError("max_reported must be positive")
         header = (
-            f"{FORMAT} comparison ({self.profile}): {len(self.mismatches)} "
+            f"{self.trace_format} comparison ({self.profile}): "
+            f"{len(self.mismatches)} "
             "mismatch(es)"
             f"{', all reported' if len(self.mismatches) <= max_reported else ''}"
         )
@@ -417,6 +447,26 @@ def _resolve_profile(profile: CompareProfile | str) -> CompareProfile:
         ) from exc
 
 
+def _require_profile_format(profile: CompareProfile, trace_format: object) -> None:
+    """Bind each tolerance-policy version to its trace contract version.
+
+    A v1 profile cannot safely compare v2 spin-resolved arrays (and vice
+    versa), even when every numerical value happens to be identical.  Keep
+    this check separate from schema validation so both library and CLI callers
+    receive an explicit configuration error instead of a false match.
+    """
+    expected = {1: TRACE.FORMAT_V1, 2: TRACE.FORMAT_V2}.get(profile.version)
+    if expected is None:
+        raise TraceCompareError(
+            f"comparison profile {profile.identifier} has no trace-format binding"
+        )
+    if trace_format != expected:
+        raise TraceCompareError(
+            f"comparison profile {profile.identifier} requires {expected}, "
+            f"got {trace_format!r}"
+        )
+
+
 def _point_charge_metadata(molecule: Mapping[str, Any]) -> Mapping[str, Any]:
     point_charges = molecule.get("point_charges")
     if point_charges is None:
@@ -490,12 +540,19 @@ def compare_trace(
     resolved = _resolve_profile(profile)
     TRACE.validate(actual)
     TRACE.validate(expected)
+    if actual["format"] != expected["format"]:
+        raise TraceCompareError(
+            f"trace format mismatch: {actual['format']!r} != {expected['format']!r}"
+        )
+    _require_profile_format(resolved, expected["format"])
     if identical_metadata_only:
         actual = _metadata_projection(actual)
         expected = _metadata_projection(expected)
     mismatches: list[Mismatch] = []
     _Comparator(resolved).compare("", actual, expected, mismatches)
-    return TraceCompareResult(tuple(mismatches), resolved.identifier)
+    return TraceCompareResult(
+        tuple(mismatches), resolved.identifier, str(expected["format"])
+    )
 
 
 def compare_iteration(
@@ -513,6 +570,8 @@ def compare_iteration(
     state or execute xtbloom; a backend replay harness must do that work.
     """
     resolved = _resolve_profile(profile)
+    TRACE.validate(expected_trace)
+    _require_profile_format(resolved, expected_trace["format"])
     position, expected = _validated_iteration_context(
         actual, expected_trace, logical_index
     )
@@ -520,7 +579,9 @@ def compare_iteration(
     _Comparator(resolved).compare(
         f"iterations[{position}]", dict(actual), dict(expected), mismatches
     )
-    return TraceCompareResult(tuple(mismatches), resolved.identifier)
+    return TraceCompareResult(
+        tuple(mismatches), resolved.identifier, str(expected_trace["format"])
+    )
 
 
 def _read_json(path: Path, label: str) -> tuple[bytes, Any]:
@@ -561,7 +622,7 @@ def _load_golden(path: Path, expected_sha256: str | None) -> Mapping[str, Any]:
     canonical = TRACE.dumps(golden).encode("utf-8")
     if content != canonical:
         raise TraceCompareError(
-            f"golden {path} is valid but not canonical {FORMAT} JSON"
+            f"golden {path} is valid but not canonical {golden['format']} JSON"
         )
     return golden
 
@@ -719,10 +780,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "CPU_CLOSED_LOOP",
     "CPU_CLOSED_LOOP_V1",
+    "CPU_CLOSED_LOOP_V2",
     "CPU_REPLAY",
     "CPU_REPLAY_V1",
+    "CPU_REPLAY_V2",
     "CUDA_REPLAY",
     "CUDA_REPLAY_V1",
+    "CUDA_REPLAY_V2",
     "EXACT_PATHS",
     "EXIT_INPUT_ERROR",
     "EXIT_MATCH",

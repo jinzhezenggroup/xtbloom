@@ -26,10 +26,14 @@ This directory archives the correctness-qualified benchmark evidence for PR
 - Threads: `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
   `MKL_NUM_THREADS=1`, dynamic threading disabled, MKL LP64 sequential.
 
-The JSON artifacts contain compiler, build-option, captured dependency,
-source-revision, environment, workload, and raw-sample provenance. Meson was
-configured with the absolute compiler paths above, so each compiler identity is
-content-hashed without consulting the later benchmark process's `PATH`.
+The complete JSON artifacts contain compiler, build-option, captured
+dependency, source-revision, environment, workload, and raw-sample provenance.
+Issue #348 removed the three over-1-MiB JSON files from the current tree while
+retaining their compact CSV views. Their exact historical path, byte count,
+SHA-256, and retrieval revision are recorded in
+`benchmarks/evidence/legacy-large-artifacts.tsv`. Meson was configured with the
+absolute compiler paths above, so each compiler identity is content-hashed
+without consulting the later benchmark process's `PATH`.
 
 ## Protocol
 
@@ -57,8 +61,8 @@ for this long-chain corpus; no xTB speed claim is made here.
 
 ## Commands
 
-The exact argv and environment are also embedded in every JSON file. The
-essential commands were:
+The exact argv and environment are embedded in every complete historical JSON
+file. The essential commands are also retained below:
 
 ```bash
 env PATH=/tmp/lammps-qmmm-xtb-env/bin:/usr/bin:/bin \

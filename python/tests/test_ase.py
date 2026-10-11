@@ -51,6 +51,16 @@ def ketene_atoms() -> Atoms:
     return atoms
 
 
+@pytest.fixture(scope="module")
+def gfn1_ketene_atoms() -> Atoms:
+    """Build the independent GFN1 ketene oracle structure in ASE units."""
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    numbers, positions_bohr, _, _, _ = _cases.gfn1_structure_inputs(case)
+    return Atoms(
+        numbers=numbers, positions=np.asarray(positions_bohr) * _BOHR, pbc=False
+    )
+
+
 def test_ase_energy_matches_golden(ketene_atoms: Atoms) -> None:
     """Match the ASE energy and free-energy alias to the golden value."""
     case = _cases.case_by_id("ketene")
@@ -85,6 +95,27 @@ def test_ase_forces_and_charges(ketene_atoms: Atoms) -> None:
         assert charges == pytest.approx(
             golden["partial_charges_e"], abs=tolerance["charges"]["atol"]
         )
+
+
+def test_ase_gfn1_auto_matches_independent_golden(gfn1_ketene_atoms: Atoms) -> None:
+    """Expose GFN1 energy and forces through the ASE AUTO backend policy."""
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    golden = _cases.gfn1_golden(case)
+    tolerance = _cases.gfn1_tolerances()
+    atoms = gfn1_ketene_atoms.copy()
+    atoms.calc = XTBloom(method="GFN1-xTB")
+    assert atoms.get_potential_energy() == pytest.approx(
+        golden["energy_hartree"] * _HARTREE_TO_EV,
+        abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
+    )
+    assert atoms.get_forces() == pytest.approx(
+        np.asarray(golden["forces_hartree_per_bohr"]).reshape(-1, 3)
+        * _HARTREE_TO_EV
+        / _BOHR,
+        abs=tolerance["forces"]["atol"] * _HARTREE_TO_EV / _BOHR,
+    )
+    assert atoms.calc._xtb is not None
+    assert atoms.calc._xtb.backend in (_library.BACKEND_CPU, _library.BACKEND_CUDA)
 
 
 def test_ase_charge_from_atoms(ketene_atoms: Atoms) -> None:
@@ -124,6 +155,52 @@ def test_ase_set_rejects_invalid_settings_transactionally(
     assert calculator.parameters.max_scc_iterations == 250
 
 
+def test_ase_scc_policy_parameters_are_validated() -> None:
+    """Expose the frozen ABI-v3 controls through ASE's parameter mapping."""
+    calculator = XTBloom(
+        method="GFN2-xTB",
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+    assert calculator.parameters.scc_mixer_history == 16
+    with pytest.raises(XTBloomValueError, match="scc_mixer_history"):
+        calculator.set(scc_mixer_history=65)
+
+
+def test_ase_updates_cached_scc_policy_in_place() -> None:
+    """Push all numerical V3 policy changes into an existing API calculator."""
+
+    class FakeCalculator:
+        def __init__(self) -> None:
+            self.updates: list[tuple[str, object]] = []
+
+        def set(self, name: str, value: object) -> None:
+            self.updates.append((name, value))
+
+        def close(self) -> None:
+            pass
+
+    calculator = XTBloom(method="GFN2-xTB")
+    fake = FakeCalculator()
+    calculator._xtb = fake  # type: ignore[assignment]
+    calculator.set(
+        scc_mixer=_library.SCC_MIXER_MODIFIED_BROYDEN,
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+
+    assert fake.updates == [
+        ("scc_mixer", _library.SCC_MIXER_MODIFIED_BROYDEN),
+        ("scc_mixer_history", 16),
+        ("scc_mixer_damping", 0.25),
+        ("determinism", "reproducible"),
+    ]
+    calculator.close()
+
+
 def test_ase_rejects_fractional_multiplicity() -> None:
     """Reject nonintegral spin multiplicities through the ASE interface."""
     with pytest.raises(XTBloomValueError):
@@ -143,16 +220,77 @@ def test_ase_rebuilds_when_atomic_numbers_change() -> None:
     assert reused == pytest.approx(reference.get_potential_energy(), abs=1e-10)
 
 
-def test_ase_rejects_periodic_systems() -> None:
-    """Reject periodic ASE structures unsupported by the molecular ABI."""
+def test_ase_periodic_systems_publish_energy_and_forces() -> None:
+    """Pass a full XYZ ASE cell through the public CPU periodic path."""
     atoms = Atoms(
         numbers=[1, 1],
         positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
-        cell=[5.0, 5.0, 5.0],
+        cell=[8.0, 8.0, 8.0],
         pbc=True,
     )
-    atoms.calc = XTBloom(method="GFN2-xTB")
-    with pytest.raises(InputError):
+    calculator = XTBloom(method="GFN2-xTB", backend="cpu")
+    atoms.calc = calculator
+
+    energy = atoms.get_potential_energy()
+    forces = atoms.get_forces()
+
+    assert np.isfinite(energy)
+    assert forces.shape == (2, 3)
+    assert np.isfinite(forces).all()
+    assert calculator._xtb is not None
+    np.testing.assert_allclose(calculator._xtb.cell, np.diag([8.0, 8.0, 8.0]) / _BOHR)
+
+
+def test_ase_periodic_cell_update_reuses_calculator() -> None:
+    """Propagate an ASE cell change without rebuilding fixed atom topology."""
+    atoms = Atoms(
+        numbers=[1, 1],
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
+        cell=[8.0, 8.0, 8.0],
+        pbc=True,
+    )
+    calculator = XTBloom(method="GFN2-xTB", backend="cpu")
+    atoms.calc = calculator
+    first = atoms.get_potential_energy()
+    assert calculator._xtb is not None
+    native_calculator = calculator._xtb
+
+    atoms.cell = np.diag([9.0, 8.0, 8.0])
+    second = atoms.get_potential_energy()
+
+    assert calculator._xtb is native_calculator
+    assert second != pytest.approx(first, abs=1.0e-10)
+    np.testing.assert_allclose(
+        native_calculator.cell,
+        np.diag([9.0, 8.0, 8.0]) / _BOHR,
+    )
+
+
+@pytest.mark.parametrize(
+    ("cell", "pbc", "message"),
+    [
+        (np.diag([8.0, 8.0, 8.0]), [True, False, True], "full XYZ"),
+        (np.zeros((3, 3)), True, "nonsingular"),
+        (np.diag([8.0, 8.0, -8.0]), True, "right-handed"),
+        (
+            np.array([[np.nan, 0.0, 0.0], [0.0, 8.0, 0.0], [0.0, 0.0, 8.0]]),
+            True,
+            "finite",
+        ),
+    ],
+)
+def test_ase_rejects_invalid_periodic_cells(
+    cell: np.ndarray, pbc: object, message: str
+) -> None:
+    """Reject partial, missing, left-handed, and non-finite native cells."""
+    atoms = Atoms(
+        numbers=[1, 1],
+        positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.74]],
+        cell=cell,
+        pbc=pbc,
+    )
+    atoms.calc = XTBloom(method="GFN2-xTB", backend="cpu")
+    with pytest.raises(InputError, match=message):
         atoms.get_potential_energy()
 
 

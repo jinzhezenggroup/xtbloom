@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "runtime/cuda_descriptor_validation.hpp"
 
@@ -115,6 +116,57 @@ int main() {
                              error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mutable_validated.pointer_type == cudaMemoryTypeDevice);
   CHECK(current_device() == context_device);
+
+  /* ABI-v3 interaction leaves use the same CUDA provenance gate as the older
+   * numerical descriptors, but with their released alignments and full
+   * declared extents. Test both descriptor and byte-payload views explicitly
+   * so a public caller cannot bypass validation through the generic slot. */
+  std::vector<xtbloom_interaction_t> host_interactions(1);
+  host_interactions[0].type = XTBLOOM_INTERACTION_ELECTRIC_FIELD;
+  host_interactions[0].payload_size = 32u;
+  std::vector<std::uint8_t> host_payload(32u, 0u);
+  xtbloom_interaction_t* device_interactions = nullptr;
+  std::uint8_t* device_payload = nullptr;
+  CUDA_CHECK(
+      cudaMalloc(reinterpret_cast<void**>(&device_interactions), sizeof(xtbloom_interaction_t)));
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&device_payload), host_payload.size()));
+  auto interaction_view =
+      const_view(device_interactions, sizeof(xtbloom_interaction_t), XTBLOOM_MEMORY_CUDA_DEVICE);
+  auto payload_view = const_view(device_payload, host_payload.size(), XTBLOOM_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_const_buffer(context_device, "interaction_descriptors", interaction_view,
+                                   sizeof(xtbloom_interaction_t), alignof(xtbloom_interaction_t),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(validate_cuda_const_buffer(context_device, "interaction_payload", payload_view,
+                                   host_payload.size(), alignof(std::int32_t),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == XTBLOOM_STATUS_SUCCESS);
+  auto interaction_overrun = interaction_view;
+  ++interaction_overrun.size_bytes;
+  CHECK(validate_cuda_const_buffer(context_device, "interaction_descriptors", interaction_overrun,
+                                   sizeof(xtbloom_interaction_t), alignof(xtbloom_interaction_t),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(error.find("extends past") != std::string::npos);
+  auto payload_overrun = payload_view;
+  ++payload_overrun.size_bytes;
+  CHECK(validate_cuda_const_buffer(context_device, "interaction_payload", payload_overrun,
+                                   host_payload.size(), alignof(std::int32_t),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(error.find("extends past") != std::string::npos);
+  auto host_interaction_as_device = const_view(
+      host_interactions.data(), sizeof(xtbloom_interaction_t), XTBLOOM_MEMORY_CUDA_DEVICE);
+  CHECK(validate_cuda_const_buffer(context_device, "interaction_descriptors",
+                                   host_interaction_as_device, sizeof(xtbloom_interaction_t),
+                                   alignof(xtbloom_interaction_t), CudaManagedMemoryPolicy::kReject,
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  auto device_payload_as_host = payload_view;
+  device_payload_as_host.memory_space = XTBLOOM_MEMORY_HOST;
+  CHECK(validate_cuda_const_buffer(context_device, "interaction_payload", device_payload_as_host,
+                                   host_payload.size(), alignof(std::int32_t),
+                                   CudaManagedMemoryPolicy::kReject, const_validated,
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   /* CUDA descriptors may start inside an allocation, but their full declared
    * capacity must remain inside that allocation even when the logical prefix
@@ -394,6 +446,8 @@ int main() {
   }
 
   CUDA_CHECK(cudaStreamDestroy(stream));
+  CUDA_CHECK(cudaFree(device_payload));
+  CUDA_CHECK(cudaFree(device_interactions));
   CUDA_CHECK(cudaFree(managed_data));
   CUDA_CHECK(cudaFree(device_data));
   CUDA_CHECK(cudaFreeHost(pinned_host));
