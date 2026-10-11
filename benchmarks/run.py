@@ -41,10 +41,18 @@ import xtbloom_public_api as public_api
 from xtbloom_public_api import PublicBatchStorage
 
 try:
-    from . import ao_grouping, build_receipt, runtime_mapped_images
+    from . import (
+        ao_grouping,
+        build_receipt,
+        convergence_grouping,
+        frozen_inputs,
+        runtime_mapped_images,
+    )
 except ImportError:  # Direct ``python benchmarks/run.py`` execution.
     import ao_grouping
     import build_receipt
+    import convergence_grouping
+    import frozen_inputs
     import runtime_mapped_images
 
 try:
@@ -813,33 +821,271 @@ def finite_case_plan(
     batch_cap: int,
     strategy: str | None = None,
 ) -> tuple[ao_grouping.AOGroupingPlan, float]:
-    """Plan one finite list and account for input inspection and AO analysis."""
+    """Plan one finite list, optionally overriding only its grouping strategy.
+
+    An explicit AO-only paired arm uses the same input inspection and mapping
+    as a standalone baseline; frozen input binding remains independent of the
+    chosen grouping key.
+    """
     started = time.perf_counter_ns()
+    previous_capture = getattr(args, "finite_frozen_workload", None)
+    if previous_capture is not None:
+        previous_capture.close()
+        args.finite_frozen_workload = None
     basis_sha256 = None
     counts: dict[str, int] | None = None
     selected_strategy = strategy or args.ao_grouping
-    if selected_strategy == "exact-ao":
+    risk_bands = None
+    risk_policy_sha256 = None
+    risk_freeze_plan_sha256 = None
+    binding = None
+    if (
+        selected_strategy in {"exact-ao", "ao-risk"}
+        or getattr(args, "convergence_plan", None) is not None
+    ):
         if public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB:
-            raise BenchmarkError("exact-AO grouping requires a GFN2 manifest")
+            raise BenchmarkError("AO/risk grouping requires a GFN2 manifest")
         basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
             REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
         )
-        counts = {
-            case_id: ao_grouping.count_gfn2_aos(
-                case_atomic_numbers(args.manifest, manifest, cases[case_id]),
-                basis_counts,
-            )
-            for case_id in case_ids
-        }
+        if (
+            selected_strategy != "original"
+            and getattr(args, "convergence_plan", None) is None
+        ):
+            counts = {
+                case_id: ao_grouping.count_gfn2_aos(
+                    case_atomic_numbers(args.manifest, manifest, cases[case_id]),
+                    basis_counts,
+                )
+                for case_id in case_ids
+            }
+    if getattr(args, "convergence_plan", None) is not None:
+        binding, annotations = finite_convergence_binding(
+            args, manifest, cases, case_ids, basis_counts, selected_strategy
+        )
+        if selected_strategy != "original":
+            captured = args.finite_frozen_workload
+            counts = {
+                case_id: ao_grouping.count_gfn2_aos(
+                    case_atomic_numbers(
+                        args.manifest, captured.manifest, captured.cases_by_id[case_id]
+                    ),
+                    basis_counts,
+                )
+                for case_id in case_ids
+            }
+        if selected_strategy == "ao-risk":
+            risk_bands = {
+                case_id: annotations[case_id].risk_band for case_id in case_ids
+            }
+            risk_policy_sha256 = binding["policy_sha256"]
+            risk_freeze_plan_sha256 = binding["freeze_plan_sha256"]
+    elif selected_strategy == "ao-risk":
+        raise BenchmarkError(
+            "ao-risk requires a convergence manifest and pinned freeze plan"
+        )
     plan = ao_grouping.make_plan(
         case_ids,
         batch_cap,
         strategy=selected_strategy,
         ao_counts_by_case_id=counts,
-        basis_sha256=basis_sha256,
+        basis_sha256=basis_sha256 if selected_strategy != "original" else None,
+        **(
+            {
+                "risk_bands_by_case_id": risk_bands,
+                "risk_policy_sha256": risk_policy_sha256,
+                "risk_freeze_plan_sha256": risk_freeze_plan_sha256,
+            }
+            if selected_strategy == "ao-risk"
+            else {}
+        ),
     )
     planning_ms = (time.perf_counter_ns() - started) * 1.0e-6
+    args.finite_convergence_binding = binding
     return plan, planning_ms
+
+
+def finite_convergence_binding(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    cases: dict[str, dict[str, Any]],
+    case_ids: tuple[str, ...],
+    basis_counts: dict[int, int],
+    strategy: str,
+) -> tuple[dict[str, Any], dict[str, convergence_grouping.GroupingAnnotation]]:
+    """Validate the complete frozen input roster before using selected annotations.
+
+    Partition selection never filters the requested list: a caller must supply
+    the desired view/partition intersection explicitly. All file verification,
+    input inspection and candidate annotation work stays inside planning_ms.
+    The separately pinned workload manifest binds geometry bytes without making
+    coordinates or their hashes scheduling features. Private captured files
+    keep parsing and every later sweep independent of source-file mutation.
+    """
+    captured = None
+    try:
+        cohort_sha256 = convergence_grouping.ordered_case_ids_sha256(case_ids)
+        if cohort_sha256 != args.convergence_cohort_sha256:
+            raise BenchmarkError(
+                "requested case IDs do not match the complete pinned cohort"
+            )
+        document = convergence_grouping.load_json_document(args.convergence_manifest)
+        frozen = convergence_grouping.load_json_document(args.convergence_plan)
+        scheduling_cases = convergence_grouping.validate_freeze_plan(
+            document,
+            frozen,
+            expected_freeze_plan_sha256=args.convergence_freeze_sha256,
+        )
+        scheduling_by_id = {case.case_id: case for case in scheduling_cases}
+        if not set(case_ids).issubset(scheduling_by_id):
+            raise BenchmarkError(
+                "requested case IDs are outside the frozen scheduling roster"
+            )
+        captured = frozen_inputs.capture_workload(
+            args.manifest,
+            args.convergence_workload_sha256,
+            tuple(scheduling_by_id),
+            input_resolver=lambda case: canonical_case_input_path(args.manifest, case),
+        )
+        if captured.manifest != manifest:
+            raise BenchmarkError(
+                "frozen scheduling metadata does not match workload inputs "
+                "in the caller's previously loaded manifest"
+            )
+        for scheduling_case in scheduling_cases:
+            if scheduling_case.case_id not in cases:
+                raise BenchmarkError(
+                    "a frozen case ID is absent from the workload manifest"
+                )
+            workload_case = captured.cases_by_id[scheduling_case.case_id]
+            actual_metadata = {
+                "atomic_numbers": list(
+                    case_atomic_numbers(args.manifest, captured.manifest, workload_case)
+                ),
+                "molecular_charge": workload_case.get("molecular_charge", 0),
+            }
+            actual_metadata["exact_ao_count"] = ao_grouping.count_gfn2_aos(
+                actual_metadata["atomic_numbers"], basis_counts
+            )
+            for field in ("spin_channels", "unpaired_electrons"):
+                if field in workload_case:
+                    actual_metadata[field] = workload_case[field]
+            actual = convergence_grouping.parse_scheduling_manifest(
+                {
+                    "schema_version": 1,
+                    "systems": [
+                        {
+                            "case_id": scheduling_case.case_id,
+                            "molecule_group_id": scheduling_case.molecule_group_id,
+                            "scheduling_metadata": actual_metadata,
+                        }
+                    ],
+                }
+            )[0]
+            if actual != scheduling_case:
+                raise BenchmarkError(
+                    "frozen scheduling metadata does not match workload inputs "
+                    f"for {actual.case_id}"
+                )
+        partition_by_case_id = {
+            case_id: group["partition"]
+            for group in frozen["split"]["groups"]
+            for case_id in group["case_ids"]
+        }
+        partition = getattr(args, "convergence_partition", "all")
+        if partition != "all" and any(
+            partition_by_case_id[case_id] != partition for case_id in case_ids
+        ):
+            raise BenchmarkError(
+                "requested case IDs cross the declared convergence partition"
+            )
+        annotations = (
+            convergence_grouping.annotate_scheduling_inputs(document)
+            if strategy == "ao-risk"
+            else {}
+        )
+        args.finite_frozen_workload = captured
+        return {
+            "policy_sha256": frozen["policy_sha256"],
+            "freeze_plan_sha256": frozen["freeze_plan_sha256"],
+            "split_sha256": frozen["split_sha256"],
+            "input_identity_sha256": frozen["input_identity_sha256"],
+            "partition": partition,
+            "selected_partitions": sorted(
+                {partition_by_case_id[case_id] for case_id in case_ids}
+            ),
+            "selected_case_count": len(case_ids),
+            "ordered_cohort_sha256": cohort_sha256,
+            "frozen_case_count": len(scheduling_cases),
+            "workload_manifest": captured.manifest_record,
+            "captured_input_bytes": captured.captured_input_bytes,
+            "captured_case_count": len(captured.cases_by_id),
+            "input_snapshot_scope": (
+                "private read-only copies of hash-verified captured bytes; "
+                "all input parsing and compute use these copies"
+            ),
+            "metadata_file": provenance_file_record(
+                args.convergence_manifest, "convergence manifest"
+            ),
+            "freeze_file": provenance_file_record(
+                args.convergence_plan, "convergence freeze"
+            ),
+            "cost_scope": (
+                "freeze verification, complete input binding and candidate "
+                "annotations included in planning_ms"
+            ),
+            "qualification": (
+                "preregistered input-only prototype; not a holdout result or adoption"
+            ),
+        }, annotations
+    except (
+        convergence_grouping.ConvergenceGroupingError,
+        frozen_inputs.FrozenInputError,
+    ) as exc:
+        if captured is not None:
+            captured.close()
+        raise BenchmarkError(f"invalid convergence binding: {exc}") from exc
+    except BaseException:
+        if captured is not None:
+            captured.close()
+        raise
+
+
+def finish_frozen_run(args: argparse.Namespace, row: dict[str, Any]) -> None:
+    """Release one captured plan and account for its filesystem teardown cost.
+
+    Snapshot destruction is not native compute, but excluding it from one-shot
+    E2E would hide a cost introduced by the frozen-input experiment itself.
+    """
+    captured = getattr(args, "finite_frozen_workload", None)
+    if captured is None:
+        return
+    started = time.perf_counter_ns()
+    captured.close()
+    release_ms = (time.perf_counter_ns() - started) * 1.0e-6
+    args.finite_frozen_workload = None
+    timing = row.setdefault("timing", {})
+    timing["input_snapshot_release_ms"] = release_ms
+    timing["input_snapshot_release_scope"] = (
+        "one teardown per captured plan; included in one-shot E2E and "
+        "amortized only in the explicit reusable-plan metric"
+    )
+    if "planning_inclusive_end_to_end_ms" in timing:
+        timing["planning_inclusive_end_to_end_ms"] = timing_summary(
+            [
+                sample + release_ms
+                for sample in timing["planning_inclusive_end_to_end_ms"]["samples_ms"]
+            ],
+            len(row["case_ids"]),
+        )
+        timing["planning_inclusive_scope"] = (
+            "complete planning/binding plus one snapshot teardown and each "
+            "strict-FRESH sweep; no plan-cost amortization is assumed"
+        )
+        timing["one_shot_total_ms"] += release_ms
+        timing["reusable_plan_mean_total_ms_per_sweep"] += release_ms / len(
+            row["measurement_sweeps"]
+        )
 
 
 def _max_abs_error(actual: object, expected: object) -> float | None:
@@ -1019,6 +1265,10 @@ def benchmark_finite_xtbloom_cell(
     property_name: str,
 ) -> dict[str, Any]:
     """Measure complete strict-FRESH host-descriptor sweeps over planned batches."""
+    captured = getattr(args, "finite_frozen_workload", None)
+    if captured is not None:
+        manifest = captured.manifest
+        cases = captured.cases_by_id
     cell = Cell(
         "xtbloom",
         args.backends[0],
@@ -1070,6 +1320,23 @@ def benchmark_finite_xtbloom_cell(
             },
         }
     )
+    if getattr(args, "finite_convergence_binding", None) is not None:
+        row["convergence_binding"] = args.finite_convergence_binding
+        row["claim_eligible"] = False
+        row["claim_eligibility_scope"] = (
+            "single-strategy prototype; paired holdout decision incomplete"
+        )
+    if plan.strategy == "ao-risk":
+        row["risk_band_by_case_id"] = dict(plan.risk_bands_by_case_id)
+        row["grouping_contract"]["key"] = (
+            "exact GFN2 spatial AO count and preregistered input-only risk band"
+        )
+        row["grouping_contract"]["spin_policy"] = (
+            "explicit spin metadata is a fixed risk feature, "
+            "not a changed numerical policy"
+        )
+        for batch_record, batch in zip(row["ao_batches"], plan.batches, strict=True):
+            batch_record["risk_band"] = batch.risk_band
     sweep_samples: list[dict[str, Any]] = []
     warmup_samples: list[dict[str, Any]] = []
     memory_snapshots: list[dict[str, Any]] = []
@@ -1257,6 +1524,15 @@ def benchmark_finite_xtbloom_cell(
             "reported separately"
         ),
     }
+    if row.get("convergence_binding") is not None:
+        row["timing"]["planning_inclusive_end_to_end_ms"] = timing_summary(
+            [planning_ms + item["end_to_end_ms"] for item in sweep_samples],
+            len(plan.original_case_ids),
+        )
+        row["timing"]["planning_inclusive_scope"] = (
+            "one complete planning/binding cost plus each strict-FRESH sweep; "
+            "no plan-cost amortization is assumed"
+        )
     correctness_failures = {
         case_id
         for sweep in measurement_sweeps
@@ -3153,7 +3429,12 @@ def write_json(path: Path, document: dict[str, Any]) -> None:
 
 
 def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
-    """Flatten the main metrics while retaining nested evidence as JSON columns."""
+    """Flatten metrics while retaining evidence and freeze-only qualification.
+
+    Frozen rows export JSON booleans so CSV-only consumers can distinguish
+    independent science checks from the still-incomplete adoption protocol.
+    Other rows keep their raw boolean/empty fields even in mixed CSV files.
+    """
     fields = [
         "engine",
         "backend",
@@ -3196,6 +3477,18 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "independent_reference_qualified",
         "claim_eligible",
     ]
+    convergence_fields = (
+        "planning_inclusive_end_to_end_median_ms",
+        "convergence_binding_json",
+        "risk_band_by_case_id_json",
+        "input_snapshot_release_ms",
+        "claim_eligibility_scope",
+    )
+    include_convergence = any(
+        row.get("convergence_binding") is not None for row in rows
+    )
+    if include_convergence:
+        fields.extend(convergence_fields)
     observed_rows = any(
         "runtime_mapped_images" in row.get("producer_provenance", {}) for row in rows
     )
@@ -3218,66 +3511,95 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             correct = row.get("correctness", {})
             finite_timing = row.get("timing", {})
             end_to_end = finite_timing.get("end_to_end_ms", {})
+            record = {
+                "engine": row["engine"],
+                "backend": row["backend"],
+                "memory_mode": row["memory_mode"],
+                "workload": row["workload"],
+                "case_id": row.get("case_id"),
+                "case_ids": (
+                    json.dumps(json_safe_value(row["case_ids"]), allow_nan=False)
+                    if "case_ids" in row
+                    else None
+                ),
+                "property": row["property"],
+                "batch_size": row["batch_size"],
+                "availability": row["availability"],
+                "unavailable_reason": row.get("unavailable_reason"),
+                "error": row.get("error"),
+                "setup_ms": row.get("setup_ms"),
+                "cold_latency_ms": row.get("cold_latency_ms"),
+                "warm_median_ms": warm.get("median_ms"),
+                "warm_p95_ms": warm.get("p95_ms"),
+                "systems_per_second": warm.get("systems_per_second_at_median"),
+                "correctness_status": correct.get("status"),
+                "max_abs_energy_error_hartree": correct.get(
+                    "max_abs_energy_error_hartree"
+                ),
+                "max_abs_force_error_hartree_per_bohr": correct.get(
+                    "max_abs_force_error_hartree_per_bohr"
+                ),
+                "max_abs_point_charge_force_error_hartree_per_bohr": correct.get(
+                    "max_abs_point_charge_force_error_hartree_per_bohr"
+                ),
+                "warm_samples_ms": json.dumps(
+                    json_safe_value(warm.get("samples_ms")), allow_nan=False
+                ),
+                "memory_json": json.dumps(
+                    json_safe_value(row.get("memory")),
+                    allow_nan=False,
+                    sort_keys=True,
+                ),
+                "ao_grouping": row.get("ao_grouping"),
+                "plan_sha256": row.get("plan_sha256"),
+                "planning_ms": row.get("planning_ms"),
+                "batch_count": row.get("batch_count"),
+                "preparation_ms_median": finite_timing.get("preparation_ms_median"),
+                "compute_ms_median": finite_timing.get("compute_ms_median"),
+                "publication_ms_median": finite_timing.get("publication_ms_median"),
+                "scatter_ms_median": finite_timing.get("scatter_ms_median"),
+                "end_to_end_median_ms": end_to_end.get("median_ms"),
+                "end_to_end_samples_ms": json.dumps(
+                    json_safe_value(end_to_end.get("samples_ms")),
+                    allow_nan=False,
+                ),
+                "one_shot_total_ms": finite_timing.get("one_shot_total_ms"),
+                "input_snapshot_release_ms": finite_timing.get(
+                    "input_snapshot_release_ms"
+                ),
+                "planning_inclusive_end_to_end_median_ms": finite_timing.get(
+                    "planning_inclusive_end_to_end_ms", {}
+                ).get("median_ms"),
+                "convergence_binding_json": json.dumps(
+                    json_safe_value(row.get("convergence_binding")),
+                    allow_nan=False,
+                    sort_keys=True,
+                ),
+                "risk_band_by_case_id_json": json.dumps(
+                    json_safe_value(row.get("risk_band_by_case_id")),
+                    allow_nan=False,
+                    sort_keys=True,
+                ),
+                "claim_eligible": row.get("claim_eligible"),
+                "claim_eligibility_scope": row.get("claim_eligibility_scope"),
+                "independent_reference_qualified": row.get(
+                    "independent_reference_qualified"
+                ),
+            }
+            if row.get("convergence_binding") is not None:
+                for field in ("claim_eligible", "independent_reference_qualified"):
+                    record[field] = json.dumps(record[field])
+            if not include_convergence:
+                for field in convergence_fields:
+                    del record[field]
             paired_timing = row.get("paired_timing", {})
             paired_layouts = paired_timing.get("layout_samples", {})
             paired_rounds = row.get("paired_rounds", [])
             mapping_evidence = row.get("producer_provenance", {}).get(
                 "runtime_mapped_images", {}
             )
-            writer.writerow(
+            record.update(
                 {
-                    "engine": row["engine"],
-                    "backend": row["backend"],
-                    "memory_mode": row["memory_mode"],
-                    "workload": row["workload"],
-                    "case_id": row.get("case_id"),
-                    "case_ids": (
-                        json.dumps(json_safe_value(row["case_ids"]), allow_nan=False)
-                        if "case_ids" in row
-                        else None
-                    ),
-                    "property": row["property"],
-                    "batch_size": row["batch_size"],
-                    "availability": row["availability"],
-                    "unavailable_reason": row.get("unavailable_reason"),
-                    "error": row.get("error"),
-                    "setup_ms": row.get("setup_ms"),
-                    "cold_latency_ms": row.get("cold_latency_ms"),
-                    "warm_median_ms": warm.get("median_ms"),
-                    "warm_p95_ms": warm.get("p95_ms"),
-                    "systems_per_second": warm.get("systems_per_second_at_median"),
-                    "correctness_status": correct.get("status"),
-                    "max_abs_energy_error_hartree": correct.get(
-                        "max_abs_energy_error_hartree"
-                    ),
-                    "max_abs_force_error_hartree_per_bohr": correct.get(
-                        "max_abs_force_error_hartree_per_bohr"
-                    ),
-                    "max_abs_point_charge_force_error_hartree_per_bohr": correct.get(
-                        "max_abs_point_charge_force_error_hartree_per_bohr"
-                    ),
-                    "warm_samples_ms": json.dumps(
-                        json_safe_value(warm.get("samples_ms")), allow_nan=False
-                    ),
-                    "memory_json": json.dumps(
-                        json_safe_value(row.get("memory")),
-                        allow_nan=False,
-                        sort_keys=True,
-                    ),
-                    "ao_grouping": row.get("ao_grouping"),
-                    "plan_sha256": row.get("plan_sha256"),
-                    "planning_ms": row.get("planning_ms"),
-                    "batch_count": row.get("batch_count"),
-                    "preparation_ms_median": finite_timing.get("preparation_ms_median"),
-                    "compute_ms_median": finite_timing.get("compute_ms_median"),
-                    "publication_ms_median": finite_timing.get("publication_ms_median"),
-                    "scatter_ms_median": finite_timing.get("scatter_ms_median"),
-                    "end_to_end_median_ms": end_to_end.get("median_ms"),
-                    "end_to_end_samples_ms": json.dumps(
-                        json_safe_value(end_to_end.get("samples_ms")),
-                        allow_nan=False,
-                    ),
-                    "one_shot_total_ms": finite_timing.get("one_shot_total_ms"),
                     "paired_original_end_to_end_median_ms": (
                         paired_layouts.get("original", {})
                         .get("measured_end_to_end", {})
@@ -3330,10 +3652,6 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                         allow_nan=False,
                         sort_keys=True,
                     ),
-                    "independent_reference_qualified": row.get(
-                        "independent_reference_qualified"
-                    ),
-                    "claim_eligible": row.get("claim_eligible"),
                     **(
                         {
                             "runtime_image_integrity_passed": mapping_evidence.get(
@@ -3357,6 +3675,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     ),
                 }
             )
+            writer.writerow(record)
     temporary.replace(path)
 
 
@@ -3436,11 +3755,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ao-grouping",
-        choices=("original", "exact-ao", "paired"),
+        choices=("original", "exact-ao", "ao-risk", "paired"),
         default="original",
         help=(
             "finite-list layout; original is the default, exact-ao runs one "
-            "grouped layout, and paired interleaves original with exact-ao"
+            "grouped layout, paired interleaves original with exact-ao, and "
+            "ao-risk requires a separately pinned input-only convergence plan"
+        ),
+    )
+    parser.add_argument(
+        "--convergence-manifest",
+        type=Path,
+        help="input-only scheduling metadata for a frozen finite-list experiment",
+    )
+    parser.add_argument(
+        "--convergence-plan",
+        type=Path,
+        help=(
+            "preregistered policy/group split produced by "
+            "convergence_grouping freeze-plan"
+        ),
+    )
+    parser.add_argument(
+        "--convergence-freeze-sha256",
+        help=(
+            "expected logical freeze-plan SHA-256 from the prior experiment checkpoint"
+        ),
+    )
+    parser.add_argument(
+        "--convergence-workload-sha256",
+        help=(
+            "expected workload manifest SHA-256 from the prior experiment checkpoint; "
+            "also binds every frozen input file hash"
+        ),
+    )
+    parser.add_argument(
+        "--convergence-partition",
+        choices=("all", "calibration", "holdout"),
+        default="all",
+        help="validate the requested IDs' partition without dropping or adding systems",
+    )
+    parser.add_argument(
+        "--convergence-cohort-sha256",
+        help=(
+            "prior logical SHA-256 of the complete ordered view/partition case-ID list"
         ),
     )
     parser.add_argument("--warmups", type=int, default=2)
@@ -3532,6 +3890,40 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.dxtb_cpu_threads <= 0:
         raise BenchmarkError("dxtb CPU threads must be positive")
     finite_list_requested = args.case_ids is not None or args.case_ids_file is not None
+    convergence_inputs = (
+        getattr(args, "convergence_manifest", None),
+        getattr(args, "convergence_plan", None),
+        getattr(args, "convergence_freeze_sha256", None),
+        getattr(args, "convergence_workload_sha256", None),
+        getattr(args, "convergence_cohort_sha256", None),
+    )
+    convergence_requested = any(value is not None for value in convergence_inputs)
+    if args.ao_grouping == "paired" and (
+        convergence_requested or getattr(args, "convergence_partition", "all") != "all"
+    ):
+        raise BenchmarkError(
+            "paired mode is AO-only and cannot use convergence inputs or partitions"
+        )
+    if convergence_requested and not all(
+        value is not None for value in convergence_inputs
+    ):
+        raise BenchmarkError(
+            "convergence manifest, plan and expected freeze/workload/cohort SHA-256 "
+            "are required together"
+        )
+    if args.ao_grouping == "ao-risk" and not convergence_requested:
+        raise BenchmarkError(
+            "ao-risk requires input-only convergence metadata and a pinned freeze plan"
+        )
+    if convergence_requested and not finite_list_requested:
+        raise BenchmarkError(
+            "convergence binding requires an explicit finite case list"
+        )
+    if (
+        getattr(args, "convergence_partition", "all") != "all"
+        and not convergence_requested
+    ):
+        raise BenchmarkError("convergence partition requires a pinned freeze plan")
     receipt_inputs = (
         getattr(args, "build_receipt", None),
         getattr(args, "build_receipt_sha256", None),
@@ -3680,12 +4072,17 @@ def receipt_postflight(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run requested cells and always retain both machine-readable artifacts."""
+    """Validate options before input I/O, then run and retain requested cells.
+
+    Case-list files are read only after option-only constraints pass; their
+    contents are revalidated before receipt, workload, policy or native setup.
+    """
     args = build_parser().parse_args(argv)
     try:
+        validate_args(args)
         if args.case_ids_file is not None:
             args.case_ids = read_case_id_file(args.case_ids_file)
-        validate_args(args)
+            validate_args(args)
         receipt_preflight = controlled_receipt_check(args)
         if args.runtime_mapped_images:
             args.runtime_images_expected_sha256 = receipt_preflight["verification"][
@@ -3765,6 +4162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             planning_ms,
                             property_name,
                         )
+                        finish_frozen_run(args, row)
                     rows.append(row)
                     print(  # noqa: T201 - preserve benchmark CLI progress output
                         f"  {row['availability']}", flush=True
@@ -3907,6 +4305,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (BenchmarkError, conformance.ConformanceError) as exc:
         print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI diagnostics
         return 1
+    finally:
+        captured = getattr(args, "finite_frozen_workload", None)
+        if captured is not None:
+            captured.close()
 
 
 if __name__ == "__main__":

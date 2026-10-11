@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
+try:
+    from .convergence_grouping import RISK_BAND_ORDER
+except ImportError:
+    from convergence_grouping import RISK_BAND_ORDER
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -23,6 +28,7 @@ class AOBatch:
     case_ids: tuple[str, ...]
     canonical_indices: tuple[int, ...]
     ao_count: int | None
+    risk_band: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +43,9 @@ class AOGroupingPlan:
     ao_counts_by_case_id: tuple[tuple[str, int], ...]
     basis_sha256: str | None
     plan_sha256: str
+    risk_bands_by_case_id: tuple[tuple[str, str], ...] = ()
+    risk_policy_sha256: str | None = None
+    risk_freeze_plan_sha256: str | None = None
 
     @property
     def canonical_index_by_case_id(self) -> dict[str, int]:
@@ -109,18 +118,33 @@ def count_gfn2_aos(
     return total
 
 
+def _is_lowercase_sha256(value: object) -> bool:
+    """Return whether a value is exactly 64 lowercase hexadecimal digits."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def make_plan(
     case_ids: tuple[str, ...] | list[str],
     max_batch_size: int,
     strategy: str = "original",
     ao_counts_by_case_id: dict[str, int] | None = None,
     basis_sha256: str | None = None,
+    *,
+    risk_bands_by_case_id: dict[str, str] | None = None,
+    risk_policy_sha256: str | None = None,
+    risk_freeze_plan_sha256: str | None = None,
 ) -> AOGroupingPlan:
-    """Build a stable original-order or exact-AO plan for a finite unique list.
+    """Build a stable plan for a finite unique list without pruning or padding.
 
     Exact-AO ordering sorts by ascending AO count and then by canonical input
-    index. The input order is therefore the stable tie-break, and every tail is
-    kept as a smaller final chunk without padding or dropping rare AO counts.
+    index. The opt-in ``ao-risk`` strategy adds the frozen high-to-low risk
+    band as a second bucket key and records both policy hashes. Every bucket
+    keeps its own smaller tail; case identity and canonical scatter remain
+    complete for all strategies.
     """
     ids = tuple(case_ids)
     if any(not isinstance(case_id, str) or not case_id for case_id in ids):
@@ -129,10 +153,21 @@ def make_plan(
         raise AOGroupingError("case IDs must be unique")
     if type(max_batch_size) is not int or max_batch_size <= 0:
         raise AOGroupingError("maximum batch size must be a positive integer")
-    if strategy not in {"original", "exact-ao"}:
+    if strategy not in {"original", "exact-ao", "ao-risk"}:
         raise AOGroupingError(f"unknown AO grouping strategy: {strategy}")
 
     counts = ao_counts_by_case_id
+    risk_bands = risk_bands_by_case_id
+    if strategy != "ao-risk" and any(
+        value is not None
+        for value in (
+            risk_bands_by_case_id,
+            risk_policy_sha256,
+            risk_freeze_plan_sha256,
+        )
+    ):
+        raise AOGroupingError("risk metadata is only valid for ao-risk grouping")
+
     if strategy == "exact-ao":
         if counts is None:
             raise AOGroupingError("exact-AO grouping requires one AO count per case")
@@ -144,6 +179,30 @@ def make_plan(
             raise AOGroupingError("AO counts must be positive integers")
         if not isinstance(basis_sha256, str) or len(basis_sha256) != 64:
             raise AOGroupingError("exact-AO grouping requires the basis SHA-256")
+    elif strategy == "ao-risk":
+        if not isinstance(counts, dict) or set(counts) != set(ids):
+            raise AOGroupingError("ao-risk grouping requires one AO count per case ID")
+        if any(type(count) is not int or count <= 0 for count in counts.values()):
+            raise AOGroupingError("AO counts must be positive integers")
+        if not _is_lowercase_sha256(basis_sha256):
+            raise AOGroupingError("ao-risk grouping requires a lowercase basis SHA-256")
+        if not isinstance(risk_bands, dict) or set(risk_bands) != set(ids):
+            raise AOGroupingError(
+                "risk band IDs must match the finite case list exactly"
+            )
+        if any(
+            not isinstance(band, str) or band not in RISK_BAND_ORDER
+            for band in risk_bands.values()
+        ):
+            raise AOGroupingError("risk bands must be high, elevated, guarded, or low")
+        if not _is_lowercase_sha256(risk_policy_sha256):
+            raise AOGroupingError(
+                "ao-risk grouping requires a lowercase risk policy SHA-256"
+            )
+        if not _is_lowercase_sha256(risk_freeze_plan_sha256):
+            raise AOGroupingError(
+                "ao-risk grouping requires a lowercase freeze plan SHA-256"
+            )
     elif counts is not None and set(counts) != set(ids):
         raise AOGroupingError("AO count IDs must match the finite case list exactly")
 
@@ -152,6 +211,18 @@ def make_plan(
             sorted(
                 range(len(ids)),
                 key=lambda index: (counts[ids[index]], index),
+            )
+        )
+    elif strategy == "ao-risk":
+        risk_order = {band: index for index, band in enumerate(RISK_BAND_ORDER)}
+        ordered_indices = tuple(
+            sorted(
+                range(len(ids)),
+                key=lambda index: (
+                    counts[ids[index]],
+                    risk_order[risk_bands[ids[index]]],
+                    index,
+                ),
             )
         )
     else:
@@ -169,7 +240,7 @@ def make_plan(
                     ao_count=None,
                 )
             )
-    else:
+    elif strategy == "exact-ao":
         group_begin = 0
         while group_begin < len(ordered_indices):
             ao_count = counts[ids[ordered_indices[group_begin]]]
@@ -189,28 +260,68 @@ def make_plan(
                     )
                 )
             group_begin = group_end
+    else:
+        group_begin = 0
+        while group_begin < len(ordered_indices):
+            first_index = ordered_indices[group_begin]
+            ao_count = counts[ids[first_index]]
+            risk_band = risk_bands[ids[first_index]]
+            group_end = group_begin + 1
+            while group_end < len(ordered_indices):
+                next_id = ids[ordered_indices[group_end]]
+                if counts[next_id] != ao_count or risk_bands[next_id] != risk_band:
+                    break
+                group_end += 1
+            # AO/risk buckets stay separate even when the current batch has room.
+            for begin in range(group_begin, group_end, max_batch_size):
+                chunk = ordered_indices[begin : min(begin + max_batch_size, group_end)]
+                batches.append(
+                    AOBatch(
+                        case_ids=tuple(ids[index] for index in chunk),
+                        canonical_indices=chunk,
+                        ao_count=ao_count,
+                        risk_band=risk_band,
+                    )
+                )
+            group_begin = group_end
 
     count_pairs = (
         tuple((case_id, counts[case_id]) for case_id in ids)
         if counts is not None
         else ()
     )
+    risk_pairs = (
+        tuple((case_id, risk_bands[case_id]) for case_id in ids)
+        if risk_bands is not None
+        else ()
+    )
+    batch_documents = []
+    for batch in batches:
+        batch_document = {
+            "case_ids": list(batch.case_ids),
+            "canonical_indices": list(batch.canonical_indices),
+            "ao_count": batch.ao_count,
+        }
+        if strategy == "ao-risk":
+            batch_document["risk_band"] = batch.risk_band
+        batch_documents.append(batch_document)
     hash_document = {
-        "schema_version": 1,
+        "schema_version": 2 if strategy == "ao-risk" else 1,
         "strategy": strategy,
         "max_batch_size": max_batch_size,
         "original_case_ids": list(ids),
         "ao_counts_by_case_id": [list(pair) for pair in count_pairs],
         "basis_sha256": basis_sha256,
-        "batches": [
-            {
-                "case_ids": list(batch.case_ids),
-                "canonical_indices": list(batch.canonical_indices),
-                "ao_count": batch.ao_count,
-            }
-            for batch in batches
-        ],
+        "batches": batch_documents,
     }
+    if strategy == "ao-risk":
+        hash_document.update(
+            {
+                "risk_bands_by_case_id": [list(pair) for pair in risk_pairs],
+                "risk_policy_sha256": risk_policy_sha256,
+                "risk_freeze_plan_sha256": risk_freeze_plan_sha256,
+            }
+        )
     plan_sha256 = hashlib.sha256(
         json.dumps(hash_document, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -223,6 +334,9 @@ def make_plan(
         ao_counts_by_case_id=count_pairs,
         basis_sha256=basis_sha256,
         plan_sha256=plan_sha256,
+        risk_bands_by_case_id=risk_pairs,
+        risk_policy_sha256=risk_policy_sha256,
+        risk_freeze_plan_sha256=risk_freeze_plan_sha256,
     )
 
 

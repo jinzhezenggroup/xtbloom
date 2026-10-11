@@ -13,6 +13,7 @@ the scripts and method pages here define how evidence is produced and audited.
 | CPU FRESH/WARM scaling against explicit references | `natoms_scaling.py` | [FRESH/WARM scaling](fresh-warm.md) | `benchmarks.test_natoms_scaling` |
 | Cost of xTBloom-owned CUDA DLPack result arenas | `dlpack_result_memory.py` | [DLPack result memory](dlpack-result-memory.md) | `benchmarks.test_dlpack_result_memory` |
 | Dense 62-atom complete-Hessian batch throughput | `hessian.py` | Script module documentation and issue evidence README | `benchmarks.test_hessian` |
+| Input-only AO/risk preregistration and opt-in finite-list runner, not a measured policy | `convergence_grouping.py`, `run.py --ao-grouping ao-risk` | [Convergence grouping prototype](convergence-grouping.md) | `benchmarks.test_convergence_grouping`, `benchmarks.test_convergence_runner` |
 | Pinned OMol25 inputs for diagnostic finite-list runs | `omol25_inputs.py` | [Input conversion](omol25-inputs.md) | `benchmarks.test_omol25_inputs` |
 
 These protocols answer different questions. In particular, the public
@@ -30,6 +31,9 @@ host or CUDA host descriptors with strict FRESH SCC starts. It creates both
 layout owner sets once, keeps them alive together, and never reconstructs
 contexts per sample. CUDA execution must use the local GPU scheduler where
 required.
+Paired mode is AO-only: convergence inputs and calibration/holdout partition
+flags are rejected before workload or native-library setup. The separately
+pinned input-only convergence prototype remains a single-layout experiment.
 Every case ID must occur once in the selected manifest; duplicate IDs are
 rejected before planning.
 
@@ -236,6 +240,7 @@ set before changing benchmark documentation or publication logic:
 
 ```bash
 python3 -m unittest -v benchmarks.test_run
+python3 -m unittest -v benchmarks.test_convergence_grouping benchmarks.test_convergence_runner
 python3 -m unittest -v benchmarks.test_dxtb_adapter
 python3 -m unittest -v benchmarks.test_natoms_cross_engine
 python3 -m unittest -v benchmarks.test_natoms_scaling
