@@ -2305,8 +2305,7 @@ int test_plan_unaligned_automatic_spin_channels() {
       const std::array<std::int32_t, 2> channels{{first, second}};
       std::memcpy(spin.data() + 1u, channels.data(), sizeof(channels));
     };
-    request.batch.spin_channels =
-        {spin.data() + 1u, spin.size() - 1u, XTBLOOM_MEMORY_HOST, 0};
+    request.batch.spin_channels = {spin.data() + 1u, spin.size() - 1u, XTBLOOM_MEMORY_HOST, 0};
     set_spin(0, 0);
     xtbloom_plan_t* raw_plan = nullptr;
     CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
@@ -3142,4 +3141,3 @@ int main() {
   }
   return 0;
 }
-

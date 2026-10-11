@@ -546,4 +546,3 @@ xtbloom_status_t Gfn2Plan::enqueue(const xtbloom_batch_t& batch,
 }
 
 }  // namespace xtbloom::detail
-
