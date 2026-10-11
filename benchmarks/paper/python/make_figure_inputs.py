@@ -17,11 +17,13 @@ from paper_runtime import comparison_workload
 
 
 def qualified_performance_row(row: dict[str, Any]) -> bool:
+    correctness = row.get("correctness")
     return (
         row.get("availability") == "available"
         and row.get("claim_eligible") is True
-        and row.get("correctness", {}).get("status") == "pass"
-        and row.get("correctness", {}).get("performance_claim_eligible") is True
+        and isinstance(correctness, dict)
+        and correctness.get("status") == "pass"
+        and correctness.get("performance_claim_eligible") is True
         and row.get("memory", {}).get("status") == "available"
     )
 
@@ -44,6 +46,8 @@ def performance_rows(root: Path) -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             continue
         for row in document.get("rows", []):
+            correctness = row.get("correctness")
+            correctness = correctness if isinstance(correctness, dict) else {}
             timing = row.get("steady_fresh", {})
             worker = row.get("worker_scaling", {})
             scc = row.get("scc_iterations", {})
@@ -88,7 +92,7 @@ def performance_rows(root: Path) -> list[dict[str, Any]]:
                         "matched_success_systems_per_second"
                     ),
                     "success_rate": timing.get("success_rate"),
-                    "correctness": row.get("correctness", {}).get("status"),
+                    "correctness": correctness.get("status"),
                     "worker_speedup_vs_one_thread": worker.get("speedup_vs_one_thread"),
                     "parallel_efficiency": worker.get("parallel_efficiency"),
                     "scc_iteration_median": scc.get("median"),

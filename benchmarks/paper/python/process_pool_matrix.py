@@ -353,8 +353,16 @@ def main() -> int:
         or args.electronic_temperature_kelvin < 0.0
     ):
         raise PoolError("electronic temperature must be finite and nonnegative")
-    if args.energy_atol > 5e-7 or args.force_atol > 5e-6 or args.charge_atol > 5e-7:
-        raise PoolError("requested correctness gate widens the paper contract")
+    for value, maximum in (
+        (args.energy_atol, 5e-7),
+        (args.force_atol, 5e-6),
+        (args.charge_atol, 5e-7),
+    ):
+        if not math.isfinite(value) or value < 0 or value > maximum:
+            raise PoolError(
+                "correctness tolerances must be finite, nonnegative, and no wider "
+                "than the paper contract"
+            )
     if not args.library.is_file():
         raise PoolError(f"library is missing: {args.library}")
     from paper_runtime import install, physical_cpu_ids

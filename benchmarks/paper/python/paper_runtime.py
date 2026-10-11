@@ -12,7 +12,10 @@ from typing import Any
 def comparison_workload(row: dict[str, Any]) -> tuple[Any, ...] | None:
     """Bind a ratio to the same ordered inputs and successful peer mask."""
     ids = row.get("system_ids")
-    outcomes = row.get("correctness", {}).get("system_outcomes")
+    correctness = row.get("correctness")
+    if not isinstance(correctness, dict):
+        return None
+    outcomes = correctness.get("system_outcomes")
     if (
         not isinstance(ids, list)
         or not ids

@@ -790,6 +790,10 @@ class PaperEvidenceRegressionTest(unittest.TestCase):
             },
         }
         self.assertEqual(module.comparison_workload(row), (("a", "b"), (True, False)))
+        for malformed in (None, [], "pass"):
+            self.assertIsNone(
+                module.comparison_workload({**row, "correctness": malformed})
+            )
         for field, value in (("system_ids", ["a", "a"]), ("batch_size", 1)):
             with self.subTest(field=field):
                 self.assertIsNone(module.comparison_workload({**row, field: value}))
@@ -843,6 +847,7 @@ class PaperEvidenceRegressionTest(unittest.TestCase):
                 "reordered",
                 "different_mask",
                 "missing_outcomes",
+                "null_correctness",
                 "unqualified",
                 "different_threads",
                 "different_source",
@@ -864,6 +869,8 @@ class PaperEvidenceRegressionTest(unittest.TestCase):
                         )
                     elif mode == "missing_outcomes":
                         candidate["correctness"].pop("system_outcomes")
+                    elif mode == "null_correctness":
+                        candidate["correctness"] = None
                     elif mode == "unqualified":
                         candidate["claim_eligible"] = False
                     elif mode == "different_threads":
@@ -948,6 +955,42 @@ class PaperEvidenceRegressionTest(unittest.TestCase):
                     json.dumps({"rows": [{**pool, key: value}]})
                 )
                 self.assertEqual(module.process_pool_comparisons(root), [])
+
+    def test_pool_rejects_nonfinite_or_negative_correctness_tolerances(self) -> None:
+        module = self.load("process_pool_matrix")
+        with tempfile.TemporaryDirectory() as temporary:
+            for field in ("energy_atol", "force_atol", "charge_atol"):
+                for invalid in (float("nan"), float("inf"), -float("inf"), -1.0, 0.0):
+                    with self.subTest(field=field, invalid=invalid):
+                        values = {
+                            "output": Path(temporary) / "new.json",
+                            "library": Path(temporary) / "missing.so",
+                            "worker_timeout_seconds": 1,
+                            "warmups": 0,
+                            "repetitions": 2,
+                            "bootstrap_samples": 10,
+                            "max_scc_iterations": 500,
+                            "accuracy": 0.0001,
+                            "electronic_temperature_kelvin": 300,
+                            "energy_atol": 5e-7,
+                            "force_atol": 5e-6,
+                            "charge_atol": 5e-7,
+                        }
+                        values[field] = invalid
+                        with (
+                            mock.patch.object(
+                                module.argparse.ArgumentParser,
+                                "parse_args",
+                                return_value=argparse.Namespace(**values),
+                            ),
+                            self.assertRaisesRegex(
+                                module.PoolError,
+                                "library is missing"
+                                if invalid == 0
+                                else "finite, nonnegative",
+                            ),
+                        ):
+                            module.main()
 
     def test_governor_is_verified_for_every_assigned_cpu(self) -> None:
         module = self.load("resolve_cpu_policy")
