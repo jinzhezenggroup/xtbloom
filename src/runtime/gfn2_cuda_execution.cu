@@ -2066,6 +2066,17 @@ __device__ bool fixed_topology_value_differs(const T* actual, const T* expected,
   return actual != nullptr && index < elements && actual[index] != expected[index];
 }
 
+__device__ bool fixed_spin_channel_differs(const std::int32_t* actual, const std::int32_t* expected,
+                                           const std::int32_t* expected_unpaired,
+                                           std::int64_t index, std::int64_t elements) noexcept {
+  if (actual == nullptr || index >= elements) return false;
+  std::int32_t channels = actual[index];
+  if (channels == 0) {
+    channels = expected_unpaired[index] == 0 ? 1 : 2;
+  }
+  return channels != expected[index];
+}
+
 __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBinding binding) {
   const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const std::int64_t stride = static_cast<std::int64_t>(gridDim.x) * blockDim.x;
@@ -2087,8 +2098,9 @@ __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBindi
         fixed_topology_value_differs(binding.unpaired_electrons,
                                      binding.expected_unpaired_electrons, element,
                                      binding.batch_elements) ||
-        fixed_topology_value_differs(binding.spin_channels, binding.expected_spin_channels, element,
-                                     binding.batch_elements) ||
+        fixed_spin_channel_differs(binding.spin_channels, binding.expected_spin_channels,
+                                   binding.expected_unpaired_electrons, element,
+                                   binding.batch_elements) ||
         fixed_topology_value_differs(binding.point_offsets, binding.expected_point_offsets, element,
                                      binding.point_offset_elements) ||
         fixed_topology_value_differs(binding.response_offsets, binding.expected_response_offsets,
@@ -2246,7 +2258,8 @@ bool validate_or_bind_fixed_topology_field(const char* name, const xtbloom_const
 }
 
 bool spin_channel_buffer_equals(const xtbloom_batch_t& batch,
-                                const std::vector<std::int32_t>& expected) noexcept {
+                                const std::vector<std::int32_t>& expected,
+                                const std::vector<std::int32_t>& unpaired_electrons) noexcept {
   /* ABI-v1 and an empty ABI-v2 suffix both mean one restricted channel. */
   const bool supplied =
       batch.struct_size >= XTBLOOM_BATCH_V2_SIZE &&
@@ -2255,7 +2268,19 @@ bool spin_channel_buffer_equals(const xtbloom_batch_t& batch,
     return std::all_of(expected.begin(), expected.end(),
                        [](std::int32_t channels) { return channels == 1; });
   }
-  return buffer_equals(batch.spin_channels, expected);
+  if (expected.size() != unpaired_electrons.size()) return false;
+  const std::size_t bytes = expected.size() * sizeof(std::int32_t);
+  if (!valid_host_extent(batch.spin_channels, bytes, expected.empty())) return false;
+  const auto* source = static_cast<const std::byte*>(batch.spin_channels.data);
+  for (std::size_t system = 0; system < expected.size(); ++system) {
+    std::int32_t channels = 0;
+    std::memcpy(&channels, source + system * sizeof(channels), sizeof(channels));
+    if (channels == 0) {
+      channels = unpaired_electrons[system] == 0 ? 1 : 2;
+    }
+    if (channels != expected[system]) return false;
+  }
+  return true;
 }
 
 bool finite_double_buffer(const xtbloom_const_buffer_t& buffer, std::int64_t elements,
@@ -2329,7 +2354,7 @@ TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
       !buffer_equals(batch.atomic_numbers, key.atomic_numbers) ||
       !double_buffer_equals(batch.molecular_charges, key.molecular_charges) ||
       !buffer_equals(batch.unpaired_electrons, key.unpaired_electrons) ||
-      !spin_channel_buffer_equals(batch, key.spin_channels)) {
+      !spin_channel_buffer_equals(batch, key.spin_channels, key.unpaired_electrons)) {
     /* Distinguish a short/wrong-space descriptor from a legitimate topology
      * change so invalid reuse attempts cannot enter candidate construction. */
     std::size_t atom_offset_bytes = 0u;
@@ -2593,9 +2618,12 @@ xtbloom_status_t make_topology_key(const xtbloom_batch_t& batch,
       error = "molecular_charges contains a nonfinite value";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
-    const std::int32_t channels = key.spin_channels[static_cast<std::size_t>(system)];
+    std::int32_t& channels = key.spin_channels[static_cast<std::size_t>(system)];
+    if (channels == 0) {
+      channels = key.unpaired_electrons[static_cast<std::size_t>(system)] == 0 ? 1 : 2;
+    }
     if (channels != 1 && channels != 2) {
-      error = "spin_channels values must be one or two";
+      error = "spin_channels values must be zero (auto), one, or two";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
@@ -9395,9 +9423,14 @@ struct Gfn2CudaExecutionCache::Impl {
         batch.struct_size >= XTBLOOM_BATCH_V2_SIZE &&
         (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
     if (spin_supplied) {
-      if (!validate_or_bind_fixed_topology_field("spin_channels", batch.spin_channels,
-                                                 key.spin_channels, state.expected_spin_channels,
-                                                 binding.spin_channels, error)) {
+      if (batch.spin_channels.memory_space == XTBLOOM_MEMORY_HOST) {
+        if (!spin_channel_buffer_equals(batch, key.spin_channels, key.unpaired_electrons)) {
+          error = "spin_channels does not match the fixed CUDA plan topology";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+      } else if (!validate_or_bind_fixed_topology_field(
+                     "spin_channels", batch.spin_channels, key.spin_channels,
+                     state.expected_spin_channels, binding.spin_channels, error)) {
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     } else if (!std::all_of(key.spin_channels.begin(), key.spin_channels.end(),

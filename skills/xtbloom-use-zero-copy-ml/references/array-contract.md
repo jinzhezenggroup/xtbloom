@@ -31,7 +31,7 @@ All dtypes are exact; no scalar conversion is performed.
 | `unpaired_electrons` | `(nsystems,)` | `int32` |
 | `spin_channels` | `(nsystems,)` | `int32` |
 
-If `spin_channels` is omitted, `ArrayBatch` creates a host `int32` array filled with restricted value `1`.
+If `spin_channels` is omitted, `ArrayBatch` supplies ABI-v2 automatic value `0`; native execution resolves each system to `1` when its unpaired-electron count is zero and `2` otherwise without reading device inputs on the host.
 
 Optional point-charge inputs are all-or-none:
 

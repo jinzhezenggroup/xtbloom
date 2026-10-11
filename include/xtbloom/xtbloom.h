@@ -427,9 +427,10 @@ XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_buffer_t, reserved) ==
  * total_atoms int32_t values. positions contains total_atoms * 3 doubles.
  * molecular_charges contains batch_size doubles and unpaired_electrons contains
  * batch_size int32_t values. The ABI-v2 spin_channels field, when present,
- * contains batch_size int32_t values equal to one (restricted) or two
+ * contains batch_size int32_t values equal to zero (automatic: one channel
+ * when unpaired_electrons is zero, otherwise two), one (restricted), or two
  * (unrestricted). A missing or NULL spin_channels buffer preserves the ABI-v1
- * restricted default.
+ * restricted default rather than selecting automatic mode.
  *
  * External point charges participate in every SCC iteration. When
  * total_point_charges is nonzero, point_charge_offsets has batch_size + 1
@@ -466,7 +467,8 @@ typedef struct xtbloom_batch {
   xtbloom_const_buffer_t atomic_potential_shifts;
   xtbloom_const_buffer_t charge_response_offsets;
   xtbloom_const_buffer_t charge_response_matrix;
-  /* ABI v2 optional suffix; NULL selects one restricted channel per system. */
+  /* ABI v2 optional suffix; 0 selects automatic channels, while NULL keeps
+   * the ABI-v1 one-channel restricted default. */
   xtbloom_const_buffer_t spin_channels;
   /* ABI v3 optional suffix: generic external-interaction attachments.
    *

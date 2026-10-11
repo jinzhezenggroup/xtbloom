@@ -2282,6 +2282,56 @@ int test_gfn1_plan_workspace_warm_and_topology_transactions() {
   return 0;
 }
 
+int test_plan_unaligned_automatic_spin_channels() {
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  for (const xtbloom_model_t model : {XTBLOOM_MODEL_GFN1_XTB, XTBLOOM_MODEL_GFN2_XTB}) {
+    ContextHandle context = make_cpu_context(1);
+    CHECK(context != nullptr);
+    PublicBatch request = make_h2_he_batch();
+    request.atomic_numbers.back() = 1;
+    request.unpaired_electrons.back() = 1;
+    request.spin_channels = {1, 2};
+    request.bind(flags);
+    request.options.model = model;
+    CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    const PublicOutputImage reference(request);
+
+    /* Byte-aligned C buffers are valid. Exercise capture and repeated identity
+     * checks using both automatic and equivalent explicit spin selectors. */
+    alignas(std::int32_t) std::array<unsigned char, 1u + 2u * sizeof(std::int32_t)> spin{};
+    const auto set_spin = [&](std::int32_t first, std::int32_t second) {
+      const std::array<std::int32_t, 2> channels{{first, second}};
+      std::memcpy(spin.data() + 1u, channels.data(), sizeof(channels));
+    };
+    request.batch.spin_channels = {spin.data() + 1u, spin.size() - 1u, XTBLOOM_MEMORY_HOST, 0};
+    set_spin(0, 0);
+    xtbloom_plan_t* raw_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+          XTBLOOM_STATUS_SUCCESS);
+    PlanHandle plan(raw_plan);
+    for (const bool automatic : {true, false, true}) {
+      set_spin(automatic ? 0 : 1, automatic ? 0 : 2);
+      CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+            XTBLOOM_STATUS_SUCCESS);
+      CHECK(reference.matches(request));
+    }
+
+    /* An actual channel change or legacy missing suffix must still reject
+     * reuse before publishing any part of the caller's output image. */
+    set_spin(1, 1);
+    CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(reference.matches(request));
+    request.batch.spin_channels = {nullptr, 0u, XTBLOOM_MEMORY_HOST, 0};
+    CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(reference.matches(request));
+  }
+  return 0;
+}
+
 int test_plan_create_query_workspace_and_reuse() {
   const std::uint32_t flags =
       XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
@@ -3051,6 +3101,9 @@ int main() {
     return line;
   }
   if (const int line = test_gfn1_plan_workspace_warm_and_topology_transactions(); line != 0) {
+    return line;
+  }
+  if (const int line = test_plan_unaligned_automatic_spin_channels(); line != 0) {
     return line;
   }
   if (const int line = test_plan_create_query_workspace_and_reuse(); line != 0) {
