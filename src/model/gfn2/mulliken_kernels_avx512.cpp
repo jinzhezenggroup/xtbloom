@@ -13,18 +13,20 @@
 
 namespace xtbloom::detail::gfn2 {
 
-XTBLOOM_NOINLINE void mulliken_population_chunk_avx512_fma(void* opaque, std::size_t chunk) noexcept {
+XTBLOOM_NOINLINE void mulliken_population_chunk_avx512_fma(void* opaque,
+                                                           std::size_t chunk) noexcept {
   kernel_implementation::population_chunk(opaque, chunk);
 }
 
 XTBLOOM_NOINLINE void mulliken_hamiltonian_chunk_avx512_fma(void* opaque,
-                                                          std::size_t chunk) noexcept {
+                                                            std::size_t chunk) noexcept {
   kernel_implementation::hamiltonian_chunk(opaque, chunk);
 }
 
 const MullikenKernelTable& mulliken_avx512_fma_kernels() noexcept {
-  static constexpr MullikenKernelTable kernels{
-      &mulliken_population_chunk_avx512_fma, &mulliken_hamiltonian_chunk_avx512_fma, CpuIsa::kAvx512Fma};
+  static constexpr MullikenKernelTable kernels{&mulliken_population_chunk_avx512_fma,
+                                               &mulliken_hamiltonian_chunk_avx512_fma,
+                                               CpuIsa::kAvx512Fma};
   return kernels;
 }
 
