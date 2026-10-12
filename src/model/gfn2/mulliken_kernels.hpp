@@ -85,9 +85,12 @@ void mulliken_population_chunk_baseline(void* opaque, std::size_t chunk) noexcep
 void mulliken_hamiltonian_chunk_baseline(void* opaque, std::size_t chunk) noexcept;
 void mulliken_population_chunk_avx2_fma(void* opaque, std::size_t chunk) noexcept;
 void mulliken_hamiltonian_chunk_avx2_fma(void* opaque, std::size_t chunk) noexcept;
+void mulliken_population_chunk_avx512_fma(void* opaque, std::size_t chunk) noexcept;
+void mulliken_hamiltonian_chunk_avx512_fma(void* opaque, std::size_t chunk) noexcept;
 
 [[nodiscard]] const MullikenKernelTable& mulliken_baseline_kernels() noexcept;
 [[nodiscard]] const MullikenKernelTable& mulliken_avx2_fma_kernels() noexcept;
+[[nodiscard]] const MullikenKernelTable& mulliken_avx512_fma_kernels() noexcept;
 [[nodiscard]] const MullikenKernelTable& mulliken_kernels_for_cpu_isa(CpuIsa isa) noexcept;
 
 }  // namespace xtbloom::detail::gfn2

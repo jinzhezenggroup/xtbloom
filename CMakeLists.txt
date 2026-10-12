@@ -963,6 +963,7 @@ set_target_properties(xtbloom_integrals_baseline_objects PROPERTIES
 # A single shared library carries the baseline kernels on every architecture.
 # Add the AVX2/FMA object only for a single x86-64 target whose compiler accepts
 # both flags; universal Apple builds, ARM, and WebAssembly remain baseline-only.
+set(XTBLOOM_BUILD_AVX512_FMA_KERNELS OFF)
 set(XTBLOOM_BUILD_AVX2_FMA_KERNELS OFF)
 set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS "")
 set(XTBLOOM_SINGLE_X86_64_TARGET OFF)
@@ -1030,6 +1031,10 @@ if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
     check_cxx_compiler_flag("-mavx2" XTBLOOM_CXX_HAS_MAVX2)
     check_cxx_compiler_flag("-mfma" XTBLOOM_CXX_HAS_MFMA)
     if(XTBLOOM_CXX_HAS_MAVX2 AND XTBLOOM_CXX_HAS_MFMA)
+      check_cxx_compiler_flag("-mavx512f" XTBLOOM_CXX_HAS_MAVX512F)
+      if(XTBLOOM_CXX_HAS_MAVX512F)
+        set(XTBLOOM_BUILD_AVX512_FMA_KERNELS ON)
+      endif()
       set(XTBLOOM_BUILD_AVX2_FMA_KERNELS ON)
       set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS
         "-march=x86-64;-mtune=generic;-mavx2;-mfma;-fno-lto")
@@ -1113,6 +1118,33 @@ if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
   message(STATUS "xtbloom CPU ISA dispatch: baseline + AVX2/FMA Mulliken and integral kernels")
 else()
   message(STATUS "xtbloom CPU ISA dispatch: baseline Mulliken and integral kernels only")
+endif()
+
+if(XTBLOOM_BUILD_AVX512_FMA_KERNELS)
+  add_library(xtbloom_gfn2_mulliken_avx512_objects OBJECT
+    src/model/gfn2/mulliken_kernels_avx512.cpp
+  )
+  target_compile_features(xtbloom_gfn2_mulliken_avx512_objects PUBLIC cxx_std_17)
+  target_include_directories(xtbloom_gfn2_mulliken_avx512_objects PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_options(xtbloom_gfn2_mulliken_avx512_objects PRIVATE
+    -march=x86-64 -mtune=generic -mavx2 -mfma -mavx512f -fno-lto)
+  set_target_properties(xtbloom_gfn2_mulliken_avx512_objects PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    INTERPROCEDURAL_OPTIMIZATION OFF
+    POSITION_INDEPENDENT_CODE ON
+    VISIBILITY_INLINES_HIDDEN YES
+  )
+  target_compile_definitions(xtbloom_cpu_dispatch_objects PRIVATE
+    XTBLOOM_HAS_AVX512_FMA_KERNELS=1)
+  list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
+    xtbloom_gfn2_mulliken_avx512_objects)
+  list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECTS
+    $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_avx512_objects>)
+  message(STATUS "xtbloom CPU ISA dispatch: isolated AVX-512/FMA Mulliken kernels")
 endif()
 
 add_library(xtbloom_model_common_cpu_objects OBJECT
@@ -1230,6 +1262,10 @@ set_target_properties(xtbloom_gfn2_cpu_objects PROPERTIES
 if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
   target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
     XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
+endif()
+if(XTBLOOM_BUILD_AVX512_FMA_KERNELS)
+  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
+    XTBLOOM_HAS_AVX512_FMA_KERNELS=1)
 endif()
 # Keep the complete CPU GFN1 implementation in its own object target so the
 # public library can publish the already-reserved model tag without merging
@@ -5174,6 +5210,10 @@ if(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE)
   if(TARGET xtbloom_gfn2_mulliken_avx2_objects)
     target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
       xtbloom_gfn2_mulliken_avx2_objects)
+  endif()
+  if(TARGET xtbloom_gfn2_mulliken_avx512_objects)
+    target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+      xtbloom_gfn2_mulliken_avx512_objects)
   endif()
 
   # Register the focused executables only in test-enabled source builds. They
