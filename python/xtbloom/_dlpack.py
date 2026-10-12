@@ -34,7 +34,7 @@ import math
 import typing
 import weakref
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
@@ -113,7 +113,7 @@ _POINTER_MAX = ctypes.c_size_t(-1).value
 class _DLDataType(ctypes.Structure):
     """Mirror of ``DLDataType``: type code, bit width, and vector lanes."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("code", ctypes.c_uint8),
         ("bits", ctypes.c_uint8),
         ("lanes", ctypes.c_uint16),
@@ -123,7 +123,7 @@ class _DLDataType(ctypes.Structure):
 class _DLDevice(ctypes.Structure):
     """Mirror of ``DLDevice``: the device-kind enum and its ordinal."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("device_type", ctypes.c_int32),
         ("device_id", ctypes.c_int32),
     ]
@@ -132,7 +132,7 @@ class _DLDevice(ctypes.Structure):
 class _DLTensor(ctypes.Structure):
     """Mirror of ``DLTensor``: 48-byte plain tensor descriptor."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("data", ctypes.c_void_p),
         ("device", _DLDevice),
         ("ndim", ctypes.c_int32),
@@ -146,7 +146,7 @@ class _DLTensor(ctypes.Structure):
 class _DLManagedTensor(ctypes.Structure):
     """Mirror of the legacy ``DLManagedTensor`` (64 bytes, unversioned)."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("dl_tensor", _DLTensor),
         ("manager_ctx", ctypes.c_void_p),
         ("deleter", ctypes.c_void_p),
@@ -160,7 +160,7 @@ class _DLManagedTensorVersioned(ctypes.Structure):
     ``flags``, then the 48-byte ``DLTensor``.
     """
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("version_major", ctypes.c_uint32),
         ("version_minor", ctypes.c_uint32),
         ("manager_ctx", ctypes.c_void_p),
