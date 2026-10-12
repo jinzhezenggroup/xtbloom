@@ -20,7 +20,7 @@ import os
 import sys
 import weakref
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -28,7 +28,7 @@ import numpy.typing as npt
 from .exceptions import XTBloomRuntimeError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Generator, Sequence
     from types import ModuleType
 
 _cuda_driver_handle: ctypes.CDLL | None = None
@@ -130,7 +130,7 @@ DEFAULT_ELECTRONIC_TEMPERATURE = 300.0 * KELVIN_TO_HARTREE
 class ContextOptions(ctypes.Structure):
     """ctypes mirror of ``xtbloom_context_options_t`` ABI version 1."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("backend", ctypes.c_int32),
@@ -144,7 +144,7 @@ class ContextOptions(ctypes.Structure):
 class ConstBuffer(ctypes.Structure):
     """ctypes mirror of ``xtbloom_const_buffer_t`` (caller-owned input view)."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("data", ctypes.c_void_p),
         ("size_bytes", ctypes.c_size_t),
         ("memory_space", ctypes.c_int32),
@@ -155,7 +155,7 @@ class ConstBuffer(ctypes.Structure):
 class Buffer(ctypes.Structure):
     """ctypes mirror of ``xtbloom_buffer_t`` (caller-owned output view)."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("data", ctypes.c_void_p),
         ("size_bytes", ctypes.c_size_t),
         ("memory_space", ctypes.c_int32),
@@ -166,7 +166,7 @@ class Buffer(ctypes.Structure):
 class Batch(ctypes.Structure):
     """ctypes mirror of ``xtbloom_batch_t`` through the ABI-v4 lattice suffix."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("batch_size", ctypes.c_int64),
@@ -197,7 +197,7 @@ class Batch(ctypes.Structure):
 class Interaction(ctypes.Structure):
     """ctypes mirror of ``xtbloom_interaction_t`` (one attachment entry)."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("type", ctypes.c_int32),
         ("flags", ctypes.c_uint32),
         ("system_index", ctypes.c_int64),
@@ -209,7 +209,7 @@ class Interaction(ctypes.Structure):
 class ComputeOptions(ctypes.Structure):
     """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 3."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("model", ctypes.c_int32),
@@ -232,7 +232,7 @@ class ComputeOptions(ctypes.Structure):
 class BatchResult(ctypes.Structure):
     """ctypes mirror of ``xtbloom_batch_result_t`` through the ABI-v3 suffix."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("flags", ctypes.c_uint32),
@@ -275,7 +275,7 @@ class WorkspaceQuery(ctypes.Structure):
 class RequestInfo(ctypes.Structure):
     """ctypes mirror of ``xtbloom_request_info_t`` ABI version 1."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("state", ctypes.c_int32),
@@ -288,7 +288,7 @@ class RequestInfo(ctypes.Structure):
 class ResultOwnerOptions(ctypes.Structure):
     """ctypes mirror of ``xtbloom_result_owner_options_t`` ABI version 1."""
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("memory_space", ctypes.c_int32),
@@ -305,7 +305,7 @@ class DlpackView(ctypes.Structure):
     copied by xTBloom during the export call.
     """
 
-    _fields_: ClassVar[list[tuple[str, object]]] = [
+    _fields_ = [
         ("struct_size", ctypes.c_uint32),
         ("api_version", ctypes.c_uint32),
         ("byte_offset", ctypes.c_uint64),
@@ -751,7 +751,7 @@ def _load_cuda_driver() -> ctypes.CDLL | None:
 
 
 @contextlib.contextmanager
-def _cuda_device_scope(device_id: int) -> Iterator[None]:
+def _cuda_device_scope(device_id: int) -> Generator[None, None, None]:
     """Push one CUDA primary context temporarily and restore the caller state.
 
     Some conforming DLPack producers, notably PyTorch, require their array's
