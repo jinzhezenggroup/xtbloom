@@ -232,7 +232,7 @@ jobs:
           persist-credentials: false
 
       - name: Download web coverage report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: coverage-report-web
 
@@ -272,13 +272,13 @@ jobs:
         run: npm --prefix web run browser:install
 
       - name: Restore wasm32 site
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-web-wasm32
           path: build/wasm32-web/web/site
 
       - name: Restore wasm64 site
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-web-wasm64
           path: build/wasm64-web/web/site
@@ -377,7 +377,7 @@ jobs:
       # credential-bearing job. These immutable artifacts contain the wasm32
       # site that passed parity and the exact lockfile-installed deployer.
       - name: Restore validated wasm32 site
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-web-wasm32
           path: build/wasm32-web/web/site
@@ -388,7 +388,7 @@ jobs:
           node-version: '24'
 
       - name: Restore locked Cloudflare Pages deployer
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-cloudflare-pages-deployer
           path: build/cloudflare-pages-deployer-archive
