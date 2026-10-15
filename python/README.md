@@ -169,7 +169,7 @@ structures = [
 ]
 
 with BatchCalculator(structures, backend="cuda") as calc:  # Use "cpu" for CPU-only builds.
-    batch = calc.compute()
+    batch = calc.compute(auto_batch_size=True)
 
 print(batch.energies)
 print(batch[1].forces)
@@ -177,7 +177,15 @@ print(batch.failed_indices)
 ```
 
 `compute(auto_batch_size=True)` can split very large workloads into
-conservative CUDA chunks while preserving input order.
+conservative CUDA chunks while returning results in input order. Eligible
+GFN2 CUDA host/FRESH queues default to stable exact-AO grouping over the whole
+queue before splitting. `batch_ordering="original"` (or `"off"`) preserves the
+baseline; `batch.execution_plan` records the resolved policy, reason, bounded
+schedule, inverse mapping and hash. CPU, GFN1, WARM and no-reuse queues keep
+their original policy. Omitting `auto_batch_size` or setting it to `None` or
+`False` still submits one native call. See the Python guide for the full
+contract and the outstanding real-GPU qualification scope in #535; this is
+not a claim that every workload becomes faster.
 
 ## Advanced array and CUDA paths
 

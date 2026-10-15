@@ -33,6 +33,18 @@ The command writes these deterministic files under `data/parameters/`:
   upload to CUDA or a future ROCm backend;
 - `manifest.json`: source, licensing, schema, generator, and output checksums.
 
+The same generator derives `python/xtbloom/_gfn2_basis.py` from the exact
+normalized JSON bytes. This installed scheduling-only table contains each
+element's sum of shell degeneracies (`2*l+1`) and the JSON SHA256. It carries
+the existing tblite parameter provenance/license and does not introduce a
+second model parameter source or approximate AOs from atom counts. Normal
+generation and `--check` also write/check this Python artifact; tests compare
+every element against the canonical shells. Native numerical tables remain
+unchanged; the existing manifest records the updated generator checksum.
+Custom `--output-dir` exports do not modify the source package; pass
+`--python-output-dir <directory>` explicitly to generate/check a Python table
+for a noncanonical export.
+
 After editing the generator, regenerate derived files without invoking tblite:
 
 ```sh
