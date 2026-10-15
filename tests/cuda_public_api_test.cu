@@ -3318,29 +3318,49 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   }
 
   for (const auto [layout, name] :
-       {std::pair{InputLayout::kDevice, "device"}, std::pair{InputLayout::kMixed, "mixed"}}) {
+       {std::pair{InputLayout::kHost, "host"}, std::pair{InputLayout::kDevice, "device"},
+        std::pair{InputLayout::kMixed, "mixed"}}) {
     std::string scenario = std::string("context-enqueue/") + name;
     g_scenario = scenario.c_str();
-    PublicBatch placed = batch;
-    DeviceBatchInputs placed_inputs;
-    CUDA_CHECK(placed_inputs.upload_all(placed));
-    bind_inputs(placed, &placed_inputs, layout);
-    ResultOwner placed_result;
-    CUDA_CHECK(placed_result.bind(placed, ResultLayout::kDevice, options.flags));
-    xtbloom_request_t* raw_placed_request = nullptr;
-    CHECK(xtbloom_request_create(context.get(), &raw_placed_request) == XTBLOOM_STATUS_SUCCESS);
-    RequestHandle placed_request(raw_placed_request);
-    CHECK(xtbloom_compute_enqueue(context.get(), &placed.descriptor, &options,
-                                  &placed_result.descriptor,
-                                  placed_request.get()) == XTBLOOM_STATUS_SUCCESS);
-    xtbloom_request_info_t placed_info{};
-    CHECK(xtbloom_request_info_init(&placed_info, sizeof(placed_info)) == XTBLOOM_STATUS_SUCCESS);
-    CHECK(xtbloom_request_wait(placed_request.get(), &placed_info) == XTBLOOM_STATUS_SUCCESS);
-    CHECK(placed_info.completion_status == XTBLOOM_STATUS_SUCCESS);
-    MaterializedResult placed_actual;
-    CUDA_CHECK(placed_result.materialize(placed_actual));
-    placed_actual.flags = placed_info.result_flags;
-    CHECK(compare_result(placed_result, placed_actual, reference, options) == 0);
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      PublicBatch placed = batch;
+      /* Auto and its explicit 1/2 channels are the same topology and WARM epoch.
+       * The third call returns to auto after an explicit-channel checkpoint. */
+      if (repeat == 1) {
+        for (std::size_t system = 0; system < placed.spin_channels.size(); ++system) {
+          placed.spin_channels[system] = placed.unpaired_electrons[system] == 0 ? 1 : 2;
+        }
+        placed.bind();
+      }
+      const auto& placed_options = repeat == 0 ? options : warm_options;
+      DeviceBatchInputs placed_inputs;
+      CUDA_CHECK(placed_inputs.upload_all(placed));
+      bind_inputs(placed, &placed_inputs, layout);
+      ResultOwner placed_result;
+      CUDA_CHECK(placed_result.bind(placed, ResultLayout::kDevice, options.flags));
+      xtbloom_request_t* raw_placed_request = nullptr;
+      CHECK(xtbloom_request_create(context.get(), &raw_placed_request) == XTBLOOM_STATUS_SUCCESS);
+      RequestHandle placed_request(raw_placed_request);
+      CHECK(xtbloom_compute_enqueue(context.get(), &placed.descriptor, &placed_options,
+                                    &placed_result.descriptor,
+                                    placed_request.get()) == XTBLOOM_STATUS_SUCCESS);
+      xtbloom_request_info_t placed_info{};
+      CHECK(xtbloom_request_info_init(&placed_info, sizeof(placed_info)) == XTBLOOM_STATUS_SUCCESS);
+      CHECK(xtbloom_request_wait(placed_request.get(), &placed_info) == XTBLOOM_STATUS_SUCCESS);
+      /* A successful wait clears the thread-local error even when the accepted
+       * computation fails; retain its request-owned diagnostic before teardown. */
+      if (placed_info.completion_status != XTBLOOM_STATUS_SUCCESS) {
+        std::fprintf(stderr, "context enqueue completion status %d: %s\n",
+                     static_cast<int>(placed_info.completion_status),
+                     xtbloom_request_get_error(placed_request.get()));
+      }
+      CHECK(placed_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+      MaterializedResult placed_actual;
+      CUDA_CHECK(placed_result.materialize(placed_actual));
+      placed_actual.flags = placed_info.result_flags;
+      CHECK(compare_result(placed_result, placed_actual, reference, options) == 0);
+      CHECK(placed_result.descriptor.flags == kResultFlagsCanary);
+    }
   }
   g_scenario = "context-enqueue";
 
@@ -3439,8 +3459,10 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
     xtbloom_request_t* raw_mismatch_request = nullptr;
     CHECK(xtbloom_request_create(context.get(), &raw_mismatch_request) == XTBLOOM_STATUS_SUCCESS);
     RequestHandle mismatch_request(raw_mismatch_request);
-    CUDA_CHECK(cudaMemsetAsync(const_cast<void*>(mismatch_batch.descriptor.spin_channels.data), 0,
-                               mismatch_batch.descriptor.spin_channels.size_bytes, stream.get()));
+    /* Zero is a valid automatic selector, not a topology corruption. */
+    CUDA_CHECK(cudaMemsetAsync(const_cast<void*>(mismatch_batch.descriptor.spin_channels.data),
+                               0xff, mismatch_batch.descriptor.spin_channels.size_bytes,
+                               stream.get()));
     CHECK(xtbloom_compute_enqueue(context.get(), &mismatch_batch.descriptor, &warm_options,
                                   &mismatch_result.descriptor,
                                   mismatch_request.get()) == XTBLOOM_STATUS_SUCCESS);
@@ -4425,11 +4447,12 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     RequestHandle mismatch_request(raw_mismatch_request);
     BlockingStreamGate mismatch_gate;
     if (mode != PlanTestMode::kSanitizer) CUDA_CHECK(mismatch_gate.arm(stream.get()));
-    /* spin_channels is device-backed in both layouts. A device-side memset is
+    /* spin_channels is device-backed in both layouts. Write invalid -1, not
+     * valid automatic zero. A device-side memset is
      * guaranteed to enqueue behind the gate; a pageable host-to-device copy
      * is allowed to block in the CUDA runtime before the request is submitted. */
     CUDA_CHECK(cudaMemsetAsync(const_cast<void*>(device_async_batch.descriptor.spin_channels.data),
-                               0, device_async_batch.descriptor.spin_channels.size_bytes,
+                               0xff, device_async_batch.descriptor.spin_channels.size_bytes,
                                stream.get()));
     xtbloom_status_t mismatch_enqueue_status = XTBLOOM_STATUS_INTERNAL_ERROR;
     if (mode == PlanTestMode::kSanitizer) {
