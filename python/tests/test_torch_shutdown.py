@@ -601,11 +601,35 @@ def cpu_preload_fork():
     print("PARENT_USABLE:" + scenario, flush=True)
     print("SHUTDOWN_OK:" + scenario, flush=True)
 
+def unowned_terminal():
+    module = importlib.import_module("xtbloom.torch")
+    assert not torch.cuda.is_initialized()
+    module._xtbloom_torch_op()
+    assert module._CUDA_PROCESS_ID is None
+    assert not torch.cuda.is_initialized(), "CPU preload initialized Torch CUDA"
+    try:
+        torch.ops.xtbloom._xtbloom_torch_wait(1)
+    except RuntimeError as error:
+        assert "pool is unavailable" in str(error), str(error)
+    else:
+        raise AssertionError("an unowned pool accepted a nonzero wait token")
+    shutdown = torch.ops.xtbloom._xtbloom_torch_shutdown
+    shutdown()
+    shutdown()
+    assert not torch.cuda.is_initialized(), "unowned cleanup initialized Torch CUDA"
+    require_cuda()
+    check_terminal()
+    print("UNOWNED_TERMINAL_OK", flush=True)
+    print("SHUTDOWN_OK:" + scenario, flush=True)
+
 def main():
     if scenario.startswith("fork-") and not hasattr(os, "fork"):
         unavailable("real fork regression requires os.fork")
     if scenario == "fork-cpu-preload":
         cpu_preload_fork()
+        return
+    if scenario == "unowned-terminal":
+        unowned_terminal()
         return
     require_cuda()
     if scenario == "backward-history":
@@ -705,6 +729,7 @@ def _run_lifecycle_subprocess(scenario: str) -> subprocess.CompletedProcess[str]
         "fork-inherited",
         "fork-cpu-preload",
         "atexit-pending",
+        "unowned-terminal",
     ],
 )
 def test_cuda_shutdown_in_subprocess(scenario: str) -> None:
@@ -729,3 +754,5 @@ def test_cuda_shutdown_in_subprocess(scenario: str) -> None:
         assert "BACKWARD_HISTORY_OK" in completed.stdout, output
     if scenario == "concurrent":
         assert "CONCURRENT_DRAIN_OK" in completed.stdout, output
+    if scenario == "unowned-terminal":
+        assert "UNOWNED_TERMINAL_OK" in completed.stdout, output
