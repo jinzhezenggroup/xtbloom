@@ -11,6 +11,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 PARAMETER_JSON = REPOSITORY / "data" / "parameters" / "gfn2.json"
@@ -43,7 +47,8 @@ def _copy_generator_tree(root: Path) -> tuple[Path, Path]:
     return generator_path, basis_module
 
 
-def _load_module(name: str, path: Path):
+def _load_module(name: str, path: Path) -> ModuleType:
+    """Inspect generated and shared modules without importing the native package."""
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {path}")
@@ -259,7 +264,8 @@ class Gfn2BatchingTests(unittest.TestCase):
                 "assert 'xtbloom' not in sys.modules",
                 "assert 'numpy' not in sys.modules",
                 "assert ao_grouping.resolve_policy(",
-                "    'off', ineligible_reason=None, ao_counts=None, original_batches=()",
+                "    'off', ineligible_reason=None, ao_counts=None,",
+                "    original_batches=()",
                 ") == ('original', 'explicit_original')",
             )
         )

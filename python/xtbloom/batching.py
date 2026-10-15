@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
@@ -12,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 RISK_BAND_ORDER = ("high", "elevated", "guarded", "low")
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
 

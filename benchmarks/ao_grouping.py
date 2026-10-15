@@ -6,7 +6,10 @@ import hashlib
 import importlib.util
 import sys
 from pathlib import Path
-from types import ModuleType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 def _load_shared_batching() -> ModuleType:
