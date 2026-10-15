@@ -122,10 +122,15 @@ ctest --test-dir "$root/build-cuda" --output-on-failure --timeout 300 \
 ```
 
 The native command intentionally exits nonzero at the recorded failing gate.
-Execute the following independently so the failure does not suppress them:
+The isolated `validation/` directory contains `_cases.py` and `conftest.py`
+symlinks to `candidate/python/tests/`. The explicit helper search path below
+also permits replay without those adjacent links while keeping the installed
+Python package selected. Execute the following independently so the native
+failure does not suppress them:
 
 ```bash
-.venv/bin/python -m pytest "$root/validation/test_batch_ordering_cuda.py" \
+PYTHONPATH="$root/candidate/python/tests${PYTHONPATH:+:$PYTHONPATH}" \
+  .venv/bin/python -m pytest "$root/validation/test_batch_ordering_cuda.py" \
   -q -rs --junitxml="$root/logs/ordering-cuda-locked-replay.xml"
 .venv/bin/python -m pytest python/tests -q -rs \
   --junitxml="$root/logs/python-cuda-locked-replay.xml"
