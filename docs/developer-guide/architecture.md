@@ -301,6 +301,12 @@ checkpoint publication remain ordered on the context stream. Any failed
 accepted request leaves the host checkpoint gate closed even if device work had
 already produced a candidate checkpoint.
 
+An explicit automatic spin selector (`spin_channels=0`) compares by its resolved
+one- or two-channel value during host, device and mixed fixed-topology reuse.
+Alternating automatic and equivalent explicit selectors preserves strict WARM
+identity; changing the unpaired-electron count or resolved channels does not.
+An absent C ABI suffix remains the historical one-channel default, not auto.
+
 ## Layering
 
 1. The C API validates ABI versions, pointer locations, shapes, and requested outputs.
