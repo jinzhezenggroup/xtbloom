@@ -68,6 +68,8 @@
 #include <utility>
 #include <vector>
 
+#include "request_pool_shutdown.hpp"
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -1887,10 +1889,9 @@ void xtbloom_torch_wait(std::int64_t submission_id) {
 
 void xtbloom_torch_shutdown() {
   const auto process_id = current_process_id();
-  const auto owner_pid = torch_request_pool_owner_pid.load();
-  if (owner_pid != 0 && owner_pid != process_id) return;
-  torch_request_pool_shutdown_pid.store(process_id);
-  if (owner_pid == 0) return;
+  if (!xtbloom::torch_detail::close_request_pool_admission(
+          torch_request_pool_owner_pid, torch_request_pool_shutdown_pid, process_id))
+    return;
   // Never invoke the lazy factory, including when first use races cleanup.
   if (auto holder = std::atomic_load(&live_torch_request_pool)) holder->shutdown();
 }
