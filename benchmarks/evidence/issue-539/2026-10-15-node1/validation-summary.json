@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-10-15T11:45:04.038972+00:00",
+  "captured_at": "2026-10-15T11:55:23.749163+00:00",
   "combined_python": {
     "failed_test_cases": 0,
     "failure_names": [],
@@ -235,7 +235,7 @@
           "tool": "initcheck"
         },
         {
-          "error_summary": 924,
+          "error_summary": 1024,
           "job": {
             "cuda_visible_devices": "4",
             "id": "8656",
@@ -252,7 +252,7 @@
           "tool": "synccheck"
         },
         {
-          "error_summary": 700,
+          "error_summary": 800,
           "job": {
             "cuda_visible_devices": "4",
             "id": "8656",
@@ -381,7 +381,7 @@
           "tool": "initcheck"
         },
         {
-          "error_summary": 924,
+          "error_summary": 1024,
           "job": {
             "cuda_visible_devices": "5",
             "id": "8665",
@@ -398,7 +398,7 @@
           "tool": "synccheck"
         },
         {
-          "error_summary": 924,
+          "error_summary": 1024,
           "job": {
             "cuda_visible_devices": "5",
             "id": "8665",
@@ -527,7 +527,7 @@
           "tool": "initcheck"
         },
         {
-          "error_summary": 700,
+          "error_summary": 800,
           "job": {
             "cuda_visible_devices": "3",
             "id": "8654",
@@ -544,7 +544,7 @@
           "tool": "synccheck"
         },
         {
-          "error_summary": 924,
+          "error_summary": 1024,
           "job": {
             "cuda_visible_devices": "3",
             "id": "8654",

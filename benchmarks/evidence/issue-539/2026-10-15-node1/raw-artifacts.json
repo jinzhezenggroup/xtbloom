@@ -24,8 +24,8 @@
     "sha256": "a4788f64d44babf5e62fa2e6a4cf77b0bfbacbc79f924b153cbc808fa2838af3"
   },
   "collect-validation.py": {
-    "bytes": 10017,
-    "sha256": "4bb5d18877bc6c6fa0d92c8fb647724376d8f1a0a6c359cd9a536b02b8b3145e"
+    "bytes": 10047,
+    "sha256": "156f1c6bdc5728fc218953857fcd7d51882022f445752007dc83fdb8e3d20535"
   },
   "controls-debug.sh": {
     "bytes": 1301,
