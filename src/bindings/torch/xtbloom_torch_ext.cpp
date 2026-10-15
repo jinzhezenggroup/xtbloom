@@ -1583,7 +1583,6 @@ std::shared_ptr<TorchRequestPoolHolder> torch_request_pool(const XTBloomApi& api
   const auto process_id = current_process_id();
   STD_TORCH_CHECK(torch_request_pool_shutdown_pid.load() != process_id,
                   "xtbloom_torch: CUDA request pool is shutting down");
-  if (auto holder = std::atomic_load(&live_torch_request_pool)) return holder;
   std::uint64_t unclaimed_pid = 0;
   const bool claimed =
       torch_request_pool_owner_pid.compare_exchange_strong(unclaimed_pid, process_id);
@@ -1592,6 +1591,7 @@ std::shared_ptr<TorchRequestPoolHolder> torch_request_pool(const XTBloomApi& api
   STD_TORCH_CHECK(claimed || unclaimed_pid == process_id,
                   "xtbloom_torch: CUDA use after fork is unsupported; create the child before "
                   "its first xtbloom CUDA call or use a spawn-based start method");
+  if (auto holder = std::atomic_load(&live_torch_request_pool)) return holder;
   static TorchRequestPoolLifetime lifetime(api);
   STD_TORCH_CHECK(torch_request_pool_shutdown_pid.load() != process_id,
                   "xtbloom_torch: CUDA request pool is shutting down");
@@ -1876,6 +1876,8 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
 void xtbloom_torch_wait(std::int64_t submission_id) {
   if (submission_id == 0) return;
   check_torch_request_pool_process();
+  STD_TORCH_CHECK(torch_request_pool_owner_pid.load() != 0,
+                  "xtbloom_torch: CUDA submission pool is unavailable");
   // An accepted token implies a published holder. Do not use the lazy factory
   // here: backward remains valid after cleanup and must never recreate a pool.
   auto holder = std::atomic_load(&live_torch_request_pool);
@@ -1888,6 +1890,7 @@ void xtbloom_torch_shutdown() {
   const auto owner_pid = torch_request_pool_owner_pid.load();
   if (owner_pid != 0 && owner_pid != process_id) return;
   torch_request_pool_shutdown_pid.store(process_id);
+  if (owner_pid == 0) return;
   // Never invoke the lazy factory, including when first use races cleanup.
   if (auto holder = std::atomic_load(&live_torch_request_pool)) holder->shutdown();
 }
