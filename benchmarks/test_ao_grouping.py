@@ -79,6 +79,79 @@ class AOPlanTests(unittest.TestCase):
         self.assertEqual(risk_single.batches[0].risk_band, "elevated")
         self.assertEqual(risk_single.risk_bands_by_case_id, (("one", "elevated"),))
 
+    def test_basis_metadata_errors_never_invent_ao_counts(self) -> None:
+        """Reject unreadable exports and malformed element/shell metadata."""
+        element = {"atomic_number": 1, "shells": [{"angular_momentum": 0}]}
+        documents = (
+            {},
+            {"elements": []},
+            {"elements": [None]},
+            {"elements": [{**element, "atomic_number": True}]},
+            {"elements": [element, element]},
+            {"elements": [{**element, "shells": []}]},
+            {"elements": [{**element, "shells": [{"angular_momentum": -1}]}]},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "basis.json"
+            with self.assertRaises(ao_grouping.AOGroupingError):
+                ao_grouping.load_gfn2_basis_ao_counts(path)
+            path.write_text("{", encoding="utf-8")
+            with self.assertRaises(ao_grouping.AOGroupingError):
+                ao_grouping.load_gfn2_basis_ao_counts(path)
+            for document in documents:
+                with self.subTest(document=document):
+                    path.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaises(ao_grouping.AOGroupingError):
+                        ao_grouping.load_gfn2_basis_ao_counts(path)
+        for numbers in ([], [True]):
+            with (
+                self.subTest(numbers=numbers),
+                self.assertRaises(ao_grouping.AOGroupingError),
+            ):
+                ao_grouping.count_gfn2_aos(numbers, {1: 1})
+
+    def test_auto_policy_rejects_hostile_counts_and_original_partitions(self) -> None:
+        """Malformed metadata must not manufacture a regrouping opportunity."""
+        invalid_options = (
+            {"ineligible_reason": ""},
+            {"ineligible_reason": 1},
+            {"ao_counts": None},
+            {"ao_counts": "1,4"},
+            {"ao_counts": 1},
+            {"ao_counts": (0, 4)},
+            {"ao_counts": (True, 4)},
+            {"original_batches": "0,1"},
+            {"original_batches": 1},
+            {"original_batches": ("0", (1,))},
+            {"original_batches": (0, (1,))},
+            {"original_batches": ((True,), (1,))},
+            {"original_batches": ((2,), (1,))},
+            {"original_batches": ((0,), (0,))},
+            {"original_batches": ((0,),)},
+        )
+        for overrides in invalid_options:
+            options: dict[str, Any] = {
+                "ineligible_reason": None,
+                "ao_counts": (1, 4),
+                "original_batches": ((0,), (1,)),
+            }
+            options.update(overrides)
+            with (
+                self.subTest(overrides=overrides),
+                self.assertRaises(ao_grouping.AOGroupingError),
+            ):
+                ao_grouping.resolve_policy("auto", **options)
+        with self.assertRaises(ao_grouping.AOGroupingError):
+            ao_grouping.resolve_policy(
+                "invalid", ineligible_reason=None, ao_counts=(), original_batches=()
+            )
+        self.assertEqual(
+            ao_grouping.resolve_policy(
+                "auto", ineligible_reason=None, ao_counts=None, original_batches=()
+            ),
+            ("original", "no_cross_batch_reuse"),
+        )
+
     def test_risk_buckets_keep_stable_ties_caps_tails_and_rare_groups(self) -> None:
         """Keep every case in stable AO/risk buckets, including short tails."""
         case_ids = (

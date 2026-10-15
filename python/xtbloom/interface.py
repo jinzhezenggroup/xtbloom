@@ -29,7 +29,7 @@ import operator
 import struct
 import typing
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -41,7 +41,8 @@ import numpy as np
 import numpy.typing as npt
 
 from . import _array as _array_adapter
-from . import _dlpack, library
+from . import _dlpack, batching, library
+from ._batch_plan import BatchExecutionPlan, atom_bounded_batches
 from .exceptions import XTBloomNotSupportedError, XTBloomRuntimeError, XTBloomValueError
 
 if TYPE_CHECKING:
@@ -989,6 +990,75 @@ def _merged_result_flags(computed_batches: Sequence[_ComputedBatch]) -> int:
     return flags
 
 
+def _restore_computed_order(
+    computed: _ComputedBatch,
+    plan: BatchExecutionPlan,
+    structures: Sequence[Structure],
+) -> _ComputedBatch:
+    """Scatter complete system slices, including failed NaNs, by input ordinal.
+
+    Atom and point-charge offsets belong to the execution order until this
+    boundary. Rebase both independently; a zero-point system still owns its
+    canonical system diagnostics and any dipole/strain row.
+    """
+    inverse = np.asarray(plan.inverse_indices, dtype=np.int64)
+
+    def restore_ragged(values: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+        return np.concatenate(
+            [values[offsets[index] : offsets[index + 1]] for index in inverse],
+            axis=0,
+        )
+
+    atom_offsets = np.cumsum([0, *(len(structure) for structure in structures)])
+    point_offsets = (
+        np.cumsum(
+            [
+                0,
+                *(
+                    len(structure.point_charges.charges)
+                    if structure.point_charges is not None
+                    else 0
+                    for structure in structures
+                ),
+            ]
+        )
+        if computed.point_offsets is not None
+        else None
+    )
+    return _ComputedBatch(
+        energies=computed.energies[inverse],
+        forces=restore_ragged(computed.forces, computed.atom_offsets),
+        charges=restore_ragged(computed.charges, computed.atom_offsets),
+        point_charge_forces=(
+            restore_ragged(computed.point_charge_forces, computed.point_offsets)
+            if computed.point_charge_forces is not None
+            and computed.point_offsets is not None
+            else None
+        ),
+        dipole_moments=(
+            computed.dipole_moments[inverse]
+            if computed.dipole_moments is not None
+            else None
+        ),
+        strain_derivatives=(
+            computed.strain_derivatives[inverse]
+            if computed.strain_derivatives is not None
+            else None
+        ),
+        scc_iterations=computed.scc_iterations[inverse],
+        scc_converged=computed.scc_converged[inverse],
+        per_system_status=computed.per_system_status[inverse],
+        result_flags=computed.result_flags,
+        atom_offsets=np.asarray(atom_offsets, dtype=np.int64),
+        point_offsets=(
+            np.asarray(point_offsets, dtype=np.int64)
+            if point_offsets is not None
+            else None
+        ),
+        keepalive=computed.keepalive,
+    )
+
+
 def _split_chunk_near_half(
     structures: Sequence[Structure],
 ) -> tuple[Sequence[Structure], Sequence[Structure]]:
@@ -1696,8 +1766,13 @@ class BatchResult:
     """Multi-system results container for :class:`BatchCalculator`."""
 
     def __init__(
-        self, computed: _ComputedBatch, structures: Sequence[Structure]
+        self,
+        computed: _ComputedBatch,
+        structures: Sequence[Structure],
+        *,
+        execution_plan: BatchExecutionPlan | None = None,
     ) -> None:
+        self.execution_plan = execution_plan
         self.energies = np.array(computed.energies, copy=True)
         self.forces = np.array(computed.forces, copy=True)
         self.charges = np.array(computed.charges, copy=True)
@@ -2288,6 +2363,7 @@ class BatchCalculator:
             _backend_for_model(model, backend, device_id), device_id, cpu_threads
         )
         self._warm_start = bool(warm_start)
+        self._last_batch_plan: BatchExecutionPlan | None = None
 
     def __len__(self) -> int:
         """Return the number of structures in this calculator."""
@@ -2302,11 +2378,17 @@ class BatchCalculator:
         """Validate and update a compute setting by name."""
         self._settings.set(attribute, value)
 
+    @property
+    def last_batch_plan(self) -> BatchExecutionPlan | None:
+        """Latest completed finite-queue plan; no native contexts are retained by it."""
+        return self._last_batch_plan
+
     def compute(
         self,
         *,
         raise_on_failure: bool = False,
         auto_batch_size: bool | int | None = None,
+        batch_ordering: str = "auto",
         compute_strain: bool = False,
     ) -> BatchResult:
         """Run the batch while preserving successful peers.
@@ -2325,7 +2407,16 @@ class BatchCalculator:
         allocation failures by splitting multi-system chunks. A system larger
         than the target remains indivisible and is attempted by itself.
 
-        Slicing preserves system order and peer-local failures. CPU results are
+        ``batch_ordering="auto"`` uses stable exact-AO grouping before slicing
+        GFN2 CUDA host/FRESH queues when equal-AO systems cross original chunk
+        boundaries. ``"original"`` (or ``"off"``) disables regrouping;
+        ``"exact-ao"`` requests it explicitly and rejects unsupported paths.
+        Singleton, homogeneous-AO and no-reuse queues keep their original
+        schedule. CPU, GFN1, WARM and unsliced calls retain their contracts.
+        The immutable ``result.execution_plan`` records the resolved policy,
+        reason, inverse mapping, initial/actual chunks, budget and plan hash.
+
+        Slicing restores original system order and peer-local failures. CPU results are
         bit-identical to an unsliced run. CUDA chunking can change eigensolver
         bucket composition, so CUDA results should be compared with the same
         tolerances used for ordinary backend conformance.
@@ -2347,6 +2438,90 @@ class BatchCalculator:
                 "warm_start=True cannot be combined with auto_batch_size; "
                 "use one native batch or disable warm start"
             )
+        auto_batch_size = _validated_auto_batch_size(auto_batch_size)
+        if not isinstance(batch_ordering, str) or batch_ordering not in {
+            "auto",
+            "original",
+            "off",
+            "exact-ao",
+        }:
+            raise XTBloomValueError(
+                f"unknown batch ordering policy: {batch_ordering!r}"
+            )
+        atom_counts = tuple(len(structure) for structure in self._structures)
+        if auto_batch_size is None or auto_batch_size is False:
+            limit = None
+        elif auto_batch_size is True:
+            limit = _resolve_auto_batch_limit(self._context, self._structures)
+        else:
+            limit = auto_batch_size
+        original_indices = tuple(range(len(self._structures)))
+        original_batches = atom_bounded_batches(atom_counts, original_indices, limit)
+        if self._warm_start:
+            ineligible_reason = "warm_start"
+        elif limit is None:
+            ineligible_reason = "single_native_call"
+        elif self._settings.model != library.MODEL_GFN2_XTB:
+            ineligible_reason = "unsupported_model"
+        elif int(self.backend) != library.BACKEND_CUDA:
+            ineligible_reason = "non_cuda_backend"
+        elif compute_strain:
+            ineligible_reason = "strain_host_bridge"
+        else:
+            ineligible_reason = None
+        ao_counts: tuple[int, ...] = ()
+        basis_sha256 = None
+        if ineligible_reason is None and batch_ordering not in ("original", "off"):
+            from ._gfn2_basis import BASIS_SHA256, GFN2_AO_COUNTS
+
+            try:
+                ao_counts = tuple(
+                    batching.count_gfn2_aos(structure.numbers.tolist(), GFN2_AO_COUNTS)
+                    for structure in self._structures
+                )
+            except batching.AOGroupingError as error:
+                raise XTBloomValueError(str(error)) from error
+            basis_sha256 = BASIS_SHA256
+        try:
+            resolved_policy, reason = batching.resolve_policy(
+                batch_ordering,
+                ineligible_reason=ineligible_reason,
+                ao_counts=ao_counts or None,
+                original_batches=original_batches,
+            )
+        except batching.AOGroupingError as error:
+            raise XTBloomValueError(str(error)) from error
+        planned_batches = original_batches
+        grouping_hash = None
+        if resolved_policy == "exact-ao":
+            case_ids = tuple(str(index) for index in original_indices)
+            grouping_plan = batching.make_plan(
+                case_ids,
+                len(case_ids),
+                "exact-ao",
+                dict(zip(case_ids, ao_counts, strict=True)),
+                basis_sha256,
+            )
+            grouping_hash = grouping_plan.plan_sha256
+            planned_batches = tuple(
+                chunk
+                for batch in grouping_plan.batches
+                for chunk in atom_bounded_batches(
+                    atom_counts, batch.canonical_indices, limit
+                )
+            )
+        plan = BatchExecutionPlan(
+            requested_policy=batch_ordering,
+            resolved_policy=resolved_policy,
+            reason=reason,
+            max_total_atoms=limit,
+            atom_counts=atom_counts,
+            ao_counts=ao_counts,
+            basis_sha256=basis_sha256,
+            grouping_plan_sha256=grouping_hash,
+            planned_batches=planned_batches,
+            batches=planned_batches,
+        )
 
         base_flags = (
             library.COMPUTE_ENERGY
@@ -2385,40 +2560,66 @@ class BatchCalculator:
                 warm_start=self._warm_start,
             )
 
-        if auto_batch_size is None or auto_batch_size is False:
-            chunks: list[Sequence[Structure]] = [self._structures]
-        elif auto_batch_size is True:
-            limit = _resolve_auto_batch_limit(self._context, self._structures)
-            chunks = _slice_by_total_atoms(self._structures, limit)
-        else:
-            limit = _as_integer("auto_batch_size", auto_batch_size)
-            if limit <= 0:
-                raise XTBloomValueError("auto_batch_size must be a positive integer")
-            chunks = _slice_by_total_atoms(self._structures, limit)
+        actual_batches: list[tuple[int, ...]] = []
+        allocation_retries: list[tuple[int, ...]] = []
 
-        def run_auto_chunk(chunk: Sequence[Structure]) -> list[_ComputedBatch]:
+        def run_auto_chunk(indices: tuple[int, ...]) -> list[_ComputedBatch]:
             """Retry only recoverable native allocation failures at smaller sizes."""
+            chunk = (
+                self._structures
+                if indices == original_indices
+                else [self._structures[index] for index in indices]
+            )
             try:
-                return [run_once(chunk)]
+                computed = run_once(chunk)
             except XTBloomRuntimeError as error:
                 if (
                     auto_batch_size is not True
                     or error.status != library.STATUS_ALLOCATION_FAILED
                     or len(chunk) == 1
                 ):
+                    if indices != tuple(range(len(indices))):
+                        raise XTBloomRuntimeError(
+                            f"{error.message} (native chunk local indices map to "
+                            f"canonical ordinals {indices})",
+                            error.status,
+                        ) from error
                     raise
-                left, right = _split_chunk_near_half(chunk)
-                return [*run_auto_chunk(left), *run_auto_chunk(right)]
+                allocation_retries.append(indices)
+                left, _ = _split_chunk_near_half(chunk)
+                return [
+                    *run_auto_chunk(indices[: len(left)]),
+                    *run_auto_chunk(indices[len(left) :]),
+                ]
+            actual_batches.append(indices)
+            return [computed]
 
         computed_batches = [
-            computed for chunk in chunks for computed in run_auto_chunk(chunk)
+            computed
+            for indices in planned_batches
+            for computed in run_auto_chunk(indices)
         ]
+        plan = replace(
+            plan,
+            batches=tuple(actual_batches),
+            allocation_retries=tuple(allocation_retries),
+        )
+        ordered_indices = plan.canonical_indices
+        reordered = ordered_indices != original_indices
+        ordered_structures = (
+            [self._structures[index] for index in ordered_indices]
+            if reordered
+            else self._structures
+        )
         computed = (
             computed_batches[0]
             if len(computed_batches) == 1
-            else _merge_computed(computed_batches, self._structures)
+            else _merge_computed(computed_batches, ordered_structures)
         )
-        batch_result = BatchResult(computed, self._structures)
+        if reordered:
+            computed = _restore_computed_order(computed, plan, self._structures)
+        self._last_batch_plan = plan
+        batch_result = BatchResult(computed, self._structures, execution_plan=plan)
         if raise_on_failure:
             batch_result.raise_for_status()
         return batch_result

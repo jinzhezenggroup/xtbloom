@@ -215,7 +215,7 @@ systems = [
 ]
 
 with BatchCalculator(systems, backend="cuda") as calc:  # Use "cpu" for CPU-only builds.
-    result = calc.compute()
+    result = calc.compute(auto_batch_size=True)
 
 print(result.energies)
 print(result.failed_indices)
@@ -225,10 +225,49 @@ result.raise_for_status()
 `auto_batch_size=True` partitions a large CUDA workload using current free
 memory and retries recoverable multi-system native allocation failures at a
 smaller chunk size. An integer sets a target maximum total atom count per
-chunk. Systems are indivisible, and chunking preserves input order and
-peer-local diagnostics. Automatic slicing cannot be combined with
+chunk. Systems are indivisible, and results retain input order and
+peer-local diagnostics. With managed chunking, `batch_ordering="auto"` is the
+default: eligible GFN2 CUDA host/FRESH queues are grouped by exact AO count
+**across the entire queue before chunking**, with original ordinal as the
+stable tie-break. The generated GFN2 shell table supplies the AO counts, not
+an atom-count estimate. Each exact-AO bucket is split at the existing atom
+budget; an oversized system is still attempted alone.
+
+Use `batch_ordering="original"` (or `"off"`) for the original-order baseline.
+`"exact-ao"` explicitly requests grouping and rejects unsupported paths.
+`auto` retains original scheduling for CPU, GFN1, WARM, strain's host bridge,
+singleton/homogeneous-AO queues, and queues with no equal-AO systems crossing
+original chunk boundaries. `auto_batch_size=None` (the default) or `False`
+still means one native call; it never silently turns on chunking. ArrayBatch,
+direct device/mixed descriptors, Hessian displacement scheduling and streaming
+inputs do not inherit this finite host-queue policy. Automatic slicing cannot be combined with
 `warm_start=True`: a native context retains one whole-batch checkpoint, not an
 independent checkpoint for each chunk.
+
+`result.execution_plan` and `calc.last_batch_plan` expose the immutable
+`BatchExecutionPlan`: requested/resolved policy and reason, atom budget,
+per-system AO counts, basis hash, initial and actual canonical-index batches,
+execution-to-canonical mapping and its inverse, schema version, and canonical
+JSON `plan_sha256`. Actual batches reflect adaptive allocation-failure splits;
+the initial plan remains available as `planned_batches`. On native call-level
+allocation failure, `allocation_retries` also retains each failed chunk that
+was bisected, rather than hiding retry work from the schedule. On terminal
+failure, grouped-chunk diagnostics include its local-to-canonical ordinal map.
+All returned energies, ragged QM/point-charge forces and charges, dipoles,
+strain rows and SCC diagnostics are restored to input order, including failed
+NaN slices. Duplicate object references are separate ordinals, not IDs.
+
+Plans are rebuilt from current inputs and budget on every call, without
+retaining extra contexts or caching validation. Geometry and SCC settings are
+not scheduling-hash dependencies; they are still submitted to the native
+validator and its independent Graph/cache/WARM identity on every call. No
+input arrays are permuted in place. `last_batch_plan` denotes the last completed
+call, not a partially executed failed request.
+
+This scheduling implementation is not a universal speedup claim. The new
+default's clean-base/candidate real-GPU scientific and full-E2E qualification
+is tracked in #535; old AO-sorted diagnostic timings are not measurements of
+this wrapper's planning, publication, scatter or context costs.
 
 ## Array API and DLPack input arrays
 

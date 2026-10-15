@@ -26,8 +26,14 @@ their numbers or thresholds.
 ## Finite-list exact-AO grouping
 
 `run.py` also has an explicit finite-list path for deterministic exact-AO
-grouping. The default matrix and the finite-list `original` strategy retain
-input order. `exact-ao` runs one grouped layout; `paired` is the opt-in
+grouping. The default matrix retains input order. Finite-list `auto` is the
+default and selects exact-AO only for eligible GFN2 CUDA host/FRESH queues
+with repeated AO counts crossing original batch boundaries; all other auto
+coordinates retain `original` with a recorded reason. `original`/`off` are
+explicit baselines. Requested and resolved policy are reported separately;
+this does not relabel historical measurements or claim new-default E2E
+qualification. Both this runner and the Python product entry consume the
+installed planner's shared policy resolver. `exact-ao` runs one grouped layout; `paired` is the opt-in
 original-versus-exact-AO comparison. Paired mode is limited to xTBloom CPU
 host or CUDA host descriptors with strict FRESH SCC starts. It creates both
 layout owner sets once, keeps them alive together, and never reconstructs
