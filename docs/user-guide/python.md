@@ -430,6 +430,22 @@ return ordinary `(energies, forces)` tensors ordered on
 Stream management and native execution lifetime are implementation details
 rather than Python API choices.
 
+The lazy Python loader also registers native request-pool cleanup with
+`atexit`. Accepted CUDA work and retained tensor owners are drained, and worker
+threads are joined, while Python and Torch are still alive; import alone does
+not create CUDA state. Cleanup is terminal for pooled CUDA submissions,
+idempotent, and preserves bounded completion/error history for an already-created
+backward pass. A forked child never cleans up a parent's native pool; use `spawn` after
+CUDA initialization. Loading the extension for CPU-only work before a fork does
+not prevent a child from owning its own subsequently created pool. Applications
+that bypass the Python loader with `torch.ops.load_library` must arrange the
+same pre-finalization lifetime boundary themselves; the private shutdown
+operator is not a public pool-management API.
+
+Foreign DLPack exporters must provide thread-safe deleters and acquire the
+Python GIL themselves if they call Python: the final retained tensor release
+can run on a native worker thread, not the submitting Python thread.
+
 Because only ABI-stable symbols are used, a single binary works across torch
 releases without per-version rebuilds. The extension is optional: when the
 wheels were built without it (or Torch < 2.10 is installed), calling
