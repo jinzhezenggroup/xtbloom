@@ -23,7 +23,7 @@ repos:
       - id: check-symlinks
       - id: check-toml
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.0 # v0.16.0
+    rev: v0.17.1 # v0.16.0
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -34,7 +34,7 @@ repos:
         types_or: [python, pyi, jupyter]
         exclude: ^cmake/3rdparty/implib/implib-gen\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.86 # v0.0.69
+    rev: v0.0.89 # v0.0.69
     hooks:
       - id: ty
         # --isolated stops uv from rewriting the pinned uv.lock or the local
