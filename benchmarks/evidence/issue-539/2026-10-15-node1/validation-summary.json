@@ -1,0 +1,628 @@
+{
+  "captured_at": "2026-10-15T11:55:23.749163+00:00",
+  "combined_python": {
+    "failed_test_cases": 0,
+    "failure_names": [],
+    "job": {
+      "cuda_visible_devices": "6,7",
+      "id": "8666",
+      "node": "node1"
+    },
+    "note": "All test bodies passed, but process aborted after summary: malloc_consolidate(): unaligned fastbin chunk detected. Not a suite PASS.",
+    "passed_test_cases": 583,
+    "process_exit": 134,
+    "qualification": "FAIL",
+    "skip_reasons": [
+      "CuPy is not installed",
+      "JAX is not installed",
+      "cupy is required for CUDA producer tests",
+      "jax is not installed",
+      "jax is required for CUDA producer tests",
+      "requires a CPU-only xtbloom build"
+    ],
+    "skipped_test_cases": 8,
+    "test_cases": 591
+  },
+  "draft_pr": 540,
+  "hardware": {
+    "architecture": "sm_120",
+    "ccache": "4.5.1",
+    "cmake": "4.2.1",
+    "cuda_toolkit": "12.9.86",
+    "driver": "580.95.05",
+    "gpu": "NVIDIA GeForce RTX5090",
+    "host": "node1",
+    "host_compiler": "GCC13.3.0"
+  },
+  "initial_native_ctest_300_second_diagnostic_cap": {
+    "failed_test_cases": 1,
+    "failure_names": [
+      "xtbloom.cuda.public_api"
+    ],
+    "passed_test_cases": 211,
+    "process_exit": 8,
+    "qualification": "FAIL",
+    "skip_reasons": [],
+    "skipped_test_cases": 0,
+    "test_cases": 212
+  },
+  "installed_consumer": {
+    "cpu_exit": 0,
+    "cuda_exit": 0,
+    "job": {
+      "cuda_visible_devices": "3",
+      "id": "8649",
+      "node": "node1"
+    },
+    "smoke_exit": 0,
+    "source_install_license_exit": 0
+  },
+  "issue": 539,
+  "native_ctest": {
+    "failed_test_cases": 0,
+    "failure_names": [],
+    "job": {
+      "cuda_visible_devices": "0,4",
+      "id": "8661",
+      "node": "node1"
+    },
+    "passed_test_cases": 212,
+    "process_exit": 0,
+    "qualification": "PASS",
+    "skip_reasons": [],
+    "skipped_test_cases": 0,
+    "test_cases": 212
+  },
+  "native_source": {
+    "head": "e74f6215ab9142860faa8b2cb833bc0b5b5be268",
+    "status_porcelain": ""
+  },
+  "old_synccheck_disposition": "NOT APPLIED: new kernel/PC and other sanitizer failures do not satisfy #279 scope",
+  "providers": {
+    "files": {
+      "libmkl_core.so.3": {
+        "bytes": 77116168,
+        "sha256": "02c986a95630d00eeb5fac5f0248c9b0791ac110323c689afe2fc68f6af70c67"
+      },
+      "libmkl_intel_lp64.so.3": {
+        "bytes": 20318736,
+        "sha256": "9e1a2f6e8f6e5fc961813d524a0ff96476cab20a511493d654af3fed558f3177"
+      },
+      "libmkl_rt.so.3": {
+        "bytes": 17327256,
+        "sha256": "a85532b3965b4901eced61ee6d3d5b606e2d54e8de2cb357e6b5cfcce2b1e03a"
+      },
+      "libmkl_sequential.so.3": {
+        "bytes": 25592776,
+        "sha256": "fc69f8f8bf8488bea479acf880b4214037445484cd998c930921d2a8eac874fa"
+      }
+    },
+    "isolation": "private LP64 shim in separate glibc link-map namespace",
+    "root": "/group/software/deepmd-kit-3.2.0/lib"
+  },
+  "public_full_long": {
+    "job": {
+      "cuda_visible_devices": "0",
+      "id": "8652",
+      "node": "node1"
+    },
+    "note": "Separate Job8652, oneGPU, 534.96 seconds; two device-only checks internally skipped. Final native matrix uses twoGPUs.",
+    "process_exit": 0
+  },
+  "python_boundary": "Non-editable 535 wheel; Python code unchanged through0517c32; explicit installed539 CUDA core/extension override. Not a bundled CUDA-wheel pass.",
+  "python_environment": {
+    "packages": {
+      "numpy": "2.5.1",
+      "pytest": "9.1.1",
+      "scipy": "1.18.0",
+      "torch": "2.13.0",
+      "triton": "3.7.1",
+      "xtbloom": "0.2.3.post1.dev32+g9a5a38336"
+    },
+    "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]"
+  },
+  "python_package_source": "9a5a3833637ddb375fe96a15e4351e3eaa4f52cc",
+  "python_test_source": {
+    "head": "0517c32adf380e95953c6444f7293748893367cf",
+    "status_porcelain": ""
+  },
+  "remaining": [
+    "public racecheck target SIGSEGV",
+    "public synccheck new electric-field kernel signature, no owner disposition",
+    "combined Python teardown heap abort",
+    "#523 independent-primary-oracle contract remains unresolved"
+  ],
+  "remote_root": "/home/jzzeng/codes/xtbloom-issue-539-20261015",
+  "sanitizers": {
+    "sanitizer13": {
+      "coordinates": [
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer13-memcheck-context-request-sanitizer.log",
+          "tool": "memcheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer13-memcheck-request-sanitizer.log",
+          "tool": "memcheck"
+        },
+        {
+          "error_summary": null,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 11,
+          "qualification": "FAIL",
+          "racecheck_summary": [
+            0,
+            0,
+            0
+          ],
+          "raw_log": "sanitizer13-racecheck-context-request-sanitizer.log",
+          "tool": "racecheck"
+        },
+        {
+          "error_summary": null,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 11,
+          "qualification": "FAIL",
+          "racecheck_summary": [
+            0,
+            0,
+            0
+          ],
+          "raw_log": "sanitizer13-racecheck-request-sanitizer.log",
+          "tool": "racecheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer13-initcheck-context-request-sanitizer.log",
+          "tool": "initcheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer13-initcheck-request-sanitizer.log",
+          "tool": "initcheck"
+        },
+        {
+          "error_summary": 1024,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [
+            "xtbloom::detail::cuda::<unnamed>::preflight_values_kernel(xtbloom::detail::cuda::Gfn2ElectricFieldDeviceBatch, xtbloom::detail::cuda::Gfn2ElectricFieldDeviceInput, unsigned int *, const unsigned int *)+0x170"
+          ],
+          "process_exit": 99,
+          "qualification": "FAIL",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer13-synccheck-context-request-sanitizer.log",
+          "tool": "synccheck"
+        },
+        {
+          "error_summary": 800,
+          "job": {
+            "cuda_visible_devices": "4",
+            "id": "8656",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [
+            "xtbloom::detail::cuda::<unnamed>::preflight_values_kernel(xtbloom::detail::cuda::Gfn2ElectricFieldDeviceBatch, xtbloom::detail::cuda::Gfn2ElectricFieldDeviceInput, unsigned int *, const unsigned int *)+0x170"
+          ],
+          "process_exit": 99,
+          "qualification": "FAIL",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer13-synccheck-request-sanitizer.log",
+          "tool": "synccheck"
+        }
+      ],
+      "executable": {
+        "bytes": 7847200,
+        "sha256": "3a75361c1b93f05c5247323b36300dc974dca967ae4344e0659df568724e4335"
+      },
+      "job": {
+        "cuda_visible_devices": "4",
+        "id": "8656",
+        "node": "node1"
+      },
+      "version": "NVIDIA (R) Compute Sanitizer\nCopyright (c) 2020-2025 NVIDIA Corporation\nVersion 2025.3.1.0 (build 36400806) (public-release)"
+    },
+    "sanitizer133": {
+      "coordinates": [
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer133-memcheck-context-request-sanitizer.log",
+          "tool": "memcheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer133-memcheck-request-sanitizer.log",
+          "tool": "memcheck"
+        },
+        {
+          "error_summary": null,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 11,
+          "qualification": "FAIL",
+          "racecheck_summary": [
+            0,
+            0,
+            0
+          ],
+          "raw_log": "sanitizer133-racecheck-context-request-sanitizer.log",
+          "tool": "racecheck"
+        },
+        {
+          "error_summary": null,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 11,
+          "qualification": "FAIL",
+          "racecheck_summary": [
+            0,
+            0,
+            0
+          ],
+          "raw_log": "sanitizer133-racecheck-request-sanitizer.log",
+          "tool": "racecheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer133-initcheck-context-request-sanitizer.log",
+          "tool": "initcheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer133-initcheck-request-sanitizer.log",
+          "tool": "initcheck"
+        },
+        {
+          "error_summary": 1024,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [
+            "xtbloom::detail::cuda::<unnamed>::preflight_values_kernel(xtbloom::detail::cuda::Gfn2ElectricFieldDeviceBatch, xtbloom::detail::cuda::Gfn2ElectricFieldDeviceInput, unsigned int *, const unsigned int *)+0x170"
+          ],
+          "process_exit": 99,
+          "qualification": "FAIL",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer133-synccheck-context-request-sanitizer.log",
+          "tool": "synccheck"
+        },
+        {
+          "error_summary": 1024,
+          "job": {
+            "cuda_visible_devices": "5",
+            "id": "8665",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [
+            "xtbloom::detail::cuda::<unnamed>::preflight_values_kernel(xtbloom::detail::cuda::Gfn2ElectricFieldDeviceBatch, xtbloom::detail::cuda::Gfn2ElectricFieldDeviceInput, unsigned int *, const unsigned int *)+0x170"
+          ],
+          "process_exit": 99,
+          "qualification": "FAIL",
+          "racecheck_summary": null,
+          "raw_log": "sanitizer133-synccheck-request-sanitizer.log",
+          "tool": "synccheck"
+        }
+      ],
+      "executable": {
+        "bytes": 8567904,
+        "sha256": "60daf5185095c69b515bf62a3d44004de9fcdf0a769e74d1950abc94af5fe1cd"
+      },
+      "job": {
+        "cuda_visible_devices": "5",
+        "id": "8665",
+        "node": "node1"
+      },
+      "version": "NVIDIA (R) Compute Sanitizer\nCopyright (c) 2020-2026 NVIDIA Corporation\nVersion 2026.2.1.0 (build 38334959) (public-release)"
+    },
+    "toolkit129": {
+      "coordinates": [
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8640",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "memcheck-context-request-sanitizer.log",
+          "tool": "memcheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8640",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "memcheck-request-sanitizer.log",
+          "tool": "memcheck"
+        },
+        {
+          "error_summary": null,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8640",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 11,
+          "qualification": "FAIL",
+          "racecheck_summary": [
+            0,
+            0,
+            0
+          ],
+          "raw_log": "racecheck-context-request-sanitizer.log",
+          "tool": "racecheck"
+        },
+        {
+          "error_summary": null,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8640",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 11,
+          "qualification": "FAIL",
+          "racecheck_summary": [
+            0,
+            0,
+            0
+          ],
+          "raw_log": "racecheck-request-sanitizer.log",
+          "tool": "racecheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8640",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "initcheck-context-request-sanitizer.log",
+          "tool": "initcheck"
+        },
+        {
+          "error_summary": 0,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8640",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [],
+          "process_exit": 0,
+          "qualification": "PASS",
+          "racecheck_summary": null,
+          "raw_log": "initcheck-request-sanitizer.log",
+          "tool": "initcheck"
+        },
+        {
+          "error_summary": 800,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8654",
+            "node": "node1"
+          },
+          "mode": "context-request-sanitizer",
+          "printed_kernel_locations": [
+            "xtbloom::detail::cuda::<unnamed>::preflight_values_kernel(xtbloom::detail::cuda::Gfn2ElectricFieldDeviceBatch, xtbloom::detail::cuda::Gfn2ElectricFieldDeviceInput, unsigned int *, const unsigned int *)+0x170"
+          ],
+          "process_exit": 99,
+          "qualification": "FAIL",
+          "racecheck_summary": null,
+          "raw_log": "synccheck-context-request-sanitizer.log",
+          "tool": "synccheck"
+        },
+        {
+          "error_summary": 1024,
+          "job": {
+            "cuda_visible_devices": "3",
+            "id": "8654",
+            "node": "node1"
+          },
+          "mode": "request-sanitizer",
+          "printed_kernel_locations": [
+            "xtbloom::detail::cuda::<unnamed>::preflight_values_kernel(xtbloom::detail::cuda::Gfn2ElectricFieldDeviceBatch, xtbloom::detail::cuda::Gfn2ElectricFieldDeviceInput, unsigned int *, const unsigned int *)+0x170"
+          ],
+          "process_exit": 99,
+          "qualification": "FAIL",
+          "racecheck_summary": null,
+          "raw_log": "synccheck-request-sanitizer.log",
+          "tool": "synccheck"
+        }
+      ],
+      "executable": {
+        "bytes": 7497584,
+        "sha256": "979adf037f4e3434a976b7f0912b0a05ce3b062e31b2a73397a1bf1cd5f57547"
+      },
+      "job": {
+        "cuda_visible_devices": "3",
+        "id": "8640",
+        "node": "node1"
+      },
+      "version": "NVIDIA (R) Compute Sanitizer\nCopyright (c) 2020-2025 NVIDIA Corporation\nVersion 2025.2.1.0 (build 35969825) (public-release)"
+    }
+  },
+  "schema": "xtbloom-issue-539-cuda-validation-v1",
+  "scope": "native correctness and resource receipts, not performance qualification",
+  "steady_state_profile": {
+    "iterations_per_mode": 10,
+    "job": {
+      "cuda_visible_devices": "3",
+      "id": "8649",
+      "node": "node1"
+    },
+    "modes": [
+      "context-request-profile",
+      "request-profile"
+    ],
+    "process_exits": [
+      0,
+      0
+    ],
+    "purpose": "API counts and stable-address assertions only. No latency/speed qualification; concurrent jobs exist."
+  },
+  "thread_environment": {
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "torch_compile": {
+    "failed_test_cases": 0,
+    "failure_names": [],
+    "passed_test_cases": 1,
+    "process_exit": 0,
+    "qualification": "PASS",
+    "skip_reasons": [],
+    "skipped_test_cases": 0,
+    "test_cases": 1
+  },
+  "torch_module": {
+    "failed_test_cases": 0,
+    "failure_names": [],
+    "job": {
+      "cuda_visible_devices": "4",
+      "id": "8659",
+      "node": "node1"
+    },
+    "passed_test_cases": 51,
+    "process_exit": 0,
+    "qualification": "PASS",
+    "skip_reasons": [
+      "requires a CPU-only xtbloom build"
+    ],
+    "skipped_test_cases": 1,
+    "test_cases": 52
+  },
+  "upstream_feature_issue": 535
+}
