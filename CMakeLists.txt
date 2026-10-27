@@ -2124,6 +2124,18 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_request_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.request COMMAND xtbloom_request_test)
 
+  # Exercise the production Torch shutdown gate without Torch, CUDA or BLAS.
+  add_executable(xtbloom_torch_pool_shutdown_test
+    tests/torch_pool_shutdown_test.cpp
+  )
+  target_include_directories(xtbloom_torch_pool_shutdown_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(xtbloom_torch_pool_shutdown_test PRIVATE Threads::Threads)
+  target_compile_features(xtbloom_torch_pool_shutdown_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.torch.pool_shutdown COMMAND xtbloom_torch_pool_shutdown_test)
+  set_tests_properties(xtbloom.torch.pool_shutdown PROPERTIES TIMEOUT 30)
+
   # The browser adapter test supplies a fake public C ABI so failure
   # publication and optimizer math remain testable without a WASM toolchain or
   # an external BLAS/LAPACK runtime.

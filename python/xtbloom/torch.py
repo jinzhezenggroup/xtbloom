@@ -42,11 +42,13 @@ load either torch or the extension.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import importlib
 import math
 import operator
 import os
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, SupportsIndex, cast
 
@@ -181,6 +183,8 @@ def _to_compact_tensor(value: object) -> tuple[_Tensor, _Tensor]:
 # the extension itself.
 
 _TORCH_EXT_LOADED = False
+_TORCH_EXT_LOAD_LOCK = threading.Lock()
+_TORCH_EXT_LOAD_PID = os.getpid()
 
 
 def _torch_extension_path() -> Path | None:
@@ -219,35 +223,58 @@ def _torch_extension_path() -> Path | None:
 
 def _xtbloom_torch_op() -> Callable[..., tuple[object, object, int]]:
     """Return (and load on first use) the private compiled forward operator."""
-    global _TORCH_EXT_LOADED
+    global _TORCH_EXT_LOADED, _TORCH_EXT_LOAD_LOCK, _TORCH_EXT_LOAD_PID
     torch = _torch()
     if not _TORCH_EXT_LOADED:
-        # Establish the same native runtime selected by the rest of the Python
-        # package and preload optional providers such as scipy-openblas32. The
-        # compiled op intentionally resolves xtbloom itself, but must not bypass
-        # Python's provider discovery when it is the first public API called.
-        library.load_library()
-        path = _torch_extension_path()
-        if path is None:
-            raise XTBloomNotSupportedError(
-                "xtbloom_torch requires the compiled torch extension "
-                "(libxtbloom_torch_ext), which is not installed next to this "
-                "xtbloom package; rebuild/install xtbloom with CMake support for "
-                "Torch >= 2.10 so the extension is bundled"
-            )
-        try:
-            torch.ops.load_library(str(path))
-        except OSError as exc:
-            raise XTBloomRuntimeError(
-                "xtbloom_torch could not load the torch extension: this build "
-                "of libxtbloom_torch_ext may be incompatible with the installed "
-                "torch"
-            ) from exc
-        _TORCH_EXT_LOADED = True
+        # A child can inherit a locked loader before the extension is loaded.
+        # Native pool ownership, not this loader PID, governs cleanup itself.
+        if os.getpid() != _TORCH_EXT_LOAD_PID:
+            _TORCH_EXT_LOAD_LOCK = threading.Lock()
+            _TORCH_EXT_LOAD_PID = os.getpid()
+        with _TORCH_EXT_LOAD_LOCK:
+            if not _TORCH_EXT_LOADED:
+                _load_torch_extension(torch)
+                _TORCH_EXT_LOADED = True
     return cast(
         "Callable[..., tuple[object, object, int]]",
         torch.ops.xtbloom._xtbloom_torch_forward,
     )
+
+
+def _load_torch_extension(torch: ModuleType) -> None:
+    """Load once and capture cleanup while Python and Torch are still alive."""
+    # Establish the same native runtime selected by the rest of the Python
+    # package and preload optional providers such as scipy-openblas32. The
+    # compiled op intentionally resolves xtbloom itself, but must not bypass
+    # Python's provider discovery when it is the first public API called.
+    library.load_library()
+    path = _torch_extension_path()
+    if path is None:
+        raise XTBloomNotSupportedError(
+            "xtbloom_torch requires the compiled torch extension "
+            "(libxtbloom_torch_ext), which is not installed next to this "
+            "xtbloom package; rebuild/install xtbloom with CMake support for "
+            "Torch >= 2.10 so the extension is bundled"
+        )
+    try:
+        torch.ops.load_library(str(path))
+    except OSError as exc:
+        raise XTBloomRuntimeError(
+            "xtbloom_torch could not load the torch extension: this build "
+            "of libxtbloom_torch_ext may be incompatible with the installed "
+            "torch"
+        ) from exc
+    try:
+        shutdown = torch.ops.xtbloom._xtbloom_torch_shutdown
+    except AttributeError as exc:
+        raise XTBloomRuntimeError(
+            "xtbloom_torch requires a torch extension with shutdown support; "
+            "rebuild/install matching xtbloom native libraries"
+        ) from exc
+    # Capture the native callable rather than re-importing modules during
+    # interpreter teardown. The dispatcher releases the GIL while draining
+    # workers, whose retained tensors may invoke Python/DLPack deleters.
+    atexit.register(shutdown)
 
 
 _METHOD_ALIASES = {
