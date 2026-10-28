@@ -57,7 +57,12 @@ Gfn2SccLoopLaunchResult validate_loop_plan(const Gfn2SccIterationBinding& bindin
 
 Gfn2SccLoopLaunchResult launch_restricted_scc_loop_impl(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice* geometry,
-    cudaStream_t stream, Gfn2SccDiagnosticsDevice diagnostics = {}) noexcept {
+    cudaStream_t stream
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+    ,
+    Gfn2SccDiagnosticsDevice diagnostics = {}
+#endif
+    ) noexcept {
   Gfn2SccLoopLaunchResult result = validate_loop_plan(binding);
   if (!result.success()) {
     return result;
@@ -380,14 +385,16 @@ struct Gfn2SccLoopCudaGraphOwner::State {
   Gfn2GeometryEpochConsumerDevice geometry{};
   bool dynamic_geometry = false;
   Gfn2SccLoopGraphFallbackReason fallback_reason = Gfn2SccLoopGraphFallbackReason::kNone;
-  Gfn2SccLoopGraphPreference preference = Gfn2SccLoopGraphPreference::kAuto;
   cudaGraph_t root_graph = nullptr;
   cudaGraphExec_t root_executable = nullptr;
   cudaGraph_t body_graph = nullptr;
   cudaGraphExec_t body_executable = nullptr;
   Gfn2SccDeviceLoopControl* control = nullptr;
-  Gfn2SccDiagnosticsDevice diagnostics{};
 #ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+  /* Keep ordinary-build owner layout and launch bookkeeping unchanged. The
+   * diagnostic option must not rely on optimizer removal for zero overhead. */
+  Gfn2SccLoopGraphPreference preference = Gfn2SccLoopGraphPreference::kAuto;
+  Gfn2SccDiagnosticsDevice diagnostics{};
   bool external_capture_uninstrumented = false;
 #endif
 
@@ -405,8 +412,8 @@ struct Gfn2SccLoopCudaGraphOwner::State {
 
 namespace {
 
-cudaError_t allocate_diagnostics(Gfn2SccLoopCudaGraphOwner::State& state) noexcept {
 #ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
+cudaError_t allocate_diagnostics(Gfn2SccLoopCudaGraphOwner::State& state) noexcept {
   auto& diagnostics = state.diagnostics;
   diagnostics.bucket_count = state.binding.plan.eigensolver_provider.bucket_count;
   diagnostics.maximum_iterations = state.binding.plan.activity_policy.maximum_iterations;
@@ -449,38 +456,25 @@ cudaError_t allocate_diagnostics(Gfn2SccLoopCudaGraphOwner::State& state) noexce
     status = cudaMemcpy(diagnostics.header, &initial, sizeof(initial), cudaMemcpyHostToDevice);
   }
   return status;
-#else
-  return cudaSuccess;
-#endif
 }
 
 cudaError_t diagnostic_reset(const Gfn2SccLoopCudaGraphOwner::State& state, cudaStream_t stream,
                              Gfn2SccLoopExecutionMode mode) noexcept {
-#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   return reset_gfn2_scc_diagnostics_cuda(state.diagnostics, stream,
                                          static_cast<std::uint32_t>(mode));
-#else
-  return cudaSuccess;
-#endif
 }
 
 cudaError_t diagnostic_begin(const Gfn2SccLoopCudaGraphOwner::State& state,
                              cudaStream_t stream) noexcept {
-#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   return begin_gfn2_scc_diagnostics_cuda(state.diagnostics, state.binding, stream);
-#else
-  return cudaSuccess;
-#endif
 }
 
 cudaError_t diagnostic_finish(const Gfn2SccLoopCudaGraphOwner::State& state, bool exact_capacity,
                               cudaStream_t stream) noexcept {
-#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   return finish_gfn2_scc_diagnostics_cuda(state.diagnostics, state.binding, exact_capacity, stream);
-#else
-  return cudaSuccess;
-#endif
 }
+
+#endif
 
 void destroy_graph_state(Gfn2SccLoopCudaGraphOwner::State* state) noexcept {
   if (state == nullptr) {
@@ -510,10 +504,12 @@ void destroy_graph_state(Gfn2SccLoopCudaGraphOwner::State* state) noexcept {
   if (state->control != nullptr) {
     (void)cudaFree(state->control);
   }
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   if (state->diagnostics.header != nullptr) (void)cudaFree(state->diagnostics.header);
   if (state->diagnostics.iterations != nullptr) (void)cudaFree(state->diagnostics.iterations);
   if (state->diagnostics.rows != nullptr) (void)cudaFree(state->diagnostics.rows);
   if (state->diagnostics.buckets != nullptr) (void)cudaFree(state->diagnostics.buckets);
+#endif
   delete state;
 }
 
@@ -693,7 +689,9 @@ Gfn2SccLoopGraphBuildResult build_device_tail_graph(
   }
   count_device_loop_body_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   if (status == cudaSuccess) status = diagnostic_begin(state, capture_stream);
+#endif
   const Gfn2SccIterationLaunchResult numerical =
       status == cudaSuccess ? launch_graph_numerical_body(state, capture_stream)
                             : Gfn2SccIterationLaunchResult{};
@@ -705,7 +703,9 @@ Gfn2SccLoopGraphBuildResult build_device_tail_graph(
     return capture_fallback(Gfn2SccLoopGraphFallbackReason::kNumericalBodyCaptureFailed,
                             numerical.cuda_status, numerical);
   }
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   if (status == cudaSuccess) status = diagnostic_finish(state, false, capture_stream);
+#endif
   if (status == cudaSuccess) {
     snapshot_device_loop_failure_kernel<<<1, 1, 0, capture_stream>>>(state.binding.workspace.ledger,
                                                                      state.control);
@@ -764,9 +764,11 @@ Gfn2SccLoopGraphBuildResult build_device_tail_graph(
   }
   reset_device_loop_control_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   if (status == cudaSuccess) {
     status = diagnostic_reset(state, capture_stream, Gfn2SccLoopExecutionMode::kDeviceTailGraph);
   }
+#endif
   const Gfn2SccIterationLaunchResult root = status == cudaSuccess
                                                 ? launch_graph_activity(state, capture_stream)
                                                 : Gfn2SccIterationLaunchResult{};
@@ -973,7 +975,9 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   }
   count_device_loop_body_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   if (status == cudaSuccess) status = diagnostic_begin(state, capture_stream);
+#endif
   const Gfn2SccIterationLaunchResult pre_segment =
       status == cudaSuccess ? launch_graph_pre_eigensolver(state, capture_stream)
                             : Gfn2SccIterationLaunchResult{};
@@ -1184,7 +1188,9 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
     return chain_fallback(Gfn2SccLoopGraphFallbackReason::kDispatchBuildFailed,
                           post_segment.cuda_status, post_segment);
   }
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   if (status == cudaSuccess) status = diagnostic_finish(state, true, capture_stream);
+#endif
   if (status == cudaSuccess) {
     snapshot_device_loop_failure_kernel<<<1, 1, 0, capture_stream>>>(workspace.ledger,
                                                                      state.control);
@@ -1249,10 +1255,12 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   }
   reset_device_loop_control_kernel<<<1, 1, 0, capture_stream>>>(state.control);
   status = check_kernel_launch();
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   if (status == cudaSuccess) {
     status =
         diagnostic_reset(state, capture_stream, Gfn2SccLoopExecutionMode::kDeviceDispatchChain);
   }
+#endif
   const Gfn2SccIterationLaunchResult root = status == cudaSuccess
                                                 ? launch_graph_activity(state, capture_stream)
                                                 : Gfn2SccIterationLaunchResult{};
@@ -1312,7 +1320,11 @@ Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
 Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     Gfn2SccDiagnosticsDevice diagnostics, cudaStream_t stream) noexcept {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   return launch_restricted_scc_loop_impl(binding, &geometry, stream, diagnostics);
+#else
+  return launch_restricted_scc_loop_impl(binding, &geometry, stream);
+#endif
 }
 
 Gfn2SccLoopCudaGraphOwner::~Gfn2SccLoopCudaGraphOwner() { reset(); }
@@ -1357,12 +1369,15 @@ Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build_impl(
     return result;
   }
   state->binding = binding;
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   state->preference = preference;
+#endif
   if (geometry != nullptr) {
     state->geometry = *geometry;
     state->dynamic_geometry = true;
   }
   state_ = state;
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   const cudaError_t diagnostic_status = allocate_diagnostics(*state);
   if (diagnostic_status != cudaSuccess) {
     Gfn2SccLoopGraphBuildResult result{};
@@ -1372,6 +1387,7 @@ Gfn2SccLoopGraphBuildResult Gfn2SccLoopCudaGraphOwner::build_impl(
     reset();
     return result;
   }
+#endif
 
 #if CUDART_VERSION >= 12030
 #if CUDART_VERSION >= 12080
@@ -1452,6 +1468,7 @@ Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::launch(cudaStream_t stream) c
   state_->external_capture_uninstrumented = capture_status != cudaStreamCaptureStatusNone;
 #endif
   if (state_->root_executable == nullptr || capture_status != cudaStreamCaptureStatusNone) {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
     /* The independently captured DAG must not borrow this owner's ledger.
      * Runtime-owned captures use the explicit diagnostic overload instead and
      * retain the complete Prepared owner until their Graph is destroyed. */
@@ -1461,6 +1478,10 @@ Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::launch(cudaStream_t stream) c
     Gfn2SccLoopLaunchResult result = launch_restricted_scc_loop_impl(
         state_->binding, state_->dynamic_geometry ? &state_->geometry : nullptr, stream,
         diagnostics);
+#else
+    Gfn2SccLoopLaunchResult result = launch_restricted_scc_loop_impl(
+        state_->binding, state_->dynamic_geometry ? &state_->geometry : nullptr, stream);
+#endif
     result.execution_mode = Gfn2SccLoopExecutionMode::kBoundedFallback;
     return result;
   }
@@ -1589,6 +1610,7 @@ std::size_t Gfn2SccLoopCudaGraphOwner::retained_device_bytes() const noexcept {
   if (state_->device_table != nullptr) {
     bytes += static_cast<std::size_t>(state_->table_slots) * sizeof(cudaGraphExec_t);
   }
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   const auto diagnostics = state_->diagnostics;
   if (diagnostics.header != nullptr) {
     bytes +=
@@ -1597,11 +1619,16 @@ std::size_t Gfn2SccLoopCudaGraphOwner::retained_device_bytes() const noexcept {
         diagnostics.bucket_count * sizeof(Gfn2EigensolverBucket) +
         diagnostics.maximum_iterations * diagnostics.bucket_count * sizeof(Gfn2SccDiagnosticBucket);
   }
+#endif
   return bytes;
 }
 
 Gfn2SccDiagnosticsDevice Gfn2SccLoopCudaGraphOwner::diagnostics_device() const noexcept {
+#ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
   return state_ == nullptr ? Gfn2SccDiagnosticsDevice{} : state_->diagnostics;
+#else
+  return {};
+#endif
 }
 
 cudaError_t Gfn2SccLoopCudaGraphOwner::write_diagnostics_json(std::ostream& output,

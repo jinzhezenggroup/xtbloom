@@ -10439,18 +10439,18 @@ struct Gfn2CudaExecutionCache::Impl {
      * requests already select this same bounded path while capturing. */
     const bool native_periodic_request = current.host.key.native_lattice_enabled;
     const bool use_bounded_scc = capture_bounded_scc || native_periodic_request;
-    const auto bounded_scc = [&]() {
 #ifdef XTBLOOM_CUDA_SCC_DIAGNOSTICS
-      return launch_gfn2_restricted_scc_loop_cuda(current.scc_binding, inference.epoch_consumer,
-                                                  current.scc_loop.diagnostics_device(),
-                                                  execution_stream);
-#else
-      return launch_gfn2_restricted_scc_loop_cuda(current.scc_binding, inference.epoch_consumer,
-                                                  execution_stream);
-#endif
-    };
     const Gfn2SccLoopLaunchResult loop =
-        use_bounded_scc ? bounded_scc() : current.scc_loop.launch(execution_stream);
+        use_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
+                              current.scc_binding, inference.epoch_consumer,
+                              current.scc_loop.diagnostics_device(), execution_stream)
+                        : current.scc_loop.launch(execution_stream);
+#else
+    const Gfn2SccLoopLaunchResult loop =
+        use_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
+                              current.scc_binding, inference.epoch_consumer, execution_stream)
+                        : current.scc_loop.launch(execution_stream);
+#endif
     if (!loop.success()) {
       std::ostringstream message;
       message << "CUDA SCC loop submission failed: mode="
