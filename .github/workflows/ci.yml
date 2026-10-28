@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           enable-cache: true
@@ -95,7 +95,7 @@ jobs:
       - name: Preserve C++ coverage for the upload-only job
         if: matrix.compiler == 'gcc'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-report-cpp
           path: coverage-cpp.xml
@@ -111,7 +111,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # Generate against uv.lock with the matching uv version, then bump
           # `version` and regenerate the lock together.
@@ -166,10 +166,13 @@ jobs:
           XTBLOOM_LIBRARY="${installed_library}" PYTHONPATH="${PWD}/python" \
             uv run --no-sync pytest python/tests -q --cov \
               --cov-report=xml:coverage-python.xml
-          uv run --no-sync python -m unittest -v \
-            benchmarks.test_run benchmarks.test_natoms_scaling \
+          uv run --no-sync python -m coverage run --append -m unittest -v \
+            benchmarks.test_run benchmarks.test_ao_grouping benchmarks.test_auto_grouping \
+            benchmarks.test_convergence_runner benchmarks.test_dataset_runner \
+            benchmarks.test_paper_suite benchmarks.test_natoms_scaling \
             benchmarks.test_natoms_cross_engine benchmarks.test_dxtb_adapter \
-            benchmarks.test_evidence_size
+            benchmarks.test_evidence_size benchmarks.test_cuda_distribution_evidence
+          uv run --no-sync python -m coverage xml -o coverage-python.xml
       - name: Validate repository-relative Python coverage paths
         run: |
           uv run --no-sync python - <<'PY'
@@ -193,7 +196,7 @@ jobs:
           PY
       - name: Preserve Python coverage for the upload-only job
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-report-python
           path: coverage-python.xml
@@ -229,7 +232,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Download coverage report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: ${{ matrix.artifact }}
           path: coverage
@@ -238,7 +241,7 @@ jobs:
         # fail_ci_if_error covers CLI upload errors; continue-on-error also
         # covers action setup, integrity-check, and OIDC failures.
         continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ${{ matrix.files }}
           flags: ${{ matrix.flag }}
@@ -256,7 +259,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -300,7 +303,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -357,7 +360,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -415,7 +418,7 @@ jobs:
             --output "${COVERAGE_XML}"
       - name: Preserve public C++ coverage for the upload-only job
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-report-cpp-public
           path: coverage-cpp-public.xml
@@ -437,6 +440,6 @@ jobs:
     if: always()
     steps:
       - name: Decide whether the needed jobs succeeded or failed
-        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
         with:
           jobs: ${{ toJSON(needs) }}

@@ -1,0 +1,34 @@
+job=8602 node=node1 visible=2
+89dabddd69cbfce1e177b225fd6b95c38a0eb0f14aec7d42e8f5d879184067ab  /tmp/xtbloom-goal-20261009/healthy-oracle515/validation-manifest.json
+cpu:host exit=1
+error: cpu/host: 3 public C API conformance comparison(s) failed; actual JSON retained in /home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cpu-host/cpu
+PASS healthy32 energy_hartree: max_abs_error=1.792225e-08 limit=5.000000e-07 at scalar
+FAIL healthy32 forces_hartree_per_bohr: max_abs_error=7.914363e-04 limit=5.000000e-07 at component 87
+PASS healthy32 partial_charges_e: max_abs_error=1.015233e-08 limit=5.000000e-07 at component 30
+FAIL healthy62 energy_hartree: max_abs_error=1.091100e-05 limit=5.000000e-07 at scalar
+FAIL healthy62 forces_hartree_per_bohr: max_abs_error=7.992314e-04 limit=5.000000e-07 at component 132
+PASS healthy62 partial_charges_e: max_abs_error=1.037974e-08 limit=5.000000e-07 at component 44
+cuda:host exit=1
+error: cuda/host: 3 public C API conformance comparison(s) failed; actual JSON retained in /home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-host/cuda
+PASS healthy32 energy_hartree: max_abs_error=1.792206e-08 limit=5.000000e-07 at scalar
+FAIL healthy32 forces_hartree_per_bohr: max_abs_error=7.914363e-04 limit=5.000000e-07 at component 87
+PASS healthy32 partial_charges_e: max_abs_error=1.015234e-08 limit=5.000000e-07 at component 23
+FAIL healthy62 energy_hartree: max_abs_error=1.091100e-05 limit=5.000000e-07 at scalar
+FAIL healthy62 forces_hartree_per_bohr: max_abs_error=7.992314e-04 limit=5.000000e-07 at component 132
+PASS healthy62 partial_charges_e: max_abs_error=1.037974e-08 limit=5.000000e-07 at component 59
+cuda:device exit=1
+error: cuda/device: 3 public C API conformance comparison(s) failed; actual JSON retained in /home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-device/cuda-device
+PASS healthy32 energy_hartree: max_abs_error=1.792206e-08 limit=5.000000e-07 at scalar
+FAIL healthy32 forces_hartree_per_bohr: max_abs_error=7.914363e-04 limit=5.000000e-07 at component 87
+PASS healthy32 partial_charges_e: max_abs_error=1.015234e-08 limit=5.000000e-07 at component 23
+FAIL healthy62 energy_hartree: max_abs_error=1.091100e-05 limit=5.000000e-07 at scalar
+FAIL healthy62 forces_hartree_per_bohr: max_abs_error=7.992314e-04 limit=5.000000e-07 at component 132
+PASS healthy62 partial_charges_e: max_abs_error=1.037974e-08 limit=5.000000e-07 at component 59
+cuda:mixed exit=1
+error: cuda/mixed: 3 public C API conformance comparison(s) failed; actual JSON retained in /home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-mixed/cuda-mixed
+PASS healthy32 energy_hartree: max_abs_error=1.792206e-08 limit=5.000000e-07 at scalar
+FAIL healthy32 forces_hartree_per_bohr: max_abs_error=7.914363e-04 limit=5.000000e-07 at component 87
+PASS healthy32 partial_charges_e: max_abs_error=1.015234e-08 limit=5.000000e-07 at component 23
+FAIL healthy62 energy_hartree: max_abs_error=1.091100e-05 limit=5.000000e-07 at scalar
+FAIL healthy62 forces_hartree_per_bohr: max_abs_error=7.992314e-04 limit=5.000000e-07 at component 132
+PASS healthy62 partial_charges_e: max_abs_error=1.037974e-08 limit=5.000000e-07 at component 59

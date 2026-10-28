@@ -47,6 +47,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -58,6 +59,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -65,6 +67,8 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+
+#include "request_pool_shutdown.hpp"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -1463,26 +1467,139 @@ class TorchRequestPool {
   bool lost_deferred_stream_overflow_pending_ = false;
 };
 
+class TorchRequestPoolHolder;
+
+// Atomic shared ownership pins every operator entrant across C++ teardown,
+// without a per-call allocation. Check the owner PID before these atomic shared
+// pointer operations too: their implementation may use inherited locks.
+std::shared_ptr<TorchRequestPoolHolder> live_torch_request_pool;
+std::atomic<std::uint64_t> torch_request_pool_owner_pid{0};
+std::atomic<std::uint64_t> torch_request_pool_shutdown_pid{0};
+
+void check_torch_request_pool_process() {
+  const auto owner_pid = torch_request_pool_owner_pid.load();
+  STD_TORCH_CHECK(owner_pid == 0 || owner_pid == current_process_id(),
+                  "xtbloom_torch: CUDA use after fork is unsupported; create the child before "
+                  "its first xtbloom CUDA call or use a spawn-based start method");
+}
+
 class TorchRequestPoolHolder {
  public:
   explicit TorchRequestPoolHolder(const XTBloomApi& api)
-      : owner_process_id_(current_process_id()), pool_(new TorchRequestPool(api)) {}
+      : owner_process_id_(current_process_id()), state_(new State(api)) {}
   ~TorchRequestPoolHolder() {
     /* A forked child cannot safely destroy inherited mutex/thread/CUDA state.
      * Intentionally leak that copied state; process teardown will reclaim it. */
-    if (current_process_id() == owner_process_id_) delete pool_;
+    if (current_process_id() != owner_process_id_) return;
+    shutdown();
+    delete state_;
   }
 
-  TorchRequestPool& get() const noexcept { return *pool_; }
+  std::int64_t submit(const ContextKey& context_key, const PlanKey& plan_key,
+                      const xtbloom_batch_t& batch, const xtbloom_compute_options_t& options,
+                      const std::array<Tensor, 13>& tensors) {
+    check_process();
+    check_admission();
+    std::shared_lock<std::shared_mutex> lock(state_->lifecycle_mutex);
+    check_admission();
+    return state_->pool.submit(context_key, plan_key, batch, options, tensors);
+  }
+
+  void wait_for_submission(std::int64_t submission_id) {
+    check_process();
+    if (torch_request_pool_shutdown_pid.load() == owner_process_id_) {
+      // A post-close backward must first finish the drain, then consult the
+      // retained token/error history, not mistake removed pending slots for
+      // successful completion. Concurrent cleanup also waits for this lock.
+      std::unique_lock<std::shared_mutex> lock(state_->lifecycle_mutex);
+      state_->pool.shutdown();
+      state_->pool.wait_for_submission(submission_id);
+      return;
+    }
+    std::shared_lock<std::shared_mutex> lock(state_->lifecycle_mutex);
+    state_->pool.wait_for_submission(submission_id);
+  }
+
+  void shutdown() noexcept {
+    // This test must precede even locking: fork copies mutexes and thread
+    // handles without their workers. A CPU-preloaded child with its own pool
+    // instead has its own owner PID and performs normal cleanup.
+    if (current_process_id() != owner_process_id_) return;
+    torch_request_pool_shutdown_pid.store(owner_process_id_);
+    std::unique_lock<std::shared_mutex> lock(state_->lifecycle_mutex);
+    // Exclusive ownership quiesces context creation, admissions and exact
+    // waiters before the pool moves its contexts and joins its reapers. Keep
+    // the empty pool alive for bounded backward/error history until C++ exit.
+    state_->pool.shutdown();
+  }
+
+ private:
+  void check_process() const {
+    STD_TORCH_CHECK(
+        current_process_id() == owner_process_id_,
+        "xtbloom_torch: CUDA use after fork is unsupported because the child inherited native "
+        "contexts, mutexes, and worker threads; create the child process before its first "
+        "xtbloom CUDA call or use a spawn-based multiprocessing start method");
+  }
+
+  void check_admission() const {
+    STD_TORCH_CHECK(torch_request_pool_shutdown_pid.load() != owner_process_id_,
+                    "xtbloom_torch: CUDA request pool is shutting down");
+  }
+
+  struct State {
+    explicit State(const XTBloomApi& api) : pool(api) {}
+    std::shared_mutex lifecycle_mutex;
+    TorchRequestPool pool;
+  };
+
+  std::uint64_t owner_process_id_ = 0;
+  // Keep even the lifecycle mutex behind the owner-PID guard: returning from
+  // a child destructor must not run an inherited mutex member's destructor.
+  State* state_ = nullptr;
+};
+
+class TorchRequestPoolLifetime {
+ public:
+  explicit TorchRequestPoolLifetime(const XTBloomApi& api)
+      : owner_process_id_(current_process_id()) {
+    // Publish a fully constructed heap object, not this still-constructing
+    // magic static. Cleanup does not enter its possibly in-progress guard.
+    std::atomic_store(&live_torch_request_pool, std::make_shared<TorchRequestPoolHolder>(api));
+  }
+
+  ~TorchRequestPoolLifetime() {
+    if (current_process_id() != owner_process_id_) return;
+    torch_request_pool_shutdown_pid.store(owner_process_id_);
+    auto holder =
+        std::atomic_exchange(&live_torch_request_pool, std::shared_ptr<TorchRequestPoolHolder>{});
+    if (holder != nullptr) holder->shutdown();
+  }
 
  private:
   std::uint64_t owner_process_id_ = 0;
-  TorchRequestPool* pool_ = nullptr;
 };
 
-TorchRequestPool& torch_request_pool(const XTBloomApi& api) {
-  static TorchRequestPoolHolder holder(api);
-  return holder.get();
+std::shared_ptr<TorchRequestPoolHolder> torch_request_pool(const XTBloomApi& api) {
+  check_torch_request_pool_process();
+  const auto process_id = current_process_id();
+  STD_TORCH_CHECK(torch_request_pool_shutdown_pid.load() != process_id,
+                  "xtbloom_torch: CUDA request pool is shutting down");
+  std::uint64_t unclaimed_pid = 0;
+  const bool claimed =
+      torch_request_pool_owner_pid.compare_exchange_strong(unclaimed_pid, process_id);
+  // Claim before entering the magic-static guard too: a fork during the first
+  // construction can inherit that guard while its constructing thread is gone.
+  STD_TORCH_CHECK(claimed || unclaimed_pid == process_id,
+                  "xtbloom_torch: CUDA use after fork is unsupported; create the child before "
+                  "its first xtbloom CUDA call or use a spawn-based start method");
+  if (auto holder = std::atomic_load(&live_torch_request_pool)) return holder;
+  static TorchRequestPoolLifetime lifetime(api);
+  STD_TORCH_CHECK(torch_request_pool_shutdown_pid.load() != process_id,
+                  "xtbloom_torch: CUDA request pool is shutting down");
+  auto holder = std::atomic_load(&live_torch_request_pool);
+  STD_TORCH_CHECK(holder != nullptr, "xtbloom_torch: CUDA submission pool is unavailable");
+  return holder;
 }
 
 }  // namespace
@@ -1517,6 +1634,9 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
     int64_t max_scc_iterations, double charge_tolerance, double energy_tolerance,
     double electronic_temperature, int64_t scc_mixer, int64_t scc_mixer_history,
     double scc_mixer_damping, int64_t determinism) {
+  // Reject inherited CUDA ownership before API guards or tensor/device queries.
+  // An extension loaded only for CPU work has not claimed a pool owner yet.
+  check_torch_request_pool_process();
   const XTBloomApi& api = xtbloom_api();
   // Fail fast when the torch extension was built against an incompatible
   // ABI level, before any tensor contract is assumed.
@@ -1672,7 +1792,7 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
         spin_channels_owner,
     };
     const std::int64_t submission_id =
-        torch_request_pool(api).submit(context_key, plan_key, batch, options, retained);
+        torch_request_pool(api)->submit(context_key, plan_key, batch, options, retained);
     return {out_energies, out_forces, submission_id};
   }
 
@@ -1757,7 +1877,23 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
 
 void xtbloom_torch_wait(std::int64_t submission_id) {
   if (submission_id == 0) return;
-  torch_request_pool(xtbloom_api()).wait_for_submission(submission_id);
+  check_torch_request_pool_process();
+  STD_TORCH_CHECK(torch_request_pool_owner_pid.load() != 0,
+                  "xtbloom_torch: CUDA submission pool is unavailable");
+  // An accepted token implies a published holder. Do not use the lazy factory
+  // here: backward remains valid after cleanup and must never recreate a pool.
+  auto holder = std::atomic_load(&live_torch_request_pool);
+  STD_TORCH_CHECK(holder != nullptr, "xtbloom_torch: CUDA submission pool is unavailable");
+  holder->wait_for_submission(submission_id);
+}
+
+void xtbloom_torch_shutdown() {
+  const auto process_id = current_process_id();
+  if (!xtbloom::torch_detail::close_request_pool_admission(
+          torch_request_pool_owner_pid, torch_request_pool_shutdown_pid, process_id))
+    return;
+  // Never invoke the lazy factory, including when first use races cleanup.
+  if (auto holder = std::atomic_load(&live_torch_request_pool)) holder->shutdown();
 }
 
 STABLE_TORCH_LIBRARY(xtbloom, m) {
@@ -1774,8 +1910,10 @@ STABLE_TORCH_LIBRARY(xtbloom, m) {
       "float electronic_temperature, int scc_mixer, int scc_mixer_history, "
       "float scc_mixer_damping, int determinism) -> (Tensor(a!), Tensor(b!), int)");
   m.def("_xtbloom_torch_wait(int submission_id) -> ()");
+  m.def("_xtbloom_torch_shutdown() -> ()");
 }
 STABLE_TORCH_LIBRARY_IMPL(xtbloom, CompositeExplicitAutograd, m) {
   m.impl("_xtbloom_torch_forward", TORCH_BOX(&xtbloom_torch_forward));
   m.impl("_xtbloom_torch_wait", TORCH_BOX(&xtbloom_torch_wait));
+  m.impl("_xtbloom_torch_shutdown", TORCH_BOX(&xtbloom_torch_shutdown));
 }

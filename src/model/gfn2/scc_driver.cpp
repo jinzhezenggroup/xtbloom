@@ -422,6 +422,7 @@ bool same_eigensolver_plan(const EigensolverPlan& first, const EigensolverPlan& 
          first.total_matrix_elements() == second.total_matrix_elements() &&
          first.maximum_orbitals() == second.maximum_orbitals() &&
          first.minimum_overlap_rcond() == second.minimum_overlap_rcond() &&
+         first.single_precision_enabled() == second.single_precision_enabled() &&
          first.overlap_cache_size_bytes() == second.overlap_cache_size_bytes() &&
          first.worker_workspace_size_bytes() == second.worker_workspace_size_bytes() &&
          first.workspace_size_bytes() == second.workspace_size_bytes() &&
@@ -738,12 +739,18 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverOverlapCache& overlap_cache,
     const WavefunctionView& wavefunction, const SccMixerState& mixer_state,
     const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error,
-    const SccParallelExecutor* parallel) {
+    const SccParallelExecutor* parallel, const SccCpuIterationOptions* iteration_options) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const SccDriverPlanData& data = *plan.identity();
+  const SccCpuIterationOptions default_iteration_options{};
+  const SccCpuIterationOptions& cpu_options =
+      iteration_options == nullptr ? default_iteration_options : *iteration_options;
+  if (cpu_options.used_float64_fallback != nullptr) {
+    *cpu_options.used_float64_fallback = false;
+  }
   status = validate_iteration_bindings(plan, data, geometry, backend, overlap_cache, wavefunction,
                                        mixer_state, state, workspace, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -784,15 +791,42 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
         continue;
       }
       const std::int64_t hamiltonian_base = data.wavefunction.density.system_offsets[system];
-      status = solve_eigensystem_cpu(
-          data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
-          geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
-          data.electronic_temperature, backend, workspace.eigensolver_workspace,
-          workspace.staged_wavefunction, workspace.thermodynamics, error);
+      const bool request_float32 =
+          cpu_options.eigensolver_precision == CpuEigensolverPrecision::kFloat32;
+      status = request_float32
+                   ? solve_eigensystem_cpu_single_precision(
+                         data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
+                         geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
+                         data.electronic_temperature, backend, workspace.eigensolver_workspace,
+                         workspace.staged_wavefunction, workspace.thermodynamics, error)
+                   : solve_eigensystem_cpu(
+                         data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
+                         geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
+                         data.electronic_temperature, backend, workspace.eigensolver_workspace,
+                         workspace.staged_wavefunction, workspace.thermodynamics, error);
       if (status != XTBLOOM_STATUS_SUCCESS) {
         /* Binding/backend contract failures are whole-call failures; all solved
          * peers still live only in the staged wavefunction at this point. */
         return status;
+      }
+      if (request_float32 &&
+          workspace.thermodynamics.system_statuses[system] == XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
+        /* FP32 range or convergence loss is not a terminal scientific result.
+         * Retry the same unpublished Hamiltonian in FP64, then tell the
+         * adaptive controller to leave FP32 and restart only this lane's mixer
+         * history before its next SCC iteration. */
+        status = solve_eigensystem_cpu(
+            data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
+            geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
+            data.electronic_temperature, backend, workspace.eigensolver_workspace,
+            workspace.staged_wavefunction, workspace.thermodynamics, error);
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          return status;
+        }
+        if (workspace.thermodynamics.system_statuses[system] == XTBLOOM_STATUS_SUCCESS &&
+            cpu_options.used_float64_fallback != nullptr) {
+          *cpu_options.used_float64_fallback = true;
+        }
       }
       if (workspace.thermodynamics.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
         workspace.active_systems[system] = 2u;
@@ -911,7 +945,7 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     const bool residual_converged =
         workspace.staged_mixer_state.residual_rms[system] < data.mixer.rms_tolerance();
     const bool energy_converged = std::abs(energy_change) < data.energy_tolerance;
-    const bool converged = residual_converged && energy_converged;
+    const bool converged = cpu_options.allow_convergence && residual_converged && energy_converged;
     workspace.staged_mixer_state.converged[system] = converged ? 1u : 0u;
     if (converged) {
       /* The mixer stores its next-round input, but a terminal converged
@@ -1243,7 +1277,8 @@ xtbloom_status_t make_scc_driver_plan(
   }
   if (status == XTBLOOM_STATUS_SUCCESS) {
     status = make_eigensolver_plan(expected_wavefunction, expected_eigensolver, error,
-                                   eigensolver.minimum_overlap_rcond());
+                                   eigensolver.minimum_overlap_rcond(),
+                                   eigensolver.single_precision_enabled());
   }
   if (status == XTBLOOM_STATUS_SUCCESS) {
     status = make_scc_mixer_plan(expected_wavefunction, mixer.history_size(), mixer.damping(),

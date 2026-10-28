@@ -202,6 +202,8 @@ endif()
 option(XTBLOOM_BUILD_TESTS "Build xtbloom tests" ${PROJECT_IS_TOP_LEVEL})
 option(XTBLOOM_CUDA_SCC_DIAGNOSTICS
   "Instrument CUDA SCC with a setup-owned device ledger (not for performance claims)" OFF)
+option(XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES
+  "Allow frozen restricted public SCC graph preferences for isolated benchmarks" OFF)
 option(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE
   "Build the isolated external energy SCC callback smoke test (research only)" OFF)
 option(XTBLOOM_BUILD_WEB_DEMO
@@ -963,6 +965,7 @@ set_target_properties(xtbloom_integrals_baseline_objects PROPERTIES
 # A single shared library carries the baseline kernels on every architecture.
 # Add the AVX2/FMA object only for a single x86-64 target whose compiler accepts
 # both flags; universal Apple builds, ARM, and WebAssembly remain baseline-only.
+set(XTBLOOM_BUILD_AVX512_FMA_KERNELS OFF)
 set(XTBLOOM_BUILD_AVX2_FMA_KERNELS OFF)
 set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS "")
 set(XTBLOOM_SINGLE_X86_64_TARGET OFF)
@@ -1030,6 +1033,10 @@ if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
     check_cxx_compiler_flag("-mavx2" XTBLOOM_CXX_HAS_MAVX2)
     check_cxx_compiler_flag("-mfma" XTBLOOM_CXX_HAS_MFMA)
     if(XTBLOOM_CXX_HAS_MAVX2 AND XTBLOOM_CXX_HAS_MFMA)
+      check_cxx_compiler_flag("-mavx512f" XTBLOOM_CXX_HAS_MAVX512F)
+      if(XTBLOOM_CXX_HAS_MAVX512F)
+        set(XTBLOOM_BUILD_AVX512_FMA_KERNELS ON)
+      endif()
       set(XTBLOOM_BUILD_AVX2_FMA_KERNELS ON)
       set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS
         "-march=x86-64;-mtune=generic;-mavx2;-mfma;-fno-lto")
@@ -1113,6 +1120,33 @@ if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
   message(STATUS "xtbloom CPU ISA dispatch: baseline + AVX2/FMA Mulliken and integral kernels")
 else()
   message(STATUS "xtbloom CPU ISA dispatch: baseline Mulliken and integral kernels only")
+endif()
+
+if(XTBLOOM_BUILD_AVX512_FMA_KERNELS)
+  add_library(xtbloom_gfn2_mulliken_avx512_objects OBJECT
+    src/model/gfn2/mulliken_kernels_avx512.cpp
+  )
+  target_compile_features(xtbloom_gfn2_mulliken_avx512_objects PUBLIC cxx_std_17)
+  target_include_directories(xtbloom_gfn2_mulliken_avx512_objects PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_options(xtbloom_gfn2_mulliken_avx512_objects PRIVATE
+    -march=x86-64 -mtune=generic -mavx2 -mfma -mavx512f -fno-lto)
+  set_target_properties(xtbloom_gfn2_mulliken_avx512_objects PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    INTERPROCEDURAL_OPTIMIZATION OFF
+    POSITION_INDEPENDENT_CODE ON
+    VISIBILITY_INLINES_HIDDEN YES
+  )
+  target_compile_definitions(xtbloom_cpu_dispatch_objects PRIVATE
+    XTBLOOM_HAS_AVX512_FMA_KERNELS=1)
+  list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
+    xtbloom_gfn2_mulliken_avx512_objects)
+  list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECTS
+    $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_avx512_objects>)
+  message(STATUS "xtbloom CPU ISA dispatch: isolated AVX-512/FMA Mulliken kernels")
 endif()
 
 add_library(xtbloom_model_common_cpu_objects OBJECT
@@ -1230,6 +1264,10 @@ set_target_properties(xtbloom_gfn2_cpu_objects PROPERTIES
 if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
   target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
     XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
+endif()
+if(XTBLOOM_BUILD_AVX512_FMA_KERNELS)
+  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
+    XTBLOOM_HAS_AVX512_FMA_KERNELS=1)
 endif()
 # Keep the complete CPU GFN1 implementation in its own object target so the
 # public library can publish the already-reserved model tag without merging
@@ -1823,6 +1861,9 @@ if(XTBLOOM_HAS_CUDA)
     target_sources(xtbloom_cuda_backend PRIVATE src/backends/cuda/gfn2_scc_diagnostics.cu)
     target_compile_definitions(xtbloom_cuda_backend PRIVATE XTBLOOM_CUDA_SCC_DIAGNOSTICS=1)
   endif()
+  if(XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES)
+    target_compile_definitions(xtbloom_cuda_backend PRIVATE XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES=1)
+  endif()
   set_target_properties(xtbloom_cuda_backend PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_STANDARD 17
@@ -1959,11 +2000,35 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
-      benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_cuda_diagnostics
+      benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_ao_grouping
+      benchmarks.test_auto_grouping
+      benchmarks.test_convergence_grouping benchmarks.test_convergence_runner
+      benchmarks.test_frozen_inputs
+      benchmarks.test_build_receipt benchmarks.test_record_build
+      benchmarks.test_build_receipt_runner
+      benchmarks.test_cuda_crossover benchmarks.test_cuda_crossover_summary
+      benchmarks.test_cuda_diagnostics
       benchmarks.test_historical_alkane_inputs
       benchmarks.test_historical_alkane_capture
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+    RESULT_VARIABLE xtbloom_benchmark_numpy_status
+    OUTPUT_QUIET
+    ERROR_QUIET
+  )
+  if(xtbloom_benchmark_numpy_status EQUAL 0)
+    add_test(
+      NAME xtbloom.benchmarks.omol25_inputs
+      COMMAND ${Python3_EXECUTABLE} -m unittest -v benchmarks.test_omol25_inputs
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+  else()
+    message(STATUS
+      "xtbloom.benchmarks.omol25_inputs NOT REGISTERED: selected Python lacks NumPy; locked project nox tests still require it"
+    )
+  endif()
   add_test(
     NAME xtbloom.cmake.cuda_toolkit_metadata
     COMMAND ${CMAKE_COMMAND} -P
@@ -2069,6 +2134,18 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_request_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.request COMMAND xtbloom_request_test)
 
+  # Exercise the production Torch shutdown gate without Torch, CUDA or BLAS.
+  add_executable(xtbloom_torch_pool_shutdown_test
+    tests/torch_pool_shutdown_test.cpp
+  )
+  target_include_directories(xtbloom_torch_pool_shutdown_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(xtbloom_torch_pool_shutdown_test PRIVATE Threads::Threads)
+  target_compile_features(xtbloom_torch_pool_shutdown_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.torch.pool_shutdown COMMAND xtbloom_torch_pool_shutdown_test)
+  set_tests_properties(xtbloom.torch.pool_shutdown PROPERTIES TIMEOUT 30)
+
   # The browser adapter test supplies a fake public C ABI so failure
   # publication and optimizer math remain testable without a WASM toolchain or
   # an external BLAS/LAPACK runtime.
@@ -2100,6 +2177,12 @@ if(XTBLOOM_BUILD_TESTS)
   if(XTBLOOM_CPU_LINALG_RUNTIME)
     xtbloom_configure_linalg_runtime_test(xtbloom_runtime_test xtbloom.runtime)
   endif()
+
+  add_executable(xtbloom_cuda_scc_benchmark_mode_test tests/cuda_scc_benchmark_mode_test.cpp)
+  target_include_directories(xtbloom_cuda_scc_benchmark_mode_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_features(xtbloom_cuda_scc_benchmark_mode_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.cuda_scc_benchmark_mode COMMAND xtbloom_cuda_scc_benchmark_mode_test)
 
   add_executable(xtbloom_cpu_isa_dispatch_test tests/cpu_isa_dispatch_test.cpp)
   target_link_libraries(xtbloom_cpu_isa_dispatch_test PRIVATE xtbloom_gfn2_cpu)
@@ -2207,6 +2290,53 @@ if(XTBLOOM_BUILD_TESTS)
       "MALLOC_CHECK_=3"
       "GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
     )
+
+    # The diagnostic has its own public API/runtime closure. Its hidden context
+    # resolver never interprets a handle allocated by the production DSO, and
+    # the snapshot macro never reaches libxtbloom or the shared model objects.
+    add_executable(xtbloom_cpu_scc_snapshot_test
+      tests/cpu_scc_snapshot_test.cpp
+      src/api.cpp
+      src/runtime/backend.cpp
+      src/runtime/gfn2_cpu_execution.cpp
+      src/runtime/gfn2_plan.cpp
+      src/runtime/model_plan.cpp
+      src/runtime/model_registry.cpp
+      src/runtime/request.cpp
+      src/runtime/result_owner.cpp
+      src/runtime/validation.cpp
+      ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
+      ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
+      $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
+    )
+    target_include_directories(xtbloom_cpu_scc_snapshot_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${XTBLOOM_GENERATED_INCLUDE_DIR}
+    )
+    target_compile_definitions(xtbloom_cpu_scc_snapshot_test PRIVATE
+      XTBLOOM_BUILDING_LIBRARY
+      XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING=1
+    )
+    target_compile_features(xtbloom_cpu_scc_snapshot_test PRIVATE cxx_std_17)
+    target_link_libraries(xtbloom_cpu_scc_snapshot_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME xtbloom.cpu.scc_snapshot COMMAND xtbloom_cpu_scc_snapshot_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_cpu_scc_snapshot_test xtbloom.cpu.scc_snapshot
+    )
+    if(BUILD_SHARED_LIBS)
+      add_test(NAME xtbloom.cpu.scc_snapshot_json
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_scc_snapshot_json_test.py
+          --executable $<TARGET_FILE:xtbloom_cpu_scc_snapshot_test>
+          --library $<TARGET_FILE:xtbloom>
+      )
+      xtbloom_configure_linalg_runtime_test(
+        xtbloom_cpu_scc_snapshot_test xtbloom.cpu.scc_snapshot_json
+      )
+    endif()
   endif()
 
   if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
@@ -2978,6 +3108,10 @@ if(XTBLOOM_BUILD_TESTS)
     target_compile_definitions(xtbloom_cuda_gfn2_runtime_graph_test
       PRIVATE XTBLOOM_HAS_CUDA=1
     )
+    if(XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES)
+      target_compile_definitions(xtbloom_cuda_gfn2_runtime_graph_test PRIVATE
+        XTBLOOM_CUDA_SCC_BENCHMARK_OVERRIDES=1)
+    endif()
     set_target_properties(xtbloom_cuda_gfn2_runtime_graph_test PROPERTIES
       CUDA_STANDARD 17
       CUDA_STANDARD_REQUIRED YES
@@ -2986,6 +3120,14 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.gfn2_runtime_graph
       COMMAND xtbloom_cuda_gfn2_runtime_graph_test
     )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_graph_benchmark_modes
+      COMMAND xtbloom_cuda_gfn2_runtime_graph_test --benchmark-modes-only)
+    set_tests_properties(xtbloom.cuda.gfn2_runtime_graph_benchmark_modes PROPERTIES
+      SKIP_RETURN_CODE 77)
+    add_test(NAME xtbloom.cuda.gfn2_runtime_graph_failure_exit
+      COMMAND ${CMAKE_COMMAND}
+        "-DTEST_BINARY=$<TARGET_FILE:xtbloom_cuda_gfn2_runtime_graph_test>"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cuda_gfn2_runtime_graph_failure_exit.cmake)
 
     add_executable(xtbloom_cuda_gfn2_runtime_cache_diagnostics_test
       tests/cuda_gfn2_runtime_cache_diagnostics_test.cu
@@ -3716,12 +3858,58 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.scc_iteration_device_tail_count
       COMMAND xtbloom_cuda_scc_iteration_production_test --device-tail-count
     )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao41_b1
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 41 1 1 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao41_b1
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 41 1 1 host-graph
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao122_b128
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 122 128 1 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao122_b128
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 122 128 1 host-graph
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_direct_ao180_b256
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 180 256 4 direct
+    )
+    add_test(NAME xtbloom.cuda.scc_iteration_crossover_host_graph_ao180_b256
+      COMMAND xtbloom_cuda_scc_iteration_production_test
+        --crossover-sanitizer-control 180 256 4 host-graph
+    )
+    set_tests_properties(
+      xtbloom.cuda.scc_iteration_crossover_direct_ao41_b1
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao41_b1
+      xtbloom.cuda.scc_iteration_crossover_direct_ao122_b128
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao122_b128
+      xtbloom.cuda.scc_iteration_crossover_direct_ao180_b256
+      xtbloom.cuda.scc_iteration_crossover_host_graph_ao180_b256
+      PROPERTIES SKIP_RETURN_CODE 77
+    )
     add_test(NAME xtbloom.cuda.scc_iteration_large_singleton
       COMMAND xtbloom_cuda_scc_iteration_production_test --large-singleton-tridiagonal
     )
     add_test(NAME xtbloom.cuda.scc_iteration_deterministic_debug
       COMMAND xtbloom_cuda_scc_iteration_production_test --deterministic-debug
     )
+    if(XTBLOOM_CPU_LINALG_RUNTIME)
+      add_test(NAME xtbloom.cuda.scc_spin_frozen_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-frozen-replay
+      )
+      add_test(NAME xtbloom.cuda.scc_spin_two_origin_replay
+        COMMAND xtbloom_cuda_scc_iteration_production_test --spin-two-origin-replay
+      )
+      set_tests_properties(xtbloom.cuda.scc_spin_frozen_replay
+        xtbloom.cuda.scc_spin_two_origin_replay PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1;MKL_NUM_THREADS=1"
+        SKIP_RETURN_CODE 77
+      )
+    endif()
 
     # Focused #130 benchmark. It reuses the production SCC fixture but runs a
     # one-remaining-iteration state so the conditional WHILE body count and
@@ -5084,6 +5272,10 @@ if(XTBLOOM_BUILD_EXTERNAL_ENERGY_SMOKE)
   if(TARGET xtbloom_gfn2_mulliken_avx2_objects)
     target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
       xtbloom_gfn2_mulliken_avx2_objects)
+  endif()
+  if(TARGET xtbloom_gfn2_mulliken_avx512_objects)
+    target_link_libraries(xtbloom_external_energy_projection_basis_smoke PRIVATE
+      xtbloom_gfn2_mulliken_avx512_objects)
   endif()
 
   # Register the focused executables only in test-enabled source builds. They

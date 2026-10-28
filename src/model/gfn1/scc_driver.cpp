@@ -315,6 +315,7 @@ bool same_eigensolver(const EigensolverPlan& first, const EigensolverPlan& secon
          first.total_matrix_elements() == second.total_matrix_elements() &&
          first.maximum_orbitals() == second.maximum_orbitals() &&
          first.minimum_overlap_rcond() == second.minimum_overlap_rcond() &&
+         first.single_precision_enabled() == second.single_precision_enabled() &&
          first.overlap_cache_size_bytes() == second.overlap_cache_size_bytes() &&
          first.worker_workspace_size_bytes() == second.worker_workspace_size_bytes() &&
          first.workspace_size_bytes() == second.workspace_size_bytes() &&
@@ -982,7 +983,7 @@ xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
   if (status == XTBLOOM_STATUS_SUCCESS)
     status = gfn2::make_eigensolver_plan(
         make_eigensolver_wavefunction_layout(expected_wavefunction), expected_eigensolver, error,
-        eigensolver.minimum_overlap_rcond());
+        eigensolver.minimum_overlap_rcond(), eigensolver.single_precision_enabled());
   if (status == XTBLOOM_STATUS_SUCCESS)
     status = make_scc_mixer_plan(expected_wavefunction, mixer.history_size(), mixer.damping(),
                                  mixer.rms_tolerance(), mixer.maximum_tolerance(), expected_mixer,

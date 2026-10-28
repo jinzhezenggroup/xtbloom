@@ -1,6 +1,8 @@
 #include "runtime/backend.hpp"
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <utility>
@@ -24,6 +26,20 @@ bool resolve_cuda(std::int32_t requested_device, std::int32_t& resolved_device,
   error = "the xtbloom library was built without CUDA support";
   return false;
 #endif
+}
+
+xtbloom_status_t read_cpu_precision_policy(CpuPrecisionPolicy& policy, std::string& error) {
+  const char* value = std::getenv("XTBLOOM_CPU_PRECISION");
+  if (value == nullptr || std::strcmp(value, "fp64") == 0) {
+    policy = CpuPrecisionPolicy::kFloat64;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (std::strcmp(value, "adaptive") == 0) {
+    policy = CpuPrecisionPolicy::kAdaptive;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  error = "XTBLOOM_CPU_PRECISION must be unset or exactly 'fp64' or 'adaptive' for a CPU context";
+  return XTBLOOM_STATUS_INVALID_ARGUMENT;
 }
 
 }  // namespace
@@ -85,6 +101,14 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
     }
   }
 
+  CpuPrecisionPolicy cpu_precision = CpuPrecisionPolicy::kFloat64;
+  if (selected == XTBLOOM_BACKEND_CPU) {
+    const xtbloom_status_t status = read_cpu_precision_policy(cpu_precision, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
+
   Context* created = new (std::nothrow) Context{};
   if (created == nullptr) {
     error = "failed to allocate a xtbloom context";
@@ -96,6 +120,7 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
   created->cpu_threads = options.cpu_threads;
   created->cpu_isa = resolved_cpu_isa;
   created->stream = options.stream;
+  created->cpu_precision = cpu_precision;
 #if defined(XTBLOOM_HAS_CUDA)
   if (selected == XTBLOOM_BACKEND_CUDA) {
     try {
@@ -141,8 +166,8 @@ xtbloom_status_t ensure_gfn2_cpu_execution_cache(Context& context, std::string& 
     /* Keep the established GFN2 pool context-owned, but construct it only when
      * GFN2 is selected so publishing GFN1 does not double every CPU context's
      * resident thread count. */
-    context.gfn2_cpu_execution_cache =
-        std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads, context.cpu_isa);
+    context.gfn2_cpu_execution_cache = std::make_shared<Gfn2CpuExecutionCache>(
+        context.cpu_threads, context.cpu_isa, context.cpu_precision);
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the CPU GFN2 execution cache";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;

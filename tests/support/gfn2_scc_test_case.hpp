@@ -18,6 +18,10 @@ namespace xtbloom::test::gfn2 {
 
 /* Small system geometries supported by the reusable SCC test fixture. */
 enum class SmallSystemKind {
+  /* User-supplied CO_6444267115601304224457962: a 60-atom yttrium
+   * complex with a numerically sensitive two-channel SCC trajectory (#509).
+   * The electronic specification is supplied separately through the options. */
+  kYttriumSpinComplex,
   kH2,
   kHe,
   kLiH,
@@ -30,6 +34,14 @@ enum class SmallSystemKind {
    * crosses the sparse pair-list dense-fallback crossover so the production
    * runtime path exercises the bucketed consistency gate. */
   kC20H42,
+  /* A deterministic C10H22 alkane built by benchmarks/natoms_scaling.py's
+   * matching geometry algorithm; its GFN2 basis contains exactly 62 AOs. */
+  kC10H22,
+  /* Component-only synthetic clusters for exact AO edges, not molecular
+   * endpoint geometries or scientifically qualified systems. */
+  kSyntheticC10,
+  kSyntheticC10HCation,
+  kSyntheticC45,
   /* A 272-atom C90H182 chain with 542 GFN2 orbitals. CUDA 12.9 switches the
    * vector eigensolver to a non-capturable provider path above 512 orbitals,
    * so this case exercises issue #264's large-singleton capture boundary. */
@@ -61,6 +73,10 @@ struct HostSccCaseOptions {
   double energy_tolerance = 1.0e-8;
   double electronic_temperature = 0.0;
   std::uint64_t geometry_generation = 1u;
+  /* Long, branch-sensitive trajectories need the actual production LP64
+   * provider rather than the fixture's portable Jacobi reference solver.
+   * Opt-in keeps existing tests runnable without an installed BLAS runtime. */
+  bool use_production_linalg = false;
 };
 
 /*

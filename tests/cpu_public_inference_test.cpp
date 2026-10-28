@@ -10,10 +10,12 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include "xtbloom/xtbloom.h"
+#include "xtbloom/xtbloom_external_energy.h"
 
 namespace allocation_test {
 std::atomic<std::size_t> count{0u};
@@ -77,6 +79,51 @@ struct ContextDeleter {
 };
 
 using ContextHandle = std::unique_ptr<xtbloom_context_t, ContextDeleter>;
+
+bool set_precision_environment(const char* value) {
+#if defined(_WIN32)
+  return _putenv_s("XTBLOOM_CPU_PRECISION", value) == 0;
+#else
+  return setenv("XTBLOOM_CPU_PRECISION", value, 1) == 0;
+#endif
+}
+
+bool unset_precision_environment() {
+#if defined(_WIN32)
+  return _putenv_s("XTBLOOM_CPU_PRECISION", "") == 0;
+#else
+  return unsetenv("XTBLOOM_CPU_PRECISION") == 0;
+#endif
+}
+
+class PrecisionEnvironmentGuard {
+ public:
+  PrecisionEnvironmentGuard() {
+    if (const char* value = std::getenv("XTBLOOM_CPU_PRECISION"); value != nullptr) {
+      had_value_ = true;
+      value_ = value;
+    }
+  }
+
+  ~PrecisionEnvironmentGuard() {
+    if (had_value_) {
+      (void)set_precision_environment(value_.c_str());
+    } else {
+#if defined(_WIN32)
+      (void)_putenv_s("XTBLOOM_CPU_PRECISION", "");
+#else
+      (void)unsetenv("XTBLOOM_CPU_PRECISION");
+#endif
+    }
+  }
+
+  PrecisionEnvironmentGuard(const PrecisionEnvironmentGuard&) = delete;
+  PrecisionEnvironmentGuard& operator=(const PrecisionEnvironmentGuard&) = delete;
+
+ private:
+  bool had_value_ = false;
+  std::string value_;
+};
 
 struct PublicBatch {
   std::vector<std::int64_t> atom_offsets;
@@ -2282,6 +2329,56 @@ int test_gfn1_plan_workspace_warm_and_topology_transactions() {
   return 0;
 }
 
+int test_plan_unaligned_automatic_spin_channels() {
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  for (const xtbloom_model_t model : {XTBLOOM_MODEL_GFN1_XTB, XTBLOOM_MODEL_GFN2_XTB}) {
+    ContextHandle context = make_cpu_context(1);
+    CHECK(context != nullptr);
+    PublicBatch request = make_h2_he_batch();
+    request.atomic_numbers.back() = 1;
+    request.unpaired_electrons.back() = 1;
+    request.spin_channels = {1, 2};
+    request.bind(flags);
+    request.options.model = model;
+    CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    const PublicOutputImage reference(request);
+
+    /* Byte-aligned C buffers are valid. Exercise capture and repeated identity
+     * checks using both automatic and equivalent explicit spin selectors. */
+    alignas(std::int32_t) std::array<unsigned char, 1u + 2u * sizeof(std::int32_t)> spin{};
+    const auto set_spin = [&](std::int32_t first, std::int32_t second) {
+      const std::array<std::int32_t, 2> channels{{first, second}};
+      std::memcpy(spin.data() + 1u, channels.data(), sizeof(channels));
+    };
+    request.batch.spin_channels = {spin.data() + 1u, spin.size() - 1u, XTBLOOM_MEMORY_HOST, 0};
+    set_spin(0, 0);
+    xtbloom_plan_t* raw_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+          XTBLOOM_STATUS_SUCCESS);
+    PlanHandle plan(raw_plan);
+    for (const bool automatic : {true, false, true}) {
+      set_spin(automatic ? 0 : 1, automatic ? 0 : 2);
+      CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+            XTBLOOM_STATUS_SUCCESS);
+      CHECK(reference.matches(request));
+    }
+
+    /* An actual channel change or legacy missing suffix must still reject
+     * reuse before publishing any part of the caller's output image. */
+    set_spin(1, 1);
+    CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(reference.matches(request));
+    request.batch.spin_channels = {nullptr, 0u, XTBLOOM_MEMORY_HOST, 0};
+    CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(reference.matches(request));
+  }
+  return 0;
+}
+
 int test_plan_create_query_workspace_and_reuse() {
   const std::uint32_t flags =
       XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
@@ -2961,6 +3058,183 @@ int test_native_periodic_cpu_unrestricted_and_temperature() {
   return 0;
 }
 
+struct AdaptiveFailureInjection {
+  xtbloom_external_energy_phase_t phase = XTBLOOM_EXTERNAL_ENERGY_PHASE_ENERGY;
+  bool permanent = false;
+  std::atomic<unsigned> failures{0u};
+};
+
+xtbloom_status_t inject_adaptive_lane_failure(
+    void* opaque, int64_t, xtbloom_external_energy_phase_t phase, int32_t, int64_t atom_count,
+    int64_t, const int32_t*, int64_t, const double*, int64_t, const int64_t*, int64_t, int64_t,
+    int64_t, const int64_t*, int64_t, const int64_t*, int64_t, const uint8_t*, int64_t,
+    const uint8_t*, int64_t, int64_t, int64_t, double, int32_t, const double*, int64_t,
+    const double*, int64_t, const double*, int64_t, int64_t, int64_t, const int64_t*, int64_t,
+    const int64_t*, int64_t, const uint8_t*, int64_t, const double*, int64_t, const double*,
+    int64_t, double*, int64_t, double*, int64_t, double* energy) {
+  auto& injection = *static_cast<AdaptiveFailureInjection*>(opaque);
+  *energy = 0.0;
+  if (atom_count == 2 && phase == injection.phase &&
+      (injection.permanent || injection.failures.load(std::memory_order_relaxed) == 0u)) {
+    injection.failures.fetch_add(1u, std::memory_order_relaxed);
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+int test_adaptive_lane_failure_rolls_back_and_preserves_peers() {
+  PrecisionEnvironmentGuard environment_guard;
+  CHECK(set_precision_environment("adaptive"));
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle clean_context = make_cpu_context(2);
+  CHECK(clean_context != nullptr);
+  PublicBatch reference = make_h2_he_batch();
+  reference.bind(flags);
+  CHECK(xtbloom_compute(clean_context.get(), &reference.batch, &reference.options,
+                        &reference.result) == XTBLOOM_STATUS_SUCCESS);
+
+  for (auto phase :
+       {XTBLOOM_EXTERNAL_ENERGY_PHASE_POTENTIAL, XTBLOOM_EXTERNAL_ENERGY_PHASE_ENERGY}) {
+    for (bool permanent : {false, true}) {
+      ContextHandle context = make_cpu_context(2);
+      CHECK(context != nullptr);
+      AdaptiveFailureInjection injection;
+      injection.phase = phase;
+      injection.permanent = permanent;
+      CHECK(xtbloom_context_set_external_energy_callback(context.get(),
+                                                         &inject_adaptive_lane_failure,
+                                                         &injection) == XTBLOOM_STATUS_SUCCESS);
+      PublicBatch candidate = make_h2_he_batch();
+      candidate.bind(flags);
+      const PublicOutputImage before(candidate);
+      const xtbloom_status_t status =
+          xtbloom_compute(context.get(), &candidate.batch, &candidate.options, &candidate.result);
+      CHECK(injection.failures.load(std::memory_order_relaxed) == (permanent ? 2u : 1u));
+      if (permanent) {
+        // A final FP64 call-level failure still rejects the complete public transaction.
+        CHECK(status == XTBLOOM_STATUS_INTERNAL_ERROR);
+        CHECK(before.matches(candidate));
+        CHECK(xtbloom_context_set_external_energy_callback(context.get(), nullptr, nullptr) ==
+              XTBLOOM_STATUS_SUCCESS);
+        continue;
+      }
+      CHECK(status == XTBLOOM_STATUS_SUCCESS);
+      // A failed speculative lane must neither restart nor change its helium peer.
+      CHECK(candidate.statuses[1] == reference.statuses[1]);
+      CHECK(candidate.converged[1] == reference.converged[1]);
+      CHECK(candidate.iterations[1] == reference.iterations[1]);
+      CHECK(candidate.energies[1] == reference.energies[1]);
+      CHECK(candidate.atomic_charges[2] == reference.atomic_charges[2]);
+      CHECK(std::equal(candidate.forces.begin() + 6, candidate.forces.end(),
+                       reference.forces.begin() + 6));
+      {
+        CHECK(candidate.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+        CHECK(candidate.converged[0] == 1u);
+        CHECK(candidate.iterations[0] >= 4);
+        CHECK(near(candidate.energies[0], reference.energies[0], 1.0e-8));
+        for (std::size_t index = 0; index < 6; ++index) {
+          CHECK(near(candidate.forces[index], reference.forces[index], 5.0e-7));
+        }
+        CHECK(near(candidate.atomic_charges[0], reference.atomic_charges[0], 1.0e-8));
+        CHECK(near(candidate.atomic_charges[1], reference.atomic_charges[1], 1.0e-8));
+      }
+      CHECK(xtbloom_context_set_external_energy_callback(context.get(), nullptr, nullptr) ==
+            XTBLOOM_STATUS_SUCCESS);
+    }
+  }
+  return 0;
+}
+
+int test_adaptive_precision_matches_fp64_and_keeps_warm_fp64() {
+  PrecisionEnvironmentGuard environment_guard;
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+
+  CHECK(unset_precision_environment());
+  ContextHandle default_context = make_cpu_context(2);
+  CHECK(default_context != nullptr);
+  PublicBatch default_precision = make_h2_he_batch();
+  default_precision.bind(flags);
+  CHECK(xtbloom_compute(default_context.get(), &default_precision.batch, &default_precision.options,
+                        &default_precision.result) == XTBLOOM_STATUS_SUCCESS);
+
+  CHECK(set_precision_environment("fp64"));
+  ContextHandle fp64_context = make_cpu_context(2);
+  CHECK(fp64_context != nullptr);
+  PublicBatch reference = make_h2_he_batch();
+  reference.bind(flags);
+  CHECK(xtbloom_compute(fp64_context.get(), &reference.batch, &reference.options,
+                        &reference.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(default_precision.energies == reference.energies);
+  CHECK(default_precision.forces == reference.forces);
+  CHECK(default_precision.atomic_charges == reference.atomic_charges);
+  CHECK(default_precision.iterations == reference.iterations);
+  CHECK(default_precision.statuses == reference.statuses);
+
+  CHECK(set_precision_environment("adaptive"));
+  ContextHandle adaptive_context = make_cpu_context(2);
+  CHECK(adaptive_context != nullptr);
+
+  /* Limits that cannot hold the complete four-iteration FP32 allowance plus
+   * four FP64 cleanup iterations conservatively retain the exact FP64 path.
+   * This protects caller-selected low iteration budgets and peer-failure
+   * semantics from an adaptive prefix that could consume the cleanup budget. */
+  for (const std::int32_t maximum_iterations : std::array<std::int32_t, 3>{5, 6, 7}) {
+    PublicBatch limited_reference = make_h2_he_batch();
+    limited_reference.bind(flags);
+    limited_reference.options.max_scc_iterations = maximum_iterations;
+    CHECK(xtbloom_compute(fp64_context.get(), &limited_reference.batch, &limited_reference.options,
+                          &limited_reference.result) == XTBLOOM_STATUS_SUCCESS);
+    const PublicOutputImage reference_image(limited_reference);
+
+    PublicBatch limited_adaptive = make_h2_he_batch();
+    limited_adaptive.bind(flags);
+    limited_adaptive.options.max_scc_iterations = maximum_iterations;
+    CHECK(xtbloom_compute(adaptive_context.get(), &limited_adaptive.batch,
+                          &limited_adaptive.options,
+                          &limited_adaptive.result) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(reference_image.matches(limited_adaptive));
+  }
+
+  PublicBatch adaptive = make_h2_he_batch();
+  adaptive.bind(flags);
+  CHECK(xtbloom_compute(adaptive_context.get(), &adaptive.batch, &adaptive.options,
+                        &adaptive.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(adaptive.statuses ==
+        std::vector<std::int32_t>(adaptive.statuses.size(), XTBLOOM_STATUS_SUCCESS));
+  for (std::size_t system = 0u; system < adaptive.energies.size(); ++system) {
+    CHECK(near(adaptive.energies[system], reference.energies[system], 2.0e-10));
+    /* The adaptive controller suppresses convergence until the FP64 cleanup
+     * budget is complete. This public-path guard prevents publishing the
+     * representative eligible workload with fewer than four cleanup rounds;
+     * focused eigensolver/isolation tests cover actual FP32 provider calls. */
+    CHECK(adaptive.iterations[system] >= 5);
+  }
+  for (std::size_t component = 0u; component < adaptive.forces.size(); ++component) {
+    CHECK(near(adaptive.forces[component], reference.forces[component], 2.0e-9));
+  }
+  for (std::size_t atom = 0u; atom < adaptive.atomic_charges.size(); ++atom) {
+    CHECK(near(adaptive.atomic_charges[atom], reference.atomic_charges[atom], 2.0e-9));
+  }
+
+  const std::vector<double> adaptive_fresh_energies = adaptive.energies;
+  const std::vector<double> adaptive_fresh_forces = adaptive.forces;
+  const std::vector<std::int32_t> adaptive_fresh_iterations = adaptive.iterations;
+  adaptive.bind(flags);
+  adaptive.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(adaptive_context.get(), &adaptive.batch, &adaptive.options,
+                        &adaptive.result) == XTBLOOM_STATUS_SUCCESS);
+  for (std::size_t system = 0u; system < adaptive.energies.size(); ++system) {
+    CHECK(near(adaptive.energies[system], adaptive_fresh_energies[system], 2.0e-10));
+    CHECK(adaptive.iterations[system] < adaptive_fresh_iterations[system]);
+  }
+  for (std::size_t component = 0u; component < adaptive.forces.size(); ++component) {
+    CHECK(near(adaptive.forces[component], adaptive_fresh_forces[component], 2.0e-9));
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -3053,6 +3327,9 @@ int main() {
   if (const int line = test_gfn1_plan_workspace_warm_and_topology_transactions(); line != 0) {
     return line;
   }
+  if (const int line = test_plan_unaligned_automatic_spin_channels(); line != 0) {
+    return line;
+  }
   if (const int line = test_plan_create_query_workspace_and_reuse(); line != 0) {
     return line;
   }
@@ -3085,6 +3362,12 @@ int main() {
   }
   if (const int line = test_native_periodic_cpu_energy_and_warm(); line != 0) {
     return line;
+  }
+  if (const int line = test_adaptive_lane_failure_rolls_back_and_preserves_peers(); line != 0) {
+    return EXIT_FAILURE;
+  }
+  if (const int line = test_adaptive_precision_matches_fp64_and_keeps_warm_fp64(); line != 0) {
+    return EXIT_FAILURE;
   }
   return 0;
 }

@@ -12,7 +12,19 @@ const MullikenKernelTable& mulliken_avx2_fma_kernels() noexcept {
 }
 #endif
 
+#if !defined(XTBLOOM_HAS_AVX512_FMA_KERNELS)
+const MullikenKernelTable& mulliken_avx512_fma_kernels() noexcept {
+  /* Builds without the isolated AVX-512 object never select this fallback. */
+  return mulliken_baseline_kernels();
+}
+#endif
+
 const MullikenKernelTable& mulliken_kernels_for_cpu_isa(CpuIsa isa) noexcept {
+#if defined(XTBLOOM_HAS_AVX512_FMA_KERNELS)
+  if (isa == CpuIsa::kAvx512Fma) {
+    return mulliken_avx512_fma_kernels();
+  }
+#endif
 #if defined(XTBLOOM_HAS_AVX2_FMA_KERNELS)
   if (isa == CpuIsa::kAvx2Fma) {
     return mulliken_avx2_fma_kernels();

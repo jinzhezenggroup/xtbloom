@@ -9,6 +9,7 @@ the scripts and method pages here define how evidence is produced and audited.
 | Question | Runner | Method | Hardware-free test |
 | --- | --- | --- | --- |
 | End-to-end gas/QM-MM matrix across xTBloom, xTB, tblite, and dxtb | `run.py` | [Public matrix](matrix.md) | `benchmarks.test_run`, `benchmarks.test_dxtb_adapter` |
+| Paper-wide frozen-manifest correctness and performance matrix | `dataset_runner.py`, `paper/bin/submit.sh` | [Paper experiment suite](paper/README.md) | `benchmarks.test_dataset_runner`, `benchmarks.test_paper_suite` |
 | Cross-engine molecule-size scaling and the public README figure | `natoms_cross_engine.py` | [Cross-engine scaling](cross-engine.md) | `benchmarks.test_natoms_cross_engine` |
 | CPU FRESH/WARM scaling against explicit references | `natoms_scaling.py` | [FRESH/WARM scaling](fresh-warm.md) | `benchmarks.test_natoms_scaling` |
 | Cost of xTBloom-owned CUDA DLPack result arenas | `dlpack_result_memory.py` | [DLPack result memory](dlpack-result-memory.md) | `benchmarks.test_dlpack_result_memory` |
@@ -16,11 +17,149 @@ the scripts and method pages here define how evidence is produced and audited.
 | Opt-in CUDA SCC activity and actual execution-path diagnosis | `cuda_diagnostics.py` | [CUDA SCC diagnostics](cuda-diagnostics.md) | `benchmarks.test_cuda_diagnostics` |
 | Offline preservation of saved 32/62-atom alkane inputs, not timing or qualification | `historical_alkane_inputs.py` | [Historical input assembly](historical-alkane-inputs.md) | `benchmarks.test_historical_alkane_inputs` |
 | Diagnostic-only paired native observations on those saved inputs | `historical_alkane_capture.py` | [Historical CUDA capture](historical-alkane-capture.md) | `benchmarks.test_historical_alkane_capture` |
+| Restricted CUDA chain/tail one-body component crossover | `cuda_crossover.py` | [Component crossover](cuda-crossover.md) | `benchmarks.test_cuda_crossover` |
+| Input-only AO/risk preregistration and opt-in finite-list runner, not a measured policy | `convergence_grouping.py`, `run.py --ao-grouping ao-risk` | [Convergence grouping prototype](convergence-grouping.md) | `benchmarks.test_convergence_grouping`, `benchmarks.test_convergence_runner` |
+| Pinned OMol25 inputs for diagnostic finite-list runs | `omol25_inputs.py` | [Input conversion](omol25-inputs.md) | `benchmarks.test_omol25_inputs` |
 
 These protocols answer different questions. In particular, the public
 cross-engine figure and the FRESH/WARM study use different SCC settings,
 correctness gates, start policies, workloads, and sample counts. Never combine
 their numbers or thresholds.
+
+## Finite-list exact-AO grouping
+
+`run.py` also has an explicit finite-list path for deterministic exact-AO
+grouping. The default matrix retains input order. Finite-list `auto` is the
+default and selects exact-AO only for eligible GFN2 CUDA host/FRESH queues
+with repeated AO counts crossing original batch boundaries; all other auto
+coordinates retain `original` with a recorded reason. `original`/`off` are
+explicit baselines. Requested and resolved policy are reported separately;
+this does not relabel historical measurements or claim new-default E2E
+qualification. Both this runner and the Python product entry consume the
+installed planner's shared policy resolver. `exact-ao` runs one grouped layout; `paired` is the opt-in
+original-versus-exact-AO comparison. Paired mode is limited to xTBloom CPU
+host or CUDA host descriptors with strict FRESH SCC starts. It creates both
+layout owner sets once, keeps them alive together, and never reconstructs
+contexts per sample. CUDA execution must use the local GPU scheduler where
+required.
+Paired mode is AO-only: convergence inputs and calibration/holdout partition
+flags are rejected before workload or native-library setup. The separately
+pinned input-only convergence prototype remains a single-layout experiment.
+Every case ID must occur once in the selected manifest; duplicate IDs are
+rejected before planning.
+
+The AO key is computed from the QM atoms in each input and the generated
+`data/parameters/gfn2.json`: each configured shell contributes `2*l+1`
+spatial orbitals using its exact angular momentum. External point charges do
+not contribute AOs. The plan sorts by ascending AO count, breaking ties by
+canonical input index, then divides each exact-AO group into chunks no larger
+than the requested cap. A rare-AO group remains a smaller tail batch. The plan
+hash covers strategy, input IDs/order, AO counts, GFN2 parameter hash, cap, and
+the resulting batch/index mapping. Spin metadata remains attached to each
+whole system; it is not a grouping key, and no SCC result or convergence
+outcome is read while planning.
+
+Each property and cap reports planning and one-time owner setup separately,
+then per-round synchronous compute, result download, per-system publication,
+canonical scatter, end-to-end time, and host/device memory. Paired mode runs
+one cold pair, the requested warmup pairs, then every measured pair. Order
+starts original/exact-AO and alternates AB/BA continuously across all phases.
+Both layout owner sets remain resident for every round, and memory snapshots
+state that shared residency. End-to-end excludes planning, one-time setup,
+correctness comparisons, and final owner cleanup; one-shot totals and
+plan/setup amortization are reported separately with their denominators.
+Every requested round retains full per-original-ID E/F/q, SCC iterations,
+convergence, status, correctness, and raw NaN slices. Failed, unavailable, and
+not-run coordinates remain explicit. Pairwise layout comparison uses the
+manifest's existing absolute tolerances, records discrete branch differences,
+and never counts as independent scientific qualification. Missing independent
+references therefore keep `claim_eligible` false even when layouts agree.
+Qualification also requires every cold, warmup, and measured phase to pass;
+later successful calls do not erase an earlier failure. Memory observations
+are process-lifetime host high-water marks and device-global samples, not
+per-layout or per-owner device peaks. Initialized compute options are captured
+once per owner outside sweep timing and must match across both layouts.
+`numerical_comparison_eligible` is only the numerical/protocol gate;
+`claim_eligible` and performance-eligibility flags remain false because the
+selected library's exact clean producer/source binding is `UNVERIFIED`.
+Source and library hashes alone do not establish that association, even for a
+clean runner. This mode therefore reports diagnostic evidence, not an adopted
+performance claim.
+
+The optional [controlled build receipt](build-receipts.md) recorder and
+read-only checker bind retained source/artifact bytes without promoting this
+gate. Paired mode can archive externally pinned preflight/postflight checks;
+actual mapped-image/dependency/scientific/runtime/performance admission remains
+separate, and every performance flag stays false.
+The explicit Linux-only `--runtime-mapped-images` option additionally binds
+live paired adapters' public entrypoints to the selected file at pre/post
+endpoints and retains mapped ELF inventories. It requires a pinned receipt,
+fails closed on integrity errors, and does not establish transient dependency
+closure, resident-code attestation, science or performance eligibility. Its
+separately reported observation costs and instrumented memory effects must
+not be presented as uninstrumented performance evidence.
+
+The existing `original` and `exact-ao` single-layout modes remain available
+for diagnostic runs. They do not provide interleaved paired evidence.
+
+The JSON reporter emits strict JSON. NaN and infinities use tagged objects,
+for example `{"__xtbloom_nonfinite_float__":"NaN"}`, which
+`run.restore_json_safe_value` can decode back to IEEE non-finite values.
+The top-level provenance object contains SHA-256 digests and sizes for the
+manifest and selected input files, without embedding input contents. These
+streaming archival hashes are computed before benchmark cells and excluded
+from planning and sweep timings. Set `--require-available` on qualification
+runs so any unavailable requested row exits nonzero; unavailable rows remain
+in the report either way.
+
+Example GPU run with a finite case-ID file (one ID per line; blank lines and
+`#` comments are ignored):
+
+```bash
+srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
+  --time=00:10:00 bash -lc 'python3 benchmarks/run.py \
+  --library /absolute/path/to/libxtbloom.so \
+  --manifest /absolute/path/to/manifest.json \
+  --case-ids-file /absolute/path/to/case-ids.txt \
+  --engines xtbloom --backends cuda --cuda-memory-modes host \
+  --ao-grouping paired --batch-sizes 64,256 \
+  --properties energy,force --warmups 2 --repetitions 5 \
+  --output-json build/benchmarks/ao-exact.json \
+  --output-csv build/benchmarks/ao-exact.csv \
+  --fail-on-correctness --require-available'
+```
+
+This command produces one interleaved comparison row for each property and
+cap. JSON keeps full per-round outputs and pairing order; CSV carries the round
+schedule, timing pairs, plan hashes, and qualification flags. Original input
+manifest identity and independent scientific references remain separate
+acceptance gates: paired equality alone cannot satisfy either gate.
+
+For a local CPU smoke check, run both strategies against the same built
+library and finite case list. Ensure the configured LP64 linear-algebra
+runtime is discoverable by the loader (for example, add its directory to
+`LD_LIBRARY_PATH` when needed). This small conformance selection validates the
+execution path only; it does not replace the issue's original performance
+workload or qualify a speed claim.
+
+```bash
+library="$PWD/build/cpu-public/libxtbloom.so"
+for strategy in original exact-ao; do
+  python3 benchmarks/run.py \
+    --library "$library" \
+    --case-ids h3_plus,ketene,nenacl,sif5_minus \
+    --engines xtbloom --backends cpu \
+    --ao-grouping "$strategy" --batch-sizes 2 \
+    --properties energy,force --warmups 0 --repetitions 1 \
+    --output-json "build/benchmarks/ao-cpu-$strategy.json" \
+    --output-csv "build/benchmarks/ao-cpu-$strategy.csv" \
+    --fail-on-correctness --require-available
+done
+```
+
+This CPU run checks the same planner, strict-FRESH adapter, result slices, and
+conformance comparisons. It does not replace CUDA correctness or performance
+evidence.
 
 The public cross-engine selection is maintained in
 `natoms_cross_engine_publication.json`. Each engine/backend points to its own
@@ -112,6 +251,9 @@ set before changing benchmark documentation or publication logic:
 
 ```bash
 python3 -m unittest -v benchmarks.test_run
+python3 -m unittest -v benchmarks.test_dataset_runner
+python3 -m unittest -v benchmarks.test_paper_suite
+python3 -m unittest -v benchmarks.test_convergence_grouping benchmarks.test_convergence_runner
 python3 -m unittest -v benchmarks.test_dxtb_adapter
 python3 -m unittest -v benchmarks.test_natoms_cross_engine
 python3 -m unittest -v benchmarks.test_natoms_scaling

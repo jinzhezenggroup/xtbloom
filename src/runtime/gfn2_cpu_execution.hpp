@@ -15,6 +15,8 @@
 namespace xtbloom::detail {
 
 struct Gfn2CpuPeriodicSnapshot;
+struct Gfn2CpuSccSnapshot;
+enum class CpuPrecisionPolicy : std::uint8_t;
 
 /*
  * Context-owned cache for restricted host GFN2 execution.
@@ -35,6 +37,8 @@ class Gfn2CpuExecutionCache {
    * steady-state compute call never creates or destroys threads.
    */
   explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa = CpuIsa::kBaseline);
+  Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa,
+                        CpuPrecisionPolicy precision_policy);
   ~Gfn2CpuExecutionCache();
 
   Gfn2CpuExecutionCache(const Gfn2CpuExecutionCache&) = delete;
@@ -63,7 +67,16 @@ class Gfn2CpuExecutionCache {
   friend xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& cache,
                                                                   Gfn2CpuPeriodicSnapshot& snapshot,
                                                                   std::string& error);
+  friend xtbloom_status_t snapshot_gfn2_cpu_scc_for_testing(Gfn2CpuExecutionCache& cache,
+                                                            Gfn2CpuSccSnapshot& snapshot,
+                                                            std::string& error);
 };
+
+/* Keep this declaration unconditional so all translation units agree on the
+ * cache's class definition. Only the standalone diagnostic defines it. */
+xtbloom_status_t snapshot_gfn2_cpu_scc_for_testing(Gfn2CpuExecutionCache& cache,
+                                                   Gfn2CpuSccSnapshot& snapshot,
+                                                   std::string& error);
 
 /*
  * Read-only state exported to the CUDA periodic bridge after a completed CPU

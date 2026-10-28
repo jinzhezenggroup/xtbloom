@@ -862,7 +862,7 @@ const IntegralKernelTable& integral_avx2_fma_kernels() noexcept {
 
 const IntegralKernelTable& integral_kernels_for_cpu_isa(CpuIsa isa) noexcept {
 #if defined(XTBLOOM_HAS_AVX2_FMA_KERNELS)
-  if (isa == CpuIsa::kAvx2Fma) {
+  if (isa == CpuIsa::kAvx2Fma || isa == CpuIsa::kAvx512Fma) {
     return integral_avx2_fma_kernels();
   }
 #else

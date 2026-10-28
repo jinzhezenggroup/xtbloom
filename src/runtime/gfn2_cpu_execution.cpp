@@ -1,6 +1,10 @@
 #include "runtime/gfn2_cpu_execution.hpp"
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+#include "runtime/gfn2_cpu_scc_snapshot.hpp"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -50,6 +54,7 @@
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "runtime/backend.hpp"
 
 namespace xtbloom::detail {
 namespace {
@@ -68,6 +73,12 @@ constexpr std::size_t kHostAlignment = 64u;
 constexpr std::int32_t kDefaultMixerHistory = 8;
 constexpr double kDefaultMixerDamping = 0.4;
 constexpr std::size_t kMaximumAutomaticCpuThreads = 64u;
+constexpr std::uint64_t kMaximumAdaptiveFloat32Iterations = 4u;
+constexpr std::uint64_t kMinimumAdaptiveFloat64Iterations = 4u;
+constexpr std::uint64_t kMinimumAdaptiveIterationBudget =
+    kMaximumAdaptiveFloat32Iterations + kMinimumAdaptiveFloat64Iterations;
+constexpr double kAdaptiveResidualFloor = 1.0e-5;
+constexpr double kAdaptiveFrontierGapThreshold = 1.0e-4;
 
 /* ``std::aligned_alloc`` is not provided by MSVC; wrap the platform primitive
  * so AlignedBuffer can allocate and free without per-platform guards. */
@@ -435,6 +446,11 @@ void stage_request(const xtbloom_batch_t& batch, HostRequest& request) {
   } else {
     request.spin_channels.assign(static_cast<std::size_t>(batch.batch_size), 1);
   }
+  for (std::size_t system = 0; system < request.spin_channels.size(); ++system) {
+    if (request.spin_channels[system] == 0) {
+      request.spin_channels[system] = request.unpaired_electrons[system] == 0 ? 1 : 2;
+    }
+  }
 
   if (batch.total_point_charges != 0) {
     copy_from_c_buffer(batch.point_charge_offsets, static_cast<std::size_t>(batch.batch_size) + 1u,
@@ -731,10 +747,12 @@ struct SystemOutput {
 };
 
 struct SystemExecution {
-  explicit SystemExecution(SystemKey value, const MullikenKernelTable& kernels)
-      : key(std::move(value)), mulliken_kernels(kernels) {}
+  explicit SystemExecution(SystemKey value, const MullikenKernelTable& kernels,
+                           CpuPrecisionPolicy selected_precision)
+      : key(std::move(value)), precision_policy(selected_precision), mulliken_kernels(kernels) {}
 
   SystemKey key;
+  const CpuPrecisionPolicy precision_policy;
   std::vector<std::int64_t> atom_offsets{0, 0};
   std::vector<std::int64_t> point_offsets{0, 0};
   std::vector<double> molecular_charges;
@@ -847,6 +865,15 @@ struct SystemExecution {
   ExternalEnergyCallback external_energy_callback = nullptr;
   void* external_energy_opaque = nullptr;
 
+  /* An adaptive FP32 iteration is speculative until every SCC stage commits.
+   * These context-owned buffers allow a post-eigensolver numerical failure to
+   * restore the complete lane transaction and retry from the same state in
+   * FP64 without a steady-state allocation. Default FP64 systems allocate no
+   * retry storage. */
+  AlignedBuffer adaptive_retry_wavefunction_storage;
+  AlignedBuffer adaptive_retry_mixer_state_storage;
+  AlignedBuffer adaptive_retry_driver_state_storage;
+
   std::vector<double> component_shell_potential;
   std::vector<double> scalar_shell_potential;
   std::vector<double> atomic_potential;
@@ -958,7 +985,8 @@ struct SystemExecution {
  private:
   xtbloom_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
                                     bool need_force_derivatives, std::string& error);
-  xtbloom_status_t run_scc(const CpuLinearAlgebraBackend& backend, std::string& error);
+  xtbloom_status_t run_scc(const CpuLinearAlgebraBackend& backend, bool warm_start,
+                           std::string& error);
   xtbloom_status_t restore_warm_checkpoint(std::string& error);
   xtbloom_status_t refresh_stationary_potentials(std::string& error);
 };
@@ -1009,7 +1037,11 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   status =
       make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken_kernels, mulliken, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
+  const bool adaptive_workspace =
+      precision_policy == CpuPrecisionPolicy::kAdaptive &&
+      static_cast<std::uint64_t>(key.maximum_iterations) >= kMinimumAdaptiveIterationBudget;
+  status =
+      make_eigensolver_plan(wavefunction_layout, eigensolver, error, 1.0e-12, adaptive_workspace);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_scc_mixer_plan(wavefunction_layout, key.scc_mixer_history, key.scc_mixer_damping,
                                key.charge_tolerance, key.charge_tolerance, mixer, error);
@@ -1138,6 +1170,17 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   status = allocate(driver_workspace_storage, driver.workspace_size_bytes(), "SCC driver workspace",
                     error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (adaptive_workspace) {
+    status = allocate(adaptive_retry_wavefunction_storage, wavefunction_layout.workspace_size_bytes,
+                      "adaptive retry wavefunction checkpoint", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = allocate(adaptive_retry_mixer_state_storage, mixer.state_size_bytes(),
+                      "adaptive retry mixer checkpoint", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = allocate(adaptive_retry_driver_state_storage, driver.state_size_bytes(),
+                      "adaptive retry driver checkpoint", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
 
   status = bind_wavefunction_view(wavefunction_layout, wavefunction_storage.data(),
                                   wavefunction_storage.size(), wavefunction, error);
@@ -1397,7 +1440,9 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       warm_checkpoint_wavefunction_storage.size() + overlap_cache_storage.size() +
       eigensolver_workspace_storage.size() + mixer_state_storage.size() +
       driver_state_storage.size() + driver_workspace_storage.size() +
-      native_topology_workspace_storage.size() + native_integral_workspace_storage.size();
+      native_topology_workspace_storage.size() + native_integral_workspace_storage.size() +
+      adaptive_retry_wavefunction_storage.size() + adaptive_retry_mixer_state_storage.size() +
+      adaptive_retry_driver_state_storage.size();
   return small_vectors + direct_plan_vectors + wavefunction_plan_vectors + opaque_plan_storage +
          planar_vectors + aligned_buffers;
 }
@@ -1691,7 +1736,36 @@ xtbloom_status_t SystemExecution::restore_warm_checkpoint(std::string& error) {
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend,
+bool small_frontier_gap(const WavefunctionLayout& layout,
+                        const WavefunctionView& wavefunction) noexcept {
+  const std::size_t orbitals = static_cast<std::size_t>(layout.total_orbitals);
+  if (layout.batch_size != 1 || orbitals < 2u) {
+    return false;
+  }
+  const std::int32_t spin_channels = layout.spin_channels[0];
+  const double electron_counts[2]{layout.alpha_electron_counts[0], layout.beta_electron_counts[0]};
+  for (std::int32_t spin = 0; spin < 2; ++spin) {
+    const double electrons = electron_counts[spin];
+    if (!(electrons > 0.0) || !(electrons < static_cast<double>(orbitals))) {
+      continue;
+    }
+    const std::size_t upper = std::min(
+        orbitals - 1u, std::max<std::size_t>(1u, static_cast<std::size_t>(std::ceil(electrons))));
+    const std::size_t eigenvalue_spin = spin_channels == 1 ? 0u : static_cast<std::size_t>(spin);
+    const double* eigenvalues = wavefunction.eigenvalues + eigenvalue_spin * orbitals;
+    const double gap = eigenvalues[upper] - eigenvalues[upper - 1u];
+    if (!std::isfinite(gap) || gap <= kAdaptiveFrontierGapThreshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool retryable_adaptive_iteration_failure(xtbloom_status_t status) noexcept {
+  return status == XTBLOOM_STATUS_EIGENSOLVER_FAILED || status == XTBLOOM_STATUS_INTERNAL_ERROR;
+}
+
+xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend, bool warm_start,
                                           std::string& error) {
 #if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
   Gfn2CpuWorkerTssHook test_tss_hook = nullptr;
@@ -1699,8 +1773,36 @@ xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend
     test_tss_hook = g_test_background_tss_hook.load(std::memory_order_acquire);
   }
 #endif
+  /* Reserve enough budget for the longest allowed FP32 prefix and the full
+   * mandatory FP64 cleanup. A smaller user limit stays entirely FP64 instead
+   * of consuming a variable prefix that can leave too few cleanup iterations
+   * and turn an otherwise converged lane into forced nonconvergence. */
+  bool use_float32 =
+      precision_policy == CpuPrecisionPolicy::kAdaptive && !warm_start &&
+      static_cast<std::uint64_t>(key.maximum_iterations) >= kMinimumAdaptiveIterationBudget;
+  std::uint64_t float32_iterations = 0u;
+  std::uint64_t float64_iterations = use_float32 ? 0u : kMinimumAdaptiveFloat64Iterations;
+  double previous_residual = std::numeric_limits<double>::infinity();
+  std::uint32_t stalled_reductions = 0u;
+  const double switch_residual = std::max(kAdaptiveResidualFloor, 10.0 * key.charge_tolerance);
+
   while (driver_state.converged[0] == 0u &&
          driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS) {
+    if (use_float32) {
+      std::memcpy(adaptive_retry_wavefunction_storage.data(), wavefunction_storage.data(),
+                  wavefunction_storage.size());
+      std::memcpy(adaptive_retry_mixer_state_storage.data(), mixer_state_storage.data(),
+                  mixer_state_storage.size());
+      std::memcpy(adaptive_retry_driver_state_storage.data(), driver_state_storage.data(),
+                  driver_state_storage.size());
+    }
+    bool used_float64_fallback = false;
+    SccCpuIterationOptions iteration_options;
+    iteration_options.eigensolver_precision =
+        use_float32 ? CpuEigensolverPrecision::kFloat32 : CpuEigensolverPrecision::kFloat64;
+    iteration_options.allow_convergence =
+        !use_float32 && float64_iterations + 1u >= kMinimumAdaptiveFloat64Iterations;
+    iteration_options.used_float64_fallback = &used_float64_fallback;
 #if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
     if (test_tss_hook != nullptr) {
       test_tss_hook(false);
@@ -1709,14 +1811,68 @@ xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend
     const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
         driver, geometry, backend, overlap_cache, wavefunction, mixer_state, driver_state,
         driver_workspace, error,
-        scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr);
+        scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr, &iteration_options);
 #if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
     if (test_tss_hook != nullptr) {
       test_tss_hook(true);
     }
 #endif
     if (status != XTBLOOM_STATUS_SUCCESS) {
+      if (use_float32 && retryable_adaptive_iteration_failure(status)) {
+        /* Later FP32-derived stages can fail even when the eigensolver itself
+         * returned finite values. Roll back the whole unpublished lane, clear
+         * its FP32-contaminated Broyden history, and retry from the same state
+         * in FP64. */
+        std::memcpy(wavefunction_storage.data(), adaptive_retry_wavefunction_storage.data(),
+                    wavefunction_storage.size());
+        std::memcpy(mixer_state_storage.data(), adaptive_retry_mixer_state_storage.data(),
+                    mixer_state_storage.size());
+        std::memcpy(driver_state_storage.data(), adaptive_retry_driver_state_storage.data(),
+                    driver_state_storage.size());
+        const xtbloom_status_t restart_status =
+            restart_scc_mixer_system_cpu(mixer, 0, wavefunction, mixer_state, error);
+        if (restart_status != XTBLOOM_STATUS_SUCCESS) {
+          return restart_status;
+        }
+        use_float32 = false;
+        float64_iterations = 0u;
+        error.clear();
+        continue;
+      }
       return status;
+    }
+    if (!use_float32) {
+      ++float64_iterations;
+      continue;
+    }
+
+    ++float32_iterations;
+    const double residual = mixer_state.residual_rms[0];
+    const bool residual_rose =
+        std::isfinite(previous_residual) && residual > 1.1 * previous_residual;
+    if (std::isfinite(previous_residual) && residual >= 0.9 * previous_residual) {
+      ++stalled_reductions;
+    } else {
+      stalled_reductions = 0u;
+    }
+    const bool switch_to_float64 = used_float64_fallback || !std::isfinite(residual) ||
+                                   residual <= switch_residual || residual_rose ||
+                                   stalled_reductions >= 2u ||
+                                   float32_iterations >= kMaximumAdaptiveFloat32Iterations ||
+                                   small_frontier_gap(wavefunction_layout, wavefunction);
+    previous_residual = residual;
+    if (switch_to_float64) {
+      /* Modified-Broyden history contains FP32 residual noise even though the
+       * public wavefunction is binary64. Restart only this system from its
+       * current raw multipoles, retain the driver's total iteration/energy
+       * trace, and never return to FP32 during this inference. */
+      const xtbloom_status_t restart_status =
+          restart_scc_mixer_system_cpu(mixer, 0, wavefunction, mixer_state, error);
+      if (restart_status != XTBLOOM_STATUS_SUCCESS) {
+        return restart_status;
+      }
+      use_float32 = false;
+      float64_iterations = 0u;
     }
   }
   return driver_state.converged[0] != 0u ? XTBLOOM_STATUS_SUCCESS : driver_state.system_statuses[0];
@@ -1893,7 +2049,7 @@ xtbloom_status_t SystemExecution::infer(
   const bool need_force_derivatives = (compute_flags & XTBLOOM_COMPUTE_FORCES) != 0u;
   xtbloom_status_t status = refresh_geometry(backend, warm_start, need_force_derivatives, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = run_scc(backend, error);
+  status = run_scc(backend, warm_start, error);
   output.iterations = static_cast<std::int32_t>(std::min<std::uint64_t>(
       driver_state.iterations[0],
       static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())));
@@ -2090,8 +2246,10 @@ xtbloom_status_t SystemExecution::infer(
 struct Gfn2CpuExecutionCache::Impl {
   enum class TaskFailure : std::uint8_t { kNone, kAllocation, kException, kUnknown };
 
-  explicit Impl(std::int32_t requested_threads, CpuIsa cpu_isa)
-      : mulliken_kernels(mulliken_kernels_for_cpu_isa(cpu_isa)),
+  explicit Impl(std::int32_t requested_threads, CpuIsa cpu_isa,
+                CpuPrecisionPolicy selected_precision)
+      : precision_policy(selected_precision),
+        mulliken_kernels(mulliken_kernels_for_cpu_isa(cpu_isa)),
         cpu_threads(resolve_cpu_threads(requested_threads)),
         workers(cpu_threads) {}
 
@@ -2107,6 +2265,7 @@ struct Gfn2CpuExecutionCache::Impl {
   std::mutex mutex;
   CpuLinearAlgebraBackend backend;
   bool backend_initialized = false;
+  const CpuPrecisionPolicy precision_policy;
   std::vector<SystemKey> keys;
   std::vector<std::unique_ptr<SystemExecution>> systems;
   /* True only when the most recent executed batch had every member converge.
@@ -2161,6 +2320,9 @@ struct Gfn2CpuExecutionCache::Impl {
       return XTBLOOM_STATUS_SUCCESS;
     }
     const xtbloom_status_t status = make_mkl_rt_lp64_backend(backend, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
     if (status == XTBLOOM_STATUS_SUCCESS) {
       if (backend.production_mkl_isolated()) {
         workers.set_thread_cleanup(&backend, &release_backend_thread_resources);
@@ -2169,9 +2331,15 @@ struct Gfn2CpuExecutionCache::Impl {
       g_test_provider_requires_thread_cleanup.store(backend.production_mkl_isolated(),
                                                     std::memory_order_relaxed);
 #endif
-      backend_initialized = true;
     }
-    return status;
+    if (precision_policy == CpuPrecisionPolicy::kAdaptive && !backend.single_precision_ready()) {
+      error =
+          "XTBLOOM_CPU_PRECISION=adaptive requires LAPACKE_ssyevd_work, cblas_strsm, and "
+          "cblas_sgemm from the verified LP64 CPU provider";
+      return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+    }
+    backend_initialized = true;
+    return XTBLOOM_STATUS_SUCCESS;
   }
 
   xtbloom_status_t ensure_systems(const std::vector<SystemKey>& requested, std::string& error) {
@@ -2207,7 +2375,7 @@ struct Gfn2CpuExecutionCache::Impl {
         requested.size() == 1u && workers.concurrency() > 1u &&
         requested.front().determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE;
     for (const SystemKey& key : requested) {
-      auto system = std::make_unique<SystemExecution>(key, mulliken_kernels);
+      auto system = std::make_unique<SystemExecution>(key, mulliken_kernels, precision_policy);
       if (intra_system_parallel) {
         system->parallel_executor.pool_context = &workers;
         system->parallel_executor.worker_count = workers.concurrency();
@@ -2417,8 +2585,268 @@ xtbloom_status_t snapshot_restricted_gfn2_periodic_state(Gfn2CpuExecutionCache& 
   }
 }
 
+#if defined(XTBLOOM_PUBLIC_SCC_SNAPSHOT_TESTING)
+xtbloom_status_t snapshot_gfn2_cpu_scc_for_testing(Gfn2CpuExecutionCache& cache,
+                                                   Gfn2CpuSccSnapshot& snapshot,
+                                                   std::string& error) {
+  try {
+    std::lock_guard<std::mutex> lock(cache.impl_->mutex);
+    const auto& implementation = *cache.impl_;
+    const std::size_t system_count = implementation.systems.size();
+    const auto reject = [&error](const char* message, xtbloom_status_t status) {
+      error = message;
+      return status;
+    };
+    if (system_count == 0u || implementation.request.batch_size <= 0 ||
+        static_cast<std::uint64_t>(implementation.request.batch_size) !=
+            static_cast<std::uint64_t>(system_count)) {
+      return reject("CPU SCC snapshot has no completed system state",
+                    XTBLOOM_STATUS_INVALID_ARGUMENT);
+    }
+    if (implementation.keys.size() != system_count ||
+        implementation.outputs.size() != system_count ||
+        implementation.inference_statuses.size() != system_count ||
+        implementation.task_failures.size() != system_count ||
+        implementation.system_statuses.size() != system_count ||
+        implementation.iterations.size() != system_count ||
+        implementation.converged.size() != system_count ||
+        implementation.request.atom_offsets.size() != system_count + 1u ||
+        implementation.request.total_atoms <= 0) {
+      return reject("CPU SCC snapshot system and output counts do not match",
+                    XTBLOOM_STATUS_INTERNAL_ERROR);
+    }
+
+    const std::uint64_t total_atoms_u64 =
+        static_cast<std::uint64_t>(implementation.request.total_atoms);
+    if (total_atoms_u64 >
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / 3u)) {
+      return reject("CPU SCC snapshot atom count exceeds host addressable storage",
+                    XTBLOOM_STATUS_INTERNAL_ERROR);
+    }
+    const std::size_t total_atoms = static_cast<std::size_t>(total_atoms_u64);
+    const std::size_t total_force_elements = 3u * total_atoms;
+    if (implementation.request.atom_offsets.front() != 0 ||
+        implementation.request.atom_offsets.back() != implementation.request.total_atoms ||
+        !std::is_sorted(implementation.request.atom_offsets.begin(),
+                        implementation.request.atom_offsets.end()) ||
+        implementation.energies.size() != system_count ||
+        implementation.forces.size() != total_force_elements ||
+        implementation.atomic_charges.size() != total_atoms) {
+      return reject("CPU SCC snapshot is missing a complete public energy/force/charge result",
+                    XTBLOOM_STATUS_INVALID_ARGUMENT);
+    }
+
+    const auto copy_field = [](std::vector<double>& destination, const double* source,
+                               std::int64_t element_count) {
+      if (element_count <= 0 || source == nullptr ||
+          static_cast<std::uint64_t>(element_count) >
+              static_cast<std::uint64_t>(destination.max_size())) {
+        return false;
+      }
+      const std::size_t count = static_cast<std::size_t>(element_count);
+      destination.assign(source, source + count);
+      return true;
+    };
+    const auto copy_sized_vector = [](std::vector<double>& destination,
+                                      const std::vector<double>& source, std::size_t expected) {
+      if (source.size() != expected) return false;
+      destination.assign(source.begin(), source.end());
+      return true;
+    };
+
+    std::vector<Gfn2CpuSccSystemSnapshot> captured(system_count);
+    for (std::size_t index = 0u; index < system_count; ++index) {
+      if (implementation.systems[index] == nullptr) {
+        return reject("CPU SCC snapshot contains an absent system execution",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+      const SystemExecution& system = *implementation.systems[index];
+      const SystemOutput& actual_output = implementation.outputs[index];
+      if (implementation.system_statuses[index] != XTBLOOM_STATUS_SUCCESS ||
+          implementation.inference_statuses[index] != XTBLOOM_STATUS_SUCCESS ||
+          implementation.task_failures[index] != Gfn2CpuExecutionCache::Impl::TaskFailure::kNone ||
+          implementation.converged[index] == 0u ||
+          implementation.iterations[index] != actual_output.iterations ||
+          actual_output.status != XTBLOOM_STATUS_SUCCESS || actual_output.converged == 0u) {
+        return reject("CPU SCC snapshot requires every system to have a successful terminal result",
+                      XTBLOOM_STATUS_INVALID_ARGUMENT);
+      }
+
+      const gfn2::WavefunctionLayout& layout = system.wavefunction_layout;
+      const std::int64_t atom_count_i64 = layout.total_atoms;
+      const std::int64_t shell_count_i64 = layout.total_shells;
+      const std::int64_t orbital_count_i64 = layout.total_orbitals;
+      const std::int64_t matrix_count_i64 = system.integrals.total_matrix_elements;
+      if (layout.batch_size != 1 || atom_count_i64 <= 0 || shell_count_i64 <= 0 ||
+          orbital_count_i64 <= 0 || matrix_count_i64 <= 0 || system.geometry_generation == 0u ||
+          system.geometry.geometry_generation != system.geometry_generation) {
+        return reject("CPU SCC snapshot contains an incomplete terminal layout or geometry",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+      const std::uint64_t atom_count_u64 = static_cast<std::uint64_t>(atom_count_i64);
+      const std::uint64_t shell_count_u64 = static_cast<std::uint64_t>(shell_count_i64);
+      const std::uint64_t orbital_count_u64 = static_cast<std::uint64_t>(orbital_count_i64);
+      const std::uint64_t matrix_count_u64 = static_cast<std::uint64_t>(matrix_count_i64);
+      const std::size_t maximum_size = std::numeric_limits<std::size_t>::max();
+      if (atom_count_u64 > static_cast<std::uint64_t>(maximum_size / 3u) ||
+          atom_count_u64 > static_cast<std::uint64_t>(maximum_size - 1u) ||
+          shell_count_u64 > static_cast<std::uint64_t>(maximum_size - 1u) ||
+          orbital_count_u64 > static_cast<std::uint64_t>(maximum_size) ||
+          matrix_count_u64 > static_cast<std::uint64_t>(maximum_size)) {
+        return reject("CPU SCC snapshot layout exceeds host addressable storage",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+      const std::size_t atom_count = static_cast<std::size_t>(atom_count_u64);
+      const std::size_t shell_count = static_cast<std::size_t>(shell_count_u64);
+      const std::size_t orbital_count = static_cast<std::size_t>(orbital_count_u64);
+      const std::size_t matrix_count = static_cast<std::size_t>(matrix_count_u64);
+      const std::int64_t atom_begin_i64 = implementation.request.atom_offsets[index];
+      const std::int64_t atom_end_i64 = implementation.request.atom_offsets[index + 1u];
+      if (atom_begin_i64 < 0 || atom_end_i64 < atom_begin_i64 ||
+          atom_end_i64 - atom_begin_i64 != atom_count_i64 ||
+          system.basis.atom_shell_offsets.size() != atom_count + 1u ||
+          system.basis.shell_orbital_offsets.size() != shell_count + 1u ||
+          system.basis.atom_shell_offsets.front() != 0 ||
+          system.basis.atom_shell_offsets.back() != shell_count_i64 ||
+          system.basis.shell_orbital_offsets.front() != 0 ||
+          system.basis.shell_orbital_offsets.back() != orbital_count_i64 ||
+          !std::is_sorted(system.basis.atom_shell_offsets.begin(),
+                          system.basis.atom_shell_offsets.end()) ||
+          !std::is_sorted(system.basis.shell_orbital_offsets.begin(),
+                          system.basis.shell_orbital_offsets.end()) ||
+          system.overlap.size() != matrix_count || system.core_hamiltonian.size() != matrix_count) {
+        return reject("CPU SCC snapshot basis mapping or AO matrices do not match its layout",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+
+      const auto& driver_state = system.driver_state;
+      const auto& mixer_state = system.mixer_state;
+      if (!system.driver.sealed() || system.driver.batch_size() != 1 ||
+          driver_state.plan_identity != system.driver.identity() ||
+          driver_state.iterations == nullptr || driver_state.system_statuses == nullptr ||
+          driver_state.initialized == nullptr || driver_state.converged == nullptr ||
+          driver_state.free_energies == nullptr || driver_state.free_energy_changes == nullptr ||
+          driver_state.initialized[0] == 0u || driver_state.converged[0] == 0u ||
+          driver_state.system_statuses[0] != XTBLOOM_STATUS_SUCCESS || !system.mixer.sealed() ||
+          system.mixer.batch_size() != 1 || system.mixer.total_vector_elements() <= 0 ||
+          mixer_state.plan_identity != system.mixer.identity() ||
+          mixer_state.current_inputs == nullptr || mixer_state.previous_inputs == nullptr ||
+          mixer_state.previous_residuals == nullptr || mixer_state.residual_rms == nullptr ||
+          mixer_state.residual_maximum == nullptr || mixer_state.iterations == nullptr ||
+          mixer_state.system_statuses == nullptr || mixer_state.initialized == nullptr ||
+          mixer_state.converged == nullptr || mixer_state.initialized[0] == 0u ||
+          mixer_state.converged[0] == 0u ||
+          mixer_state.system_statuses[0] != XTBLOOM_STATUS_SUCCESS ||
+          driver_state.iterations[0] == 0u ||
+          mixer_state.iterations[0] != driver_state.iterations[0] ||
+          implementation.iterations[index] !=
+              static_cast<std::int32_t>(std::min<std::uint64_t>(
+                  driver_state.iterations[0],
+                  static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))) ||
+          !std::isfinite(driver_state.free_energies[0]) ||
+          !std::isfinite(driver_state.free_energy_changes[0]) ||
+          !std::isfinite(mixer_state.residual_rms[0]) ||
+          !std::isfinite(mixer_state.residual_maximum[0])) {
+        return reject("CPU SCC snapshot requires converged driver and mixer state",
+                      XTBLOOM_STATUS_INVALID_ARGUMENT);
+      }
+
+      const std::size_t force_offset = static_cast<std::size_t>(atom_begin_i64) * 3u;
+      const std::size_t force_elements = atom_count * 3u;
+      if (!std::isfinite(implementation.energies[index]) || !std::isfinite(actual_output.energy) ||
+          actual_output.energy != implementation.energies[index] ||
+          actual_output.forces.size() != force_elements ||
+          actual_output.atomic_charges.size() != atom_count ||
+          !std::equal(actual_output.forces.begin(), actual_output.forces.end(),
+                      implementation.forces.begin() + static_cast<std::ptrdiff_t>(force_offset)) ||
+          !std::equal(actual_output.atomic_charges.begin(), actual_output.atomic_charges.end(),
+                      implementation.atomic_charges.begin() +
+                          static_cast<std::ptrdiff_t>(atom_begin_i64)) ||
+          !std::all_of(actual_output.forces.begin(), actual_output.forces.end(),
+                       [](double value) { return std::isfinite(value); }) ||
+          !std::all_of(actual_output.atomic_charges.begin(), actual_output.atomic_charges.end(),
+                       [](double value) { return std::isfinite(value); })) {
+        return reject("CPU SCC snapshot public energy, force, or charge output is incomplete",
+                      XTBLOOM_STATUS_INVALID_ARGUMENT);
+      }
+
+      Gfn2CpuSccSystemSnapshot& output = captured[index];
+      output.layout = layout;
+      output.atom_shell_offsets = system.basis.atom_shell_offsets;
+      output.shell_orbital_offsets = system.basis.shell_orbital_offsets;
+      output.geometry_generation = system.geometry_generation;
+      output.status = static_cast<xtbloom_status_t>(implementation.system_statuses[index]);
+      output.iterations = implementation.iterations[index];
+      output.public_energy = implementation.energies[index];
+      output.public_forces.assign(
+          implementation.forces.begin() + static_cast<std::ptrdiff_t>(force_offset),
+          implementation.forces.begin() +
+              static_cast<std::ptrdiff_t>(force_offset + force_elements));
+      output.public_atomic_charges.assign(
+          implementation.atomic_charges.begin() + static_cast<std::ptrdiff_t>(atom_begin_i64),
+          implementation.atomic_charges.begin() +
+              static_cast<std::ptrdiff_t>(atom_begin_i64 + atom_count));
+      if (!copy_sized_vector(output.overlap, system.overlap, matrix_count) ||
+          !copy_sized_vector(output.core_hamiltonian, system.core_hamiltonian, matrix_count) ||
+          !copy_field(output.coefficients, system.wavefunction.coefficients,
+                      layout.coefficients.element_count) ||
+          !copy_field(output.eigenvalues, system.wavefunction.eigenvalues,
+                      layout.eigenvalues.element_count) ||
+          !copy_field(output.occupations, system.wavefunction.occupations,
+                      layout.occupations.element_count) ||
+          !copy_field(output.density, system.wavefunction.density, layout.density.element_count) ||
+          !copy_field(output.energy_weighted_density, system.wavefunction.energy_weighted_density,
+                      layout.energy_weighted_density.element_count) ||
+          !copy_field(output.qsh, system.wavefunction.qsh, layout.qsh.element_count) ||
+          !copy_field(output.qat, system.wavefunction.qat, layout.qat.element_count) ||
+          !copy_field(output.dipoles, system.wavefunction.dipole, layout.dipole.element_count) ||
+          !copy_field(output.quadrupoles, system.wavefunction.quadrupole,
+                      layout.quadrupole.element_count)) {
+        return reject("CPU SCC snapshot wavefunction or AO storage is incomplete",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+
+      const std::int64_t mixer_elements = system.mixer.total_vector_elements();
+      if (mixer_elements <= 0 ||
+          !copy_field(output.mixer_current_inputs, mixer_state.current_inputs, mixer_elements) ||
+          !copy_field(output.mixer_previous_inputs, mixer_state.previous_inputs, mixer_elements) ||
+          !copy_field(output.mixer_previous_residuals, mixer_state.previous_residuals,
+                      mixer_elements)) {
+        return reject("CPU SCC snapshot mixer storage is incomplete",
+                      XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+
+      /* These are the terminal mixer buffers as stored: previous_residuals is
+       * retained history, not a newly evaluated fixed-point map or proof. */
+      output.mixer_residual_rms = mixer_state.residual_rms[0];
+      output.mixer_residual_maximum = mixer_state.residual_maximum[0];
+      output.mixer_iterations = mixer_state.iterations[0];
+      output.scc_free_energy = driver_state.free_energies[0];
+      output.scc_free_energy_change = driver_state.free_energy_changes[0];
+    }
+
+    snapshot.systems = std::move(captured);
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the CPU SCC state snapshot";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    error = "unknown failure while capturing the CPU SCC state snapshot";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+}
+#endif
+
 Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa)
-    : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa)) {}
+    : Gfn2CpuExecutionCache(cpu_threads, cpu_isa, CpuPrecisionPolicy::kFloat64) {}
+
+Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa,
+                                             CpuPrecisionPolicy precision_policy)
+    : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa, precision_policy)) {}
 Gfn2CpuExecutionCache::~Gfn2CpuExecutionCache() = default;
 
 void Gfn2CpuExecutionCache::set_external_energy_callback(ExternalEnergyCallback callback,

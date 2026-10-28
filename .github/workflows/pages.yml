@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node for npm and scientific smoke tests
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: '24'
 
@@ -150,7 +150,7 @@ jobs:
       - name: Preserve web coverage for the upload-only job
         if: matrix.architecture == 'wasm32'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-report-web
           path: coverage-web.lcov
@@ -208,7 +208,7 @@ jobs:
           node web/tests/wasm_smoke.mjs build/wasm32-web-scalar/web/site
 
       - name: Preserve ${{ matrix.architecture }} site for parity
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.SITE_ARTIFACT }}
           path: ${{ env.BUILD_DIR }}/web/site
@@ -232,7 +232,7 @@ jobs:
           persist-credentials: false
 
       - name: Download web coverage report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: coverage-report-web
 
@@ -240,7 +240,7 @@ jobs:
         # fail_ci_if_error covers CLI upload errors; continue-on-error also
         # covers action setup, integrity-check, and OIDC failures.
         continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage-web.lcov
           flags: web
@@ -261,7 +261,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node for dual-width parity
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
@@ -272,13 +272,13 @@ jobs:
         run: npm --prefix web run browser:install
 
       - name: Restore wasm32 site
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-web-wasm32
           path: build/wasm32-web/web/site
 
       - name: Restore wasm64 site
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-web-wasm64
           path: build/wasm64-web/web/site
@@ -295,7 +295,7 @@ jobs:
 
       - name: Preserve browser failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: web-responsive-failure-${{ github.run_attempt }}
           path: |
@@ -317,7 +317,8 @@ jobs:
         run: >-
           test "$(node
           tools/cloudflare-pages/node_modules/wrangler/bin/wrangler.js
-          --version)" = "4.123.0"
+          --version)" = "$(node -p
+          "require('./tools/cloudflare-pages/package.json').dependencies.wrangler")"
 
       - name: Archive locked Cloudflare Pages deployer
         run: >-
@@ -326,7 +327,7 @@ jobs:
           node_modules package.json package-lock.json
 
       - name: Preserve locked Cloudflare Pages deployer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: xtbloom-cloudflare-pages-deployer
           path: build/cloudflare-pages-deployer.tar.gz
@@ -376,18 +377,18 @@ jobs:
       # credential-bearing job. These immutable artifacts contain the wasm32
       # site that passed parity and the exact lockfile-installed deployer.
       - name: Restore validated wasm32 site
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-web-wasm32
           path: build/wasm32-web/web/site
 
       - name: Set up Node for locked Wrangler
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
 
       - name: Restore locked Cloudflare Pages deployer
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xtbloom-cloudflare-pages-deployer
           path: build/cloudflare-pages-deployer-archive
