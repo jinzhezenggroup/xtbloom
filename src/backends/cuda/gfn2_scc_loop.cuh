@@ -6,8 +6,10 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <iosfwd>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_scc_diagnostics.cuh"
 #include "backends/cuda/gfn2_scc_iteration.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -110,6 +112,8 @@ enum class Gfn2SccLoopGraphFallbackReason : std::uint32_t {
   kDispatchCapacityOverflow = 12u,
   kDispatchBuildFailed = 13u,
   kDispatchTableAllocationFailed = 14u,
+  /* Diagnostic code for a recorded bounded call despite a prepared Graph. */
+  kRuntimeBoundedOverride = 15u,
 };
 
 enum class Gfn2SccLoopGraphBuildStatus : std::uint32_t {
@@ -232,6 +236,17 @@ class Gfn2SccLoopCudaGraphOwner {
   /* Explicit device control storage retained by the graph owner. */
   [[nodiscard]] std::size_t retained_device_bytes() const noexcept;
 
+  /* Empty in ordinary builds. Instrumented builds retain all rows on device
+   * until the caller explicitly downloads them after completion. */
+  [[nodiscard]] Gfn2SccDiagnosticsDevice diagnostics_device() const noexcept;
+
+  /* Diagnostic-build readback only, after public completion. Downloads once
+   * per call, never from an SCC iteration or a timing-eligible binary.
+   * Generic external captures are intentionally uninstrumented because their
+   * bounded DAG can outlive this owner; readback then returns NotSupported. */
+  [[nodiscard]] cudaError_t write_diagnostics_json(std::ostream& output, cudaStream_t stream,
+                                                   std::uint32_t start_policy = 0u) const;
+
   /* Number of separate executable graphs in the device dispatch chain family:
    * exact-capacity eigensolver/backtransform bodies plus the pre/post chain
    * heads. Returns zero when the owner did not build a dispatch chain. */
@@ -275,6 +290,12 @@ class Gfn2SccLoopCudaGraphOwner {
 [[nodiscard]] Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
     const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
     cudaStream_t stream = nullptr) noexcept;
+
+/* Instrumented runtime override: records the bounded path actually enqueued,
+ * even when the owner also holds an unused device-launchable Graph. */
+[[nodiscard]] Gfn2SccLoopLaunchResult launch_gfn2_restricted_scc_loop_cuda(
+    const Gfn2SccIterationBinding& binding, const Gfn2GeometryEpochConsumerDevice& geometry,
+    Gfn2SccDiagnosticsDevice diagnostics, cudaStream_t stream) noexcept;
 
 }  // namespace xtbloom::detail::cuda
 

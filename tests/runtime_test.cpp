@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -8,11 +9,14 @@
 
 #include "xtbloom/xtbloom.h"
 
-#define CHECK(condition) \
-  do {                   \
-    if (!(condition)) {  \
-      return __LINE__;   \
-    }                    \
+/* Line-number exit values can wrap to success on POSIX. Keep the location in
+ * stderr and use a reliably nonzero status for every failed assertion. */
+#define CHECK(condition)                                                                 \
+  do {                                                                                   \
+    if (!(condition)) {                                                                  \
+      std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #condition); \
+      return EXIT_FAILURE;                                                               \
+    }                                                                                    \
   } while (false)
 
 namespace {
@@ -205,7 +209,7 @@ int check_context_creation_rejections(const xtbloom_context_options_t& valid_opt
   return 0;
 }
 
-int check_cpu_isa_context_policy() {
+int check_cpu_isa_context_policy(bool require_cuda) {
   constexpr const char* kEnvironment = "XTBLOOM_CPU_ISA";
   EnvironmentGuard guard(kEnvironment);
   xtbloom_context_options_t options;
@@ -247,6 +251,9 @@ int check_cpu_isa_context_policy() {
   ContextHandle cuda_context = create_context(options, status);
   CHECK(status != XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(status == XTBLOOM_STATUS_SUCCESS || status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
+  CHECK(!require_cuda || status == XTBLOOM_STATUS_SUCCESS);
+#else
+  CHECK(!require_cuda);
 #endif
   return 0;
 }
@@ -372,7 +379,18 @@ int check_result_owner_rejections() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  const bool require_cuda = argc == 2 && std::strcmp(argv[1], "--require-cuda") == 0;
+  if (argc != 1 && !require_cuda) {
+    std::fprintf(stderr, "Usage: %s [--require-cuda]\n", argv[0]);
+    return 2;
+  }
+#if !defined(XTBLOOM_TEST_HAS_CUDA)
+  if (require_cuda) {
+    std::fputs("Required CUDA runtime branches unavailable: CUDA backend not compiled\n", stderr);
+    return EXIT_FAILURE;
+  }
+#endif
   CHECK(check_status_and_initializer_rejections() == 0);
   EnvironmentVariableGuard cpu_precision_environment("XTBLOOM_CPU_PRECISION");
   CHECK(cpu_precision_environment.unset());
@@ -386,7 +404,7 @@ int main() {
   CHECK(xtbloom_context_options_init(&options, sizeof(options)) == XTBLOOM_STATUS_SUCCESS);
   options.backend = XTBLOOM_BACKEND_CPU;
   CHECK(check_context_creation_rejections(options) == 0);
-  CHECK(check_cpu_isa_context_policy() == 0);
+  CHECK(check_cpu_isa_context_policy(require_cuda) == 0);
   CHECK(check_result_owner_rejections() == 0);
 
   xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -760,6 +778,8 @@ int main() {
   CHECK(cpu_precision_environment.set("not-a-precision-policy"));
   xtbloom_status_t cuda_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle cuda_context = create_context(options, cuda_status);
+  /* Driver-less CI may skip these branches only in the ordinary mode. */
+  CHECK(!require_cuda || cuda_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(cpu_precision_environment.unset());
   if (cuda_status == XTBLOOM_STATUS_SUCCESS) {
     CHECK(xtbloom_context_get_backend(cuda_context.get()) == XTBLOOM_BACKEND_CUDA);
@@ -810,6 +830,12 @@ int main() {
     CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
           point_charge_forces[2] == 83.0);
     CHECK(result.flags == UINT32_C(0xa5a55a5a));
+    if (require_cuda) {
+      std::printf(
+          "CUDA_REQUIRED_BRANCHES=PASS device_id=%d pointer_preflight=PASS "
+          "structural_preflight=PASS sentinel_preservation=PASS\n",
+          xtbloom_context_get_device_id(cuda_context.get()));
+    }
   } else {
     /* CUDA-enabled builds also run on hosts where the runtime exposes no device. */
     CHECK(cuda_status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
