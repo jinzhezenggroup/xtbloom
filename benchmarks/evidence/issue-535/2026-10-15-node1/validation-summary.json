@@ -1,0 +1,442 @@
+{
+  "baseline_cmake_cache": {
+    "bytes": 43096,
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/build-baseline/CMakeCache.txt",
+    "sha256": "76fcad166603fa3b659acec3eb4beea412857c6a116ce9680916f5902a256bb5"
+  },
+  "baseline_library": {
+    "bytes": 12250120,
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/build-baseline/libxtbloom.so",
+    "sha256": "7ad62915b0af96ac74d808e41448d8bc6ecd3dc9b4a523b51551de6a35bf25e0"
+  },
+  "baseline_source": {
+    "head": "a756b076014ee2bb7f376b438be2f6cd5264d292",
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/baseline",
+    "status_porcelain": ""
+  },
+  "build_limitation": "all-target build fails in unchanged AES2 benchmark-only std::array code; all non-benchmark executables and all library/fixture targets were then built",
+  "build_scripts": [
+    {
+      "bytes": 2033,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/build.sh",
+      "sha256": "da79f8e54d7435cf2429b7e1a05bae8840406791a8e3e530c8b4615fa5d4c407"
+    },
+    {
+      "bytes": 1756,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/baseline.sh",
+      "sha256": "4d0831a5663d3a40209ef00a61feccd86b59e32fd184f184f01b4a64fef5c9a9"
+    },
+    {
+      "bytes": 7427,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/collect-validation.py",
+      "sha256": "478af26fcd90bf10b5ce8fb80760e4957d313221677d109a3abd87d59fdf50a0"
+    }
+  ],
+  "candidate_cmake_cache": {
+    "bytes": 43086,
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/build-cuda/CMakeCache.txt",
+    "sha256": "2471107f01c01eba91fb20921c91868ce048feb6864e6547847b774bf1c45d90"
+  },
+  "candidate_library": {
+    "bytes": 12251768,
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/build-cuda/libxtbloom.so",
+    "sha256": "4dc2a0e7693a3e90dae551f200cc0a41c0b529ec1a558bc10e32586398e9e2e5"
+  },
+  "candidate_source": {
+    "head": "9a5a3833637ddb375fe96a15e4351e3eaa4f52cc",
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate",
+    "status_porcelain": ""
+  },
+  "captured_at": "2026-10-15T10:09:40.998964+00:00",
+  "cuda_test_source": {
+    "bytes": 11646,
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/validation/test_batch_ordering_cuda.py",
+    "sha256": "4a206317a67a34270d67061f86a48a0fde457fa4b02769668571f956f6fb91a2"
+  },
+  "draft_pr": 538,
+  "hardware": {
+    "architecture": "sm_120",
+    "ccache": "4.5.1",
+    "cmake": "4.2.1",
+    "cuda_toolkit": "12.9.86",
+    "driver": "580.95.05",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "host": "node1",
+    "host_compiler": "GCC 13.3.0"
+  },
+  "healthy523": {
+    "actual_files": [
+      {
+        "bytes": 4534,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cpu-host/cpu/healthy32.json",
+        "sha256": "cf8a5a79ceec4ba35901148194ec1330571057ddb2e08f286e897feee5414f01"
+      },
+      {
+        "bytes": 8010,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cpu-host/cpu/healthy62.json",
+        "sha256": "1b663cfa419d43268e48fea480b672b02a13c09e1555ed58d69792f89bb93493"
+      },
+      {
+        "bytes": 4539,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-device/cuda-device/healthy32.json",
+        "sha256": "c6eec82667b27213c31ac4e932e542edc41ee8923b32cca3f8490fb1930b52d8"
+      },
+      {
+        "bytes": 8030,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-device/cuda-device/healthy62.json",
+        "sha256": "54e85816303fdb313a0750a13a0c6b35dd00cfe82b733b962f2a4873e11841ba"
+      },
+      {
+        "bytes": 4537,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-host/cuda/healthy32.json",
+        "sha256": "e1f9ebf3c12110366d8e93b7278c02da276542d86fc4b53c8c7e8e67379a0550"
+      },
+      {
+        "bytes": 8017,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-host/cuda/healthy62.json",
+        "sha256": "487f64f59557a125c6284c593d77bb1f81331d22d351ccee45c6cfecca21834d"
+      },
+      {
+        "bytes": 4542,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-mixed/cuda-mixed/healthy32.json",
+        "sha256": "8ab783abbade05124f2acd06b278fac2d1d4d7ff92aacfd3b4915559dee65de0"
+      },
+      {
+        "bytes": 8021,
+        "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/healthy523/cuda-mixed/cuda-mixed/healthy62.json",
+        "sha256": "cbdbb09b5d2653028ab0e40a4d4065ba51705e0d76892cbcf4a694ad20620d17"
+      }
+    ],
+    "endpoints": 8,
+    "job": {
+      "cuda_visible_devices": "2",
+      "id": "8602",
+      "node": "node1"
+    },
+    "manifest": {
+      "bytes": 15879,
+      "path": "/tmp/xtbloom-goal-20261009/healthy-oracle515/validation-manifest.json",
+      "sha256": "89dabddd69cbfce1e177b225fd6b95c38a0eb0f14aec7d42e8f5d879184067ab"
+    },
+    "pinned_cases": [
+      {
+        "golden": {
+          "bytes": 15564,
+          "path": "/tmp/xtbloom-goal-20261009/healthy-oracle515/generated/healthy32.json",
+          "sha256": "264bfdc9605d1d06211b5b489f59bf15b4a855375ed412e6336d5e2a17a5c751"
+        },
+        "id": "healthy32",
+        "input": {
+          "bytes": 1588,
+          "path": "/tmp/xtbloom-goal-20261009/healthy-controls512/inputs/healthy32.coord",
+          "sha256": "731666b91bb2257cf2f80e6ce606fc346a08d66ebde8f9b0cdafb60329fb8f4f"
+        }
+      },
+      {
+        "golden": {
+          "bytes": 27085,
+          "path": "/tmp/xtbloom-goal-20261009/healthy-oracle515/generated/healthy62.json",
+          "sha256": "cca7ae7ec3aca01a4b2c95fe4e6a16f0deb5f4fb8bde3d4a3870a1aa8721d3a4"
+        },
+        "id": "healthy62",
+        "input": {
+          "bytes": 3092,
+          "path": "/tmp/xtbloom-goal-20261009/healthy-controls512/inputs/healthy62.coord",
+          "sha256": "348ccf90abfdd6d66636808621ea9a90f89b5b6182c27db07725ec2836de503e"
+        }
+      }
+    ],
+    "property_fail": 12,
+    "property_pass": 12,
+    "runner_exit_by_coordinate": {
+      "cpu-host": 1,
+      "cuda-device": 1,
+      "cuda-host": 1,
+      "cuda-mixed": 1
+    }
+  },
+  "installed_python_sources": [
+    {
+      "bytes": 157299,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate/.venv/lib/python3.12/site-packages/xtbloom/interface.py",
+      "sha256": "82fe50c90f19256d8987c19cc7be843f9ebd23ea9a80b26f8c2df1ab4be46b40"
+    },
+    {
+      "bytes": 21949,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate/.venv/lib/python3.12/site-packages/xtbloom/batching.py",
+      "sha256": "7e777a669b087b296833740495195dc6f6c67b475a97151d3ca4c14669c63cf3"
+    },
+    {
+      "bytes": 3121,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate/.venv/lib/python3.12/site-packages/xtbloom/_batch_plan.py",
+      "sha256": "4c94777b63785f463f7f69d4d59553b89eaa08cd1fabc90a3e3e64eb68c2702a"
+    },
+    {
+      "bytes": 1318,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate/.venv/lib/python3.12/site-packages/xtbloom/_gfn2_basis.py",
+      "sha256": "63202023ea08c3191b2cc0d4585f739f3277de8e8b1274add09068983ec06755"
+    }
+  ],
+  "installed_wheel": {
+    "bytes": 1800438,
+    "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/xtbloom-0.2.3.post1.dev32+g9a5a38336-py3-none-linux_x86_64.whl",
+    "sha256": "35bc7bd86d873c5deb5e00a7c70aa25dac7db320c56dec200dbd6c90daa62506"
+  },
+  "issue": 535,
+  "locked_environment": {
+    "packages": {
+      "numpy": "2.5.1",
+      "pytest": "9.1.1",
+      "scipy": "1.18.0",
+      "xtbloom": "0.2.3.post1.dev32+g9a5a38336"
+    },
+    "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]"
+  },
+  "locked_python": {
+    "fail": 0,
+    "failure_names": [],
+    "job": {
+      "cuda_visible_devices": "2",
+      "id": "8615",
+      "node": "node1"
+    },
+    "optional_cupy": "not installed",
+    "optional_torch": "not installed",
+    "pass": 508,
+    "process_exit": 0,
+    "raw_xml": {
+      "bytes": 92549,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/python-cuda-locked.xml",
+      "sha256": "594e2aac3e03a7850b56b9cb0e26a9c9244440b2c666b990a89105544650509c"
+    },
+    "skip": 80,
+    "tests": 588
+  },
+  "native_ctest": {
+    "fail": 1,
+    "failure_names": [
+      "xtbloom.cuda.public_api"
+    ],
+    "job": {
+      "cuda_visible_devices": "0",
+      "id": "8601",
+      "node": "node1"
+    },
+    "pass": 211,
+    "raw_xml": {
+      "bytes": 84849,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/native-cuda.xml",
+      "sha256": "d762991ca7f8ce3698394036911224d933d749e61846aa0a2cc90351b977d84d"
+    },
+    "skip": 0,
+    "tests": 212
+  },
+  "native_failure_issue": 539,
+  "native_public_api_repeats": {
+    "base_fail": 2,
+    "candidate_fail": 2,
+    "failure": "context-enqueue/device: completion_status assertion at tests/cuda_public_api_test.cu:3339",
+    "job": {
+      "cuda_visible_devices": "2",
+      "id": "8605",
+      "node": "node1"
+    },
+    "pass": 0
+  },
+  "ordering_locked_pytest": {
+    "fail": 0,
+    "failure_names": [],
+    "job": {
+      "cuda_visible_devices": "2",
+      "id": "8619",
+      "node": "node1"
+    },
+    "pass": 3,
+    "process_exit": 0,
+    "raw_xml": {
+      "bytes": 647,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/ordering-cuda-locked.xml",
+      "sha256": "bd6241f8e8de208413e9a6a69aa6ea52aed5c201eaf3509eb8178301bb710fbe"
+    },
+    "skip": 0,
+    "tests": 3
+  },
+  "ordering_pytest": {
+    "fail": 0,
+    "failure_names": [],
+    "job": {
+      "cuda_visible_devices": "2",
+      "id": "8613",
+      "node": "node1"
+    },
+    "pass": 3,
+    "raw_xml": {
+      "bytes": 770,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/ordering-cuda.xml",
+      "sha256": "3b770721363e4ef57a70ec2e40fe0c154b52e08dcdf47a36e458f6394e13b24f"
+    },
+    "skip": 0,
+    "tests": 3
+  },
+  "performance_matrix": {
+    "reason": "qualify correctness first; #539 and #523 remain failing",
+    "status": "NOT RUN"
+  },
+  "provider_files": [
+    {
+      "bytes": 17327256,
+      "path": "/group/software/deepmd-kit-3.2.0/lib/libmkl_rt.so.3",
+      "sha256": "a85532b3965b4901eced61ee6d3d5b606e2d54e8de2cb357e6b5cfcce2b1e03a"
+    },
+    {
+      "bytes": 20318736,
+      "path": "/group/software/deepmd-kit-3.2.0/lib/libmkl_intel_lp64.so.3",
+      "sha256": "9e1a2f6e8f6e5fc961813d524a0ff96476cab20a511493d654af3fed558f3177"
+    },
+    {
+      "bytes": 25592776,
+      "path": "/group/software/deepmd-kit-3.2.0/lib/libmkl_sequential.so.3",
+      "sha256": "fc69f8f8bf8488bea479acf880b4214037445484cd998c930921d2a8eac874fa"
+    },
+    {
+      "bytes": 77116168,
+      "path": "/group/software/deepmd-kit-3.2.0/lib/libmkl_core.so.3",
+      "sha256": "02c986a95630d00eeb5fac5f0248c9b0791ac110323c689afe2fc68f6af70c67"
+    }
+  ],
+  "raw_logs_retained_on_n1": [
+    {
+      "bytes": 42150,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/cuda-build-8595-failed.log",
+      "sha256": "0d81a739bb0ac2049776ccf8a323f64050fa26b8e52391ef0755a6898bdb187e"
+    },
+    {
+      "bytes": 55327,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/cuda-build-8596-test-targets.log",
+      "sha256": "e5fb968f174626caed605953a2b38f819cb1f93ab93b0647fdb67ee974297c6a"
+    },
+    {
+      "bytes": 28474,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/cuda-build.log",
+      "sha256": "db20cdf3b82986100cfffed9567db1a40aeb35b4a275eb9660a983329ddd7b0e"
+    },
+    {
+      "bytes": 65848,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/native-cuda-8598-incomplete-build.log",
+      "sha256": "d2495d2369bc5e5930bdd0e890ff1c6369e67fba741cbea9bd9072438550809c"
+    },
+    {
+      "bytes": 34529,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/native-cuda.log",
+      "sha256": "251dadf5a0afbfec4344b9a32c9ebbe2bc52a3660fdf90f9007d7e2efa3bbabb"
+    },
+    {
+      "bytes": 20642,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/baseline-public-api.log",
+      "sha256": "911ea6d7cfd3402fd9f1eefbedec691eec9f72ac5ce5f0bab0f30938173eaf82"
+    },
+    {
+      "bytes": 3220,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/healthy523-all.log",
+      "sha256": "81677b9ae50b3ed9a6a9ed35b3f1ad2de4d48b537df351e3b9ae8e983d326bfe"
+    },
+    {
+      "bytes": 287,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/ordering-cuda.log",
+      "sha256": "e3c91c363f15a8e0dadab60ce908705563d7192d316392297806c7c6fd4dfe9f"
+    },
+    {
+      "bytes": 4031,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/ordering-cuda-8611-test-representation-failure.log",
+      "sha256": "dad118f18cfdec8e5ca056e8fa02f0b64fc130927f9556bfd45bb80534a9a372"
+    },
+    {
+      "bytes": 7818,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/python-cuda.log",
+      "sha256": "fed29b13599db9054c1211e868882bf38ffe1ad1ace650ce2cea3b49b0b0a603"
+    },
+    {
+      "bytes": 7838,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/python-cuda-locked.log",
+      "sha256": "db1ad5b621ebffba0b67d60b6571d5a0eb4d3d2b8a04d79e129e9c35a8987dac"
+    },
+    {
+      "bytes": 313,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/ordering-cuda-locked.log",
+      "sha256": "aedd05e52354cce5ff74b93da9e11cf495ad465b05c7915677673802cc490883"
+    },
+    {
+      "bytes": 28241,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/python-cuda-locked-torch.log",
+      "sha256": "0f4b25012c44e519603d7fa9aa97a619ac57b173f1d538c1350b33bafefae257"
+    },
+    {
+      "bytes": 21324,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/python-cuda-locked-torch-configured.log",
+      "sha256": "87c51829694c7e480f0efd2c4bca3ef602c5b812cf8a8d1d594b0a96d2d1fe66"
+    },
+    {
+      "bytes": 530,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/public-api-build-baseline-1.log",
+      "sha256": "1819871e70b15e3edd82b5e535b854b5cae7fbb5894f7fdb91fe02ba74c96b20"
+    },
+    {
+      "bytes": 530,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/public-api-build-baseline-2.log",
+      "sha256": "4f9242a4b1e6eaa691041b6cd99bd687651701a963765603afbb7a88624c9bae"
+    },
+    {
+      "bytes": 527,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/public-api-build-cuda-1.log",
+      "sha256": "013da318fb6509caf569070d5f4e49df30fb89fc09f8fc62076c082b1919bace"
+    },
+    {
+      "bytes": 527,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/public-api-build-cuda-2.log",
+      "sha256": "9637fad7d3808be39953631b55095addae20b944f6ffe443c56fde142b4288ca"
+    }
+  ],
+  "runner_sources": [
+    {
+      "bytes": 56450,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate/tools/conformance/xtbloom_public_api.py",
+      "sha256": "e8a3eaa87e7fd6d9a706ce14f64c5ee4bbb755342c5edeaccc2331d169d304f2"
+    },
+    {
+      "bytes": 6213,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate/python/tests/_cases.py",
+      "sha256": "8de15c91ed2723ada65b227f611cef3d5834b3a550fa997a914ed024b9c40f49"
+    },
+    {
+      "bytes": 19777,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/candidate/data/conformance/manifest.json",
+      "sha256": "f5921289476ebf9916afb5cccc08bcbd6222cc483fb250a9e6558300d5812cab"
+    }
+  ],
+  "schema": "xtbloom-issue-535-gpu-validation-v1",
+  "scientific_failure_issue": 523,
+  "scope": "correctness validation only; no performance qualification or speed claim",
+  "torch_diagnostic": {
+    "environment": "borrowed shared Torch 2.12.0/CUDA 13.0; not locked Torch 2.13.0",
+    "fail": 1,
+    "failure_names": [
+      "test_torch_compile_graph_breaks_for_eager_op"
+    ],
+    "job": {
+      "cuda_visible_devices": "0",
+      "id": "8612",
+      "node": "node1"
+    },
+    "observed_failure": "Torch Inductor cpp_prefix.h missing; post-test malloc corruption/abort is undiagnosed",
+    "pass": 579,
+    "process_exit": 134,
+    "qualification": "FAIL; not a full Python pass",
+    "raw_xml": {
+      "bytes": 86258,
+      "path": "/home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/logs/python-cuda-locked-torch-configured.xml",
+      "sha256": "8d6f31c4260105edc48f841febddfadedc356d1699ec0973d4dc60c71e177e2f"
+    },
+    "skip": 8,
+    "tests": 588
+  }
+}

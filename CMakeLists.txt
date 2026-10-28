@@ -1995,6 +1995,7 @@ if(XTBLOOM_BUILD_TESTS)
     NAME xtbloom.benchmarks.self_test
     COMMAND ${Python3_EXECUTABLE} -m unittest -v
       benchmarks.test_run benchmarks.test_natoms_scaling benchmarks.test_ao_grouping
+      benchmarks.test_auto_grouping
       benchmarks.test_convergence_grouping benchmarks.test_convergence_runner
       benchmarks.test_frozen_inputs
       benchmarks.test_build_receipt benchmarks.test_record_build
