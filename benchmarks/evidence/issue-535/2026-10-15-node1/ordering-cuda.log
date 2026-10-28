@@ -1,0 +1,4 @@
+job=8613 node=node1 visible=2
+4a206317a67a34270d67061f86a48a0fde457fa4b02769668571f956f6fb91a2  /home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/validation/test_batch_ordering_cuda.py
+...                                                                      [100%]
+3 passed in 1.40s

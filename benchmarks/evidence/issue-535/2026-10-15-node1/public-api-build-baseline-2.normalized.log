@@ -1,0 +1,13 @@
+Test project /home/jzzeng/codes/xtbloom-issue-535-20261015-9a5a383/build-baseline
+    Start 37: xtbloom.cuda.public_api
+1/1 Test #37: xtbloom.cuda.public_api ..........***Failed    6.24 sec
+public CUDA API check failed in context-enqueue/device at ../baseline/tests/cuda_public_api_test.cu:3339: placed_info.completion_status == XTBLOOM_STATUS_SUCCESS;
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   6.24 sec
+
+The following tests FAILED:
+	 37 - xtbloom.cuda.public_api (Failed)
+Errors while running CTest
