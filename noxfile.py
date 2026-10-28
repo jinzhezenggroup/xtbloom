@@ -305,6 +305,7 @@ def _run_python_tests(session: nox.Session) -> None:
         "benchmarks.test_convergence_runner",
         "benchmarks.test_frozen_inputs",
         "benchmarks.test_ao_grouping",
+        "benchmarks.test_auto_grouping",
         "benchmarks.test_build_receipt",
         "benchmarks.test_record_build",
         "benchmarks.test_build_receipt_runner",

@@ -12,6 +12,7 @@ Atomic units everywhere: bohr, Hartree, Hartree/bohr, elementary charge.
 
 from importlib.metadata import version as _distribution_version
 
+from ._batch_plan import BatchExecutionPlan
 from ._dlpack import DLPackResultBuffer
 from .exceptions import (
     XTBloomError,
@@ -49,6 +50,7 @@ __all__ = [
     "ArrayBatch",
     "ArrayBatchResult",
     "BatchCalculator",
+    "BatchExecutionPlan",
     "BatchResult",
     "Calculator",
     "ChargeResponse",

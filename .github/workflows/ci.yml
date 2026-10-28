@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           enable-cache: true
@@ -111,7 +111,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # Generate against uv.lock with the matching uv version, then bump
           # `version` and regenerate the lock together.
@@ -166,11 +166,13 @@ jobs:
           XTBLOOM_LIBRARY="${installed_library}" PYTHONPATH="${PWD}/python" \
             uv run --no-sync pytest python/tests -q --cov \
               --cov-report=xml:coverage-python.xml
-          uv run --no-sync python -m unittest -v \
-            benchmarks.test_run benchmarks.test_dataset_runner \
+          uv run --no-sync python -m coverage run --append -m unittest -v \
+            benchmarks.test_run benchmarks.test_ao_grouping benchmarks.test_auto_grouping \
+            benchmarks.test_convergence_runner benchmarks.test_dataset_runner \
             benchmarks.test_paper_suite benchmarks.test_natoms_scaling \
             benchmarks.test_natoms_cross_engine benchmarks.test_dxtb_adapter \
             benchmarks.test_evidence_size benchmarks.test_cuda_distribution_evidence
+          uv run --no-sync python -m coverage xml -o coverage-python.xml
       - name: Validate repository-relative Python coverage paths
         run: |
           uv run --no-sync python - <<'PY'
@@ -257,7 +259,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -301,7 +303,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -358,7 +360,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           python-version: "3.11"

@@ -57,7 +57,7 @@ jobs:
           test "$(git describe --tags --exact-match HEAD)" = "$GITHUB_REF_NAME"
           test -z "$(git status --porcelain)"
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -268,7 +268,7 @@ jobs:
           restore-keys: |
             cibw-${{ runner.os }}-${{ matrix.platform_id }}-
       - name: Build wheels
-        uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299 # v4.3.1
+        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3 # v4.3.4
         env:
           CIBW_PLATFORM: ${{ matrix.platform }}
           CIBW_ARCHS: ${{ matrix.archs }}
@@ -394,6 +394,6 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Publish distributions with PyPI Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1, v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1, v1.14.3
         with:
           packages-dir: dist

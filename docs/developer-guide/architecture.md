@@ -196,6 +196,16 @@ enables that policy by default for dynamics-like geometry sequences. Automatic b
 remains incompatible with warm start because one native context retains only its latest whole-batch
 checkpoint, not one checkpoint per logical chunk.
 
+Managed finite host queues in `BatchCalculator.compute` use the installed
+`xtbloom.batching` planner, also consumed through the benchmark compatibility
+facade. Eligible GFN2 CUDA FRESH queues resolve `batch_ordering="auto"` to
+stable exact-AO ordering before bounded chunking only when an AO is split
+across original chunks. Single-call, CPU, GFN1, WARM, homogeneous and no-reuse
+queues retain original scheduling. Each complete result slice and diagnostic
+is scattered by canonical ordinal, independently of object identity. The
+immutable Python execution plan is inspection metadata, not a native topology,
+Graph, context or checkpoint identity; it does not bypass native validation.
+
 The ABI-v3 compute-options suffix exposes the currently implemented Johnson
 modified-Broyden policy with a history depth from 1 through 64 and a finite
 damping factor in `(0, 1]`; the established defaults are history 8 and damping

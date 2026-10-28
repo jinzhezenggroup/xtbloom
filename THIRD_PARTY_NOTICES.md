@@ -110,6 +110,10 @@ Redistributed or derived material:
   representations of the GFN2 parameter export from revision
   `fa8a4416e8fe093d0075bc10ac875494c2a449a9`. Exact source paths and hashes
   are recorded in `data/parameters/manifest.json`.
+- `python/xtbloom/_gfn2_basis.py` derives exact spatial AO counts from those
+  normalized GFN2 shell angular momenta for host-queue scheduling. Its embedded
+  SHA256 identifies the canonical JSON; it has the same parameter provenance
+  and license, and introduces no additional upstream source or native runtime.
 - `data/parameters/gfn1.toml`, `gfn1.json`, and `gfn1.hpp` are deterministic
   representations of the GFN1 parameter export from the same tblite 0.7.0
   revision. The JSON/header additionally retain mctc-lib v0.5.2 Pauling

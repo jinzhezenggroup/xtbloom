@@ -1238,14 +1238,35 @@ class PairedRunnerTest(unittest.TestCase):
         )
 
     def test_cli_defaults_and_paired_option_validation_remain_explicit(self) -> None:
-        """Leave original as the default and reject incompatible pair matrices."""
+        """Default to auto while keeping opt-in policy constraints explicit."""
         parser = run.build_parser()
         defaults = parser.parse_args(["--library", "lib.so", "--case-ids", "a"])
-        self.assertEqual(defaults.ao_grouping, "original")
+        self.assertEqual(defaults.ao_grouping, "auto")
         defaults.engines = ("xtbloom",)
         defaults.backends = ("cpu",)
         defaults.cuda_memory_modes = ("host",)
         run.validate_args(defaults)
+        nonfinite_defaults = parser.parse_args(
+            ["--library", "lib.so", "--engines", "xtbloom", "--backends", "cpu"]
+        )
+        self.assertEqual(nonfinite_defaults.ao_grouping, "auto")
+        run.validate_args(nonfinite_defaults)
+        off = parser.parse_args(
+            [
+                "--library",
+                "lib.so",
+                "--case-ids",
+                "a",
+                "--ao-grouping",
+                "off",
+                "--engines",
+                "xtbloom",
+                "--backends",
+                "cpu",
+            ]
+        )
+        off.cuda_memory_modes = ("host",)
+        run.validate_args(off)
         exact = parser.parse_args(
             [
                 "--library",

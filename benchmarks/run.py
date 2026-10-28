@@ -937,6 +937,7 @@ def finite_case_plan(
     case_ids: tuple[str, ...],
     batch_cap: int,
     strategy: str | None = None,
+    memory_mode: str = "host",
 ) -> tuple[ao_grouping.AOGroupingPlan, float]:
     """Plan one finite list, optionally overriding only its grouping strategy.
 
@@ -949,25 +950,87 @@ def finite_case_plan(
     if previous_capture is not None:
         previous_capture.close()
         args.finite_frozen_workload = None
+    basis_counts: dict[int, int] | None = None
     basis_sha256 = None
     counts: dict[str, int] | None = None
-    selected_strategy = strategy or args.ao_grouping
+    requested_strategy = strategy or getattr(args, "ao_grouping", "original")
+    selected_strategy = requested_strategy
     risk_bands = None
     risk_policy_sha256 = None
     risk_freeze_plan_sha256 = None
     binding = None
+
+    if strategy is None and requested_strategy == "original":
+        args.finite_ao_grouping_resolution = {
+            "requested": "original",
+            "resolved": "original",
+            "reason": "explicit original policy",
+        }
+    elif strategy is None and requested_strategy in {"auto", "off"}:
+        original_plan = ao_grouping.make_plan(case_ids, batch_cap, strategy="original")
+        original_batches = tuple(
+            batch.canonical_indices for batch in original_plan.batches
+        )
+        ineligible_reason = None
+        if requested_strategy == "auto":
+            if getattr(args, "convergence_plan", None) is not None:
+                ineligible_reason = (
+                    "auto AO grouping does not apply to convergence-bound workloads"
+                )
+            elif public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB:
+                ineligible_reason = "auto AO grouping requires a GFN2 workload"
+            elif getattr(args, "backends", ()) != ("cuda",):
+                ineligible_reason = "auto AO grouping requires the CUDA backend"
+            elif memory_mode != "host":
+                ineligible_reason = (
+                    "auto AO grouping requires host descriptors; "
+                    f"received {memory_mode} descriptors"
+                )
+            else:
+                basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
+                    REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
+                )
+                counts = {
+                    case_id: ao_grouping.count_gfn2_aos(
+                        case_atomic_numbers(args.manifest, manifest, cases[case_id]),
+                        basis_counts,
+                    )
+                    for case_id in case_ids
+                }
+        selected_strategy, resolution_reason = ao_grouping.resolve_policy(
+            requested_strategy,
+            ineligible_reason=ineligible_reason,
+            ao_counts=(
+                tuple(counts[case_id] for case_id in case_ids)
+                if counts is not None
+                else None
+            ),
+            original_batches=original_batches,
+        )
+        if requested_strategy == "auto" and not resolution_reason:
+            raise BenchmarkError(
+                "automatic AO grouping resolver returned no explanation"
+            )
+        args.finite_ao_grouping_resolution = {
+            "requested": requested_strategy,
+            "resolved": selected_strategy,
+            "reason": resolution_reason,
+        }
+
     if (
         selected_strategy in {"exact-ao", "ao-risk"}
         or getattr(args, "convergence_plan", None) is not None
     ):
         if public_api.model_tag(manifest) != public_api.XTBLOOM_MODEL_GFN2_XTB:
             raise BenchmarkError("AO/risk grouping requires a GFN2 manifest")
-        basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
-            REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
-        )
+        if basis_counts is None:
+            basis_counts, basis_sha256 = ao_grouping.load_gfn2_basis_ao_counts(
+                REPOSITORY_ROOT / "data" / "parameters" / "gfn2.json"
+            )
         if (
             selected_strategy != "original"
             and getattr(args, "convergence_plan", None) is None
+            and counts is None
         ):
             counts = {
                 case_id: ao_grouping.count_gfn2_aos(
@@ -1005,7 +1068,7 @@ def finite_case_plan(
         case_ids,
         batch_cap,
         strategy=selected_strategy,
-        ao_counts_by_case_id=counts,
+        ao_counts_by_case_id=(counts if selected_strategy != "original" else None),
         basis_sha256=basis_sha256 if selected_strategy != "original" else None,
         **(
             {
@@ -1396,10 +1459,25 @@ def benchmark_finite_xtbloom_cell(
         plan.original_case_ids,
     )
     row = base_row(cell)
+    policy_resolution = getattr(args, "finite_ao_grouping_resolution", None)
+    requested_strategy = getattr(args, "ao_grouping", plan.strategy)
+    if policy_resolution is None or policy_resolution.get("resolved") != plan.strategy:
+        if requested_strategy == "auto":
+            raise BenchmarkError(
+                "automatic AO grouping result is missing policy resolution metadata"
+            )
+        policy_resolution = {
+            "requested": requested_strategy,
+            "resolved": plan.strategy,
+            "reason": "explicit grouping strategy",
+        }
     row.update(
         {
             "availability": "available",
             "ao_grouping": plan.strategy,
+            "ao_grouping_requested": policy_resolution["requested"],
+            "ao_grouping_resolved": policy_resolution["resolved"],
+            "ao_grouping_reason": policy_resolution["reason"],
             "plan_sha256": plan.plan_sha256,
             "planning_ms": planning_ms,
             "total_systems": len(plan.original_case_ids),
@@ -2172,6 +2250,9 @@ def benchmark_finite_xtbloom_pair(
     )
     row = base_row(cell)
     row["ao_grouping"] = "paired-original-vs-exact-ao"
+    row["ao_grouping_requested"] = getattr(args, "ao_grouping", "paired")
+    row["ao_grouping_resolved"] = "paired-original-vs-exact-ao"
+    row["ao_grouping_reason"] = "explicit paired comparison"
     layouts = ("original", "exact-ao")
     owners_by_layout: dict[str, list[dict[str, Any]]] = {
         layout: [] for layout in layouts
@@ -3576,6 +3657,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "warm_samples_ms",
         "memory_json",
         "ao_grouping",
+        "ao_grouping_requested",
+        "ao_grouping_resolved",
+        "ao_grouping_reason",
         "plan_sha256",
         "planning_ms",
         "batch_count",
@@ -3668,6 +3752,9 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     sort_keys=True,
                 ),
                 "ao_grouping": row.get("ao_grouping"),
+                "ao_grouping_requested": row.get("ao_grouping_requested"),
+                "ao_grouping_resolved": row.get("ao_grouping_resolved"),
+                "ao_grouping_reason": row.get("ao_grouping_reason"),
                 "plan_sha256": row.get("plan_sha256"),
                 "planning_ms": row.get("planning_ms"),
                 "batch_count": row.get("batch_count"),
@@ -3872,12 +3959,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ao-grouping",
-        choices=("original", "exact-ao", "ao-risk", "paired"),
-        default="original",
+        choices=("auto", "off", "original", "exact-ao", "ao-risk", "paired"),
+        default="auto",
         help=(
-            "finite-list layout; original is the default, exact-ao runs one "
-            "grouped layout, paired interleaves original with exact-ao, and "
-            "ao-risk requires a separately pinned input-only convergence plan"
+            "finite-list layout; auto groups eligible CUDA host FRESH queues, "
+            "off/original preserve input order, exact-ao requests grouping, "
+            "paired interleaves original with exact-ao, and ao-risk requires "
+            "a separately pinned input-only convergence plan"
         ),
     )
     parser.add_argument(
@@ -4069,7 +4157,11 @@ def validate_args(args: argparse.Namespace) -> None:
             raise BenchmarkError("build receipt requires a lowercase SHA-256 pin")
         if not build_receipt.REVISION_PATTERN.fullmatch(args.build_source_revision):
             raise BenchmarkError("build receipt requires a full source revision")
-    if not finite_list_requested and args.ao_grouping != "original":
+    if not finite_list_requested and args.ao_grouping not in {
+        "auto",
+        "off",
+        "original",
+    }:
         raise BenchmarkError("--ao-grouping requires --case-ids or --case-ids-file")
     if finite_list_requested:
         if args.case_ids is not None:
@@ -4202,6 +4294,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.case_ids_file is not None:
             args.case_ids = read_case_id_file(args.case_ids_file)
             validate_args(args)
+        nonfinite_ao_grouping_resolution = None
+        if args.case_ids is None:
+            ineligible_reason = (
+                "auto AO grouping requires an explicit finite case list"
+                if args.ao_grouping == "auto"
+                else None
+            )
+            resolved_strategy, resolution_reason = ao_grouping.resolve_policy(
+                args.ao_grouping,
+                ineligible_reason=ineligible_reason,
+                ao_counts=None,
+                original_batches=(),
+            )
+            nonfinite_ao_grouping_resolution = {
+                "requested": args.ao_grouping,
+                "resolved": resolved_strategy,
+                "reason": resolution_reason,
+            }
         receipt_preflight = controlled_receipt_check(args)
         if args.runtime_mapped_images:
             args.runtime_images_expected_sha256 = receipt_preflight["verification"][
@@ -4282,10 +4392,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                             property_name,
                         )
                         finish_frozen_run(args, row)
-                    rows.append(row)
-                    print(  # noqa: T201 - preserve benchmark CLI progress output
-                        f"  {row['availability']}", flush=True
-                    )
+                        rows.append(row)
+                        print(  # noqa: T201 - preserve benchmark CLI progress output
+                            f"  {row['availability']}", flush=True
+                        )
+                    if args.ao_grouping == "paired":
+                        rows.append(row)
+                        print(  # noqa: T201 - preserve benchmark CLI progress output
+                            f"  {row['availability']}", flush=True
+                        )
         if args.case_ids is None and "xtbloom" in args.engines:
             for cell in xtbloom_cells(args):
                 print(  # noqa: T201 - preserve benchmark CLI progress output
@@ -4357,6 +4472,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         receipt_integrity_passed = receipt_postflight(
             args, receipt_preflight, metadata, rows
         )
+        if nonfinite_ao_grouping_resolution is not None:
+            for row in rows:
+                row.update(
+                    {
+                        "ao_grouping_requested": nonfinite_ao_grouping_resolution[
+                            "requested"
+                        ],
+                        "ao_grouping_resolved": nonfinite_ao_grouping_resolution[
+                            "resolved"
+                        ],
+                        "ao_grouping_reason": nonfinite_ao_grouping_resolution[
+                            "reason"
+                        ],
+                    }
+                )
         mapping_integrity_passed = True
         if args.runtime_mapped_images:
             mapping_integrity_passed = bool(rows) and all(
@@ -4385,6 +4515,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     list(args.case_ids) if args.case_ids is not None else None
                 ),
                 "ao_grouping": args.ao_grouping,
+                "ao_grouping_resolution": (
+                    nonfinite_ao_grouping_resolution
+                    if nonfinite_ao_grouping_resolution is not None
+                    else {
+                        "requested": args.ao_grouping,
+                        "resolved": None,
+                        "reason": (
+                            "resolved per finite-list descriptor and batch-size row"
+                        ),
+                    }
+                ),
                 "strict_fresh_host_descriptors": args.case_ids is not None,
                 "properties": list(args.properties),
                 "workloads": {
