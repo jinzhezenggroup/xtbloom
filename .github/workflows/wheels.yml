@@ -178,7 +178,7 @@ jobs:
               -w {dest_dir} -v {wheel}
             publish: true
           # macOS ARM64 (CPU-only, native Apple Silicon hosted runner)
-          - os: macos-14
+          - os: macos-15
             platform_id: macosx_arm64
             build: "cp311-macosx_arm64"
             platform: auto
