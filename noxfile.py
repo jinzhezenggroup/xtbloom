@@ -203,7 +203,7 @@ def _run_fast(session: nox.Session) -> None:
     _run(
         session,
         "uvx",
-        "prek@0.3.1",
+        "prek@0.5.10",
         "run",
         "--show-diff-on-failure",
         "--color=always",
