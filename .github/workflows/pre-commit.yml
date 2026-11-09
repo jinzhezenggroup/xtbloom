@@ -30,13 +30,13 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/prek/
-          key: prek-0.3.1-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
-          restore-keys: prek-0.3.1-${{ runner.os }}-
+          key: prek-0.5.10-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: prek-0.5.10-${{ runner.os }}-
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          # Match the version used to generate uv.lock and cache both the
-          # isolated Nox runner and uvx prek downloads across runs.
-          version: "0.10.7"
+          # The ty hook requires a uv installer that can parse hashed build
+          # constraints. Keep the existing lock and cache the isolated tools.
+          version: "0.13.7"
           enable-cache: true
       - name: Run fast Nox validation
         # Exercise the same pinned wrapper used locally. The session itself

@@ -265,7 +265,7 @@ so an old `CMakeCache.txt` cannot hide which tests were enabled.
 ### Fast repository checks
 
 ```bash
-uvx prek@0.3.1 run --show-diff-on-failure --color=always --all-files
+uvx prek@0.5.10 run --show-diff-on-failure --color=always --all-files
 uv lock --check
 git diff --check
 ```

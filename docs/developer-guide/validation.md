@@ -13,10 +13,12 @@ reproducer, replay gate, and remaining limitations.
 
 Repository validation requires Python 3.11 or newer, CMake 3.24 or newer,
 C11/C++17 compilers, Ninja for the documented build commands, and a full Git
-checkout with tag history. The lock and CI baseline is uv 0.10.7; the locked
-Nox runner is 2026.7.11. CPU CI follows the Ubuntu 24.04 runner defaults; the
-2026-08-10 run for this revision reported GCC 13.3 and Clang 18.1. Those
-versions are references, not pinned minimums.
+checkout with tag history. The lock was generated with uv 0.10.7. Fast checks
+use uv 0.13.7 and prek 0.5.10, matching pre-commit CI. The ty hook requires
+hashed build constraints; prek 0.3.1 uses an older uv installer that cannot
+parse them. The locked Nox runner is 2026.7.11. CPU CI follows the Ubuntu
+24.04 runner defaults; the 2026-08-10 run for this revision reported GCC 13.3
+and Clang 18.1. Those versions are references, not pinned minimums.
 
 Full CPU inference validation additionally requires the compatible shared LP64
 LAPACKE+CBLAS provider described in the
@@ -76,7 +78,7 @@ defaults would reduce validation coverage.
 Every change runs:
 
 ```console
-uvx prek@0.3.1 run --show-diff-on-failure --color=always --all-files
+uvx prek@0.5.10 run --show-diff-on-failure --color=always --all-files
 uv lock --check
 git diff --check
 ```

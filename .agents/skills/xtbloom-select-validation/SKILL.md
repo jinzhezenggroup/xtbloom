@@ -34,7 +34,7 @@ Use separate build directories so an old cache cannot change which tests exist.
 
 ```bash
 UV_DEFAULT_INDEX=https://pypi.org/simple \
-  uv tool run --from prek==0.3.1 prek run \
+  uv tool run --from prek==0.5.10 prek run \
   --show-diff-on-failure --color=always --all-files
 UV_DEFAULT_INDEX=https://pypi.org/simple uv lock --check
 git diff --check
