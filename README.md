@@ -35,7 +35,7 @@ Lu, Z.; Xu, S.; Zhu, T.; Gu, Q.; Zeng, J. **[xTBloom: GPU Batching for High-Thro
 
 ```bibtex
 @misc{lu2026xtbloom,
-  title = {xTBloom: GPU Batching for High-Throughput GFN-xTB Calculations},
+  title = {{xTBloom}: {GPU} Batching for High-Throughput {GFN-xTB} Calculations},
   author = {Lu, Zitian and Xu, Shengrui and Zhu, Tong and Gu, Qiangqiang and Zeng, Jinzhe},
   year = {2026},
   eprint = {2611.24807},
@@ -44,6 +44,8 @@ Lu, Z.; Xu, S.; Zhu, T.; Gu, Q.; Zeng, J. **[xTBloom: GPU Batching for High-Thro
   url = {https://arxiv.org/abs/2611.24807}
 }
 ```
+
+The citation is also available as a [BibTeX file](CITATION.bib).
 
 ## Try xTBloom in your browser
 
