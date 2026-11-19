@@ -25,6 +25,26 @@ analytic forces, and atomic charges for many small and medium molecular
 systems. Its CPU and CUDA backends share one stable C ABI, with Python, ASE,
 and dpdata interfaces built on the same native execution path.
 
+## Citation
+
+If you use xTBloom in your research, **please cite** the following
+preprint:
+
+Lu, Z.; Xu, S.; Zhu, T.; Gu, Q.; Zeng, J. **[xTBloom: GPU Batching for High-Throughput GFN-xTB Calculations](https://arxiv.org/abs/2611.24807)**.
+*arXiv* **2026**, 2611.24807.
+
+```bibtex
+@misc{lu2026xtbloom,
+  title = {xTBloom: GPU Batching for High-Throughput GFN-xTB Calculations},
+  author = {Lu, Zitian and Xu, Shengrui and Zhu, Tong and Gu, Qiangqiang and Zeng, Jinzhe},
+  year = {2026},
+  eprint = {2611.24807},
+  archivePrefix = {arXiv},
+  primaryClass = {physics.chem-ph},
+  url = {https://arxiv.org/abs/2611.24807}
+}
+```
+
 ## Try xTBloom in your browser
 
 [![xTBloom browser demo running an ethanol calculation](docs/assets/web-demo-ethanol.png)](https://xtbloom.jinzhezeng.group/?smiles=CCO)
