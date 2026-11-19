@@ -173,6 +173,7 @@ sdist.exclude = [
   ".gitignore",
   ".pre-commit-config.yaml",
   "AGENTS.md",
+  "CITATION.bib",
   "noxfile.py",
   "src/backends/cuda/gfn2_energy_force_execution_test.cuh",
   "tools/external_energy_callback_smoke.cpp",
